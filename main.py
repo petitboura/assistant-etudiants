@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 import requests
 from configuration import get_system_prompt
 from rag import rechercher_documents
+from web import recherche_web
 import time
 
 cache_system_prompt = None
@@ -29,10 +30,22 @@ def chat(message_utilisateur):
                               "dérivée", "matrice", "vecteur", "physique", "chimie", "info",
                               "algorithme", "programme", "code", "expliquer", "comprendre"]
     
+    mots_cles_web = ["actualité", "news", "aujourd'hui", "date", "dernier", "récent",
+                     "2024", "2025", "2026", "prix", "résultat", "bac", "concours"]
+    
     message_lower = message_utilisateur.lower()
     est_academique = any(mot in message_lower for mot in mots_cles_academiques)
+    est_web = any(mot in message_lower for mot in mots_cles_web)
     
-    if est_academique:
+    if est_web:
+        resultats_web = recherche_web(message_utilisateur)
+        message_final = f"""Voici des informations trouvées sur internet :
+
+{resultats_web}
+
+Question de l'étudiant : {message_utilisateur}"""
+
+    elif est_academique:
         documents_pertinents = rechercher_documents(message_utilisateur)
         contexte = "\n\n".join(documents_pertinents)
         message_final = f"""Voici des extraits de cours pertinents :
