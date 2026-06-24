@@ -46,7 +46,7 @@ LIMITE = 5
 
 if len(st.session_state.messages) == 0:
     st.title("🎓 Votre coatch mathématique")
-    st.caption("Tout comprendre sur les maths.Je te donne rien,je t'enseigne tout.")
+    st.caption("Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout.")
 
 for message in st.session_state.messages:
     if message["role"] == "user":
@@ -62,7 +62,10 @@ reflexions = [
 ]
 
 if st.session_state.compteur >= LIMITE:
-    st.warning("Désolé, nous sommes actuellement en phase de test et devons limiter nos coûts. Votre session est donc temporairement restreinte. Ne vous inquiétez pas : dès le lancement officiel de l’application, vous bénéficierez d’un accès complet sans limitation.")
+    st.warning("Désolé, nous sommes actuellement en phase de test et devons limiter nos coûts. Votre session est donc temporairement restreinte. Ne vous inquiétez pas : dès le lancement officiel de l'application, vous bénéficierez d'un accès complet sans limitation.")
+    st.markdown("---")
+    st.markdown("**💬 Donne-nous ton avis !**")
+    st.link_button("📝 Remplir le formulaire de feedback", "https://forms.gle/zQPQsb9cX46188oh9")
 elif prompt := st.chat_input("Pose ta question..."):
     st.session_state.compteur += 1
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -78,3 +81,8 @@ elif prompt := st.chat_input("Pose ta question..."):
 
     st.markdown(f'<div class="message-assistant">{response}</div><div class="clearfix"></div>', unsafe_allow_html=True)
     st.session_state.messages.append({"role": "assistant", "content": response})
+
+# Bouton formulaire toujours visible en bas
+st.markdown("---")
+st.markdown("**💬 Tu as 2 minutes ? Donne-nous ton avis !**")
+st.link_button("📝 Remplir le formulaire de feedback", "https://forms.gle/zQPQsb9cX46188oh9")
