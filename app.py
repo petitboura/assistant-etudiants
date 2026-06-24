@@ -58,9 +58,17 @@ reflexions = [
     "Analyse de votre question...",
     "Recherche dans les cours...",
     "Formulation de la réponse...",
-    "Rédaction en cours..."
+    "Rédaction en cours...",
+    'Finalisation de la réponse...',
+    'Encore un instant, je peaufine ma réponse...',
+    'juste un instant, je réfléchis à la meilleure façon de vous répondre...',
+    'Je suis en train de compiler les informations pour vous donner la réponse la plus précise possible...',
+    'Je suis en train de vérifier les détails pour vous fournir une réponse complète...',
 ]
-
+if st.session_state.compteur >= 3:
+    st.markdown("---")
+    st.markdown("Ton avis compte, dis-nous ce que tu penses !")
+    st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
 if st.session_state.compteur >= LIMITE:
     st.warning("Désolé, nous sommes actuellement en phase de test et devons limiter nos coûts. Votre session est donc temporairement restreinte. Ne vous inquiétez pas : dès le lancement officiel de l'application, vous bénéficierez d'un accès complet sans limitation.")
     st.markdown("---")
