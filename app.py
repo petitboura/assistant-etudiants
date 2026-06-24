@@ -59,21 +59,18 @@ reflexions = [
     "Recherche dans les cours...",
     "Formulation de la réponse...",
     "Rédaction en cours...",
-    'Finalisation de la réponse...',
-    'Encore un instant, je peaufine ma réponse...',
-    'juste un instant, je réfléchis à la meilleure façon de vous répondre...',
-    'Je suis en train de compiler les informations pour vous donner la réponse la plus précise possible...',
-    'Je suis en train de vérifier les détails pour vous fournir une réponse complète...',
+    "Finalisation de la réponse...",
+    "Encore un instant, je peaufine ma réponse...",
+    "Juste un instant, je réfléchis à la meilleure façon de vous répondre...",
+    "Je compile les informations pour vous donner la réponse la plus précise possible...",
+    "Je vérifie les détails pour vous fournir une réponse complète...",
 ]
-if st.session_state.compteur >= 3:
-    st.markdown("---")
-    st.markdown("Ton avis compte, dis-nous ce que tu penses !")
-    st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
+
 if st.session_state.compteur >= LIMITE:
     st.warning("Désolé, nous sommes actuellement en phase de test et devons limiter nos coûts. Votre session est donc temporairement restreinte. Ne vous inquiétez pas : dès le lancement officiel de l'application, vous bénéficierez d'un accès complet sans limitation.")
     st.markdown("---")
-    st.markdown("**💬 Donne-nous ton avis !**")
-    st.link_button("📝 Remplir le formulaire de feedback", "https://forms.gle/zQPQsb9cX46188oh9")
+    st.markdown("Ton avis compte, dis-nous ce que tu penses !")
+    st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
 elif prompt := st.chat_input("Pose ta question..."):
     st.session_state.compteur += 1
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -90,7 +87,7 @@ elif prompt := st.chat_input("Pose ta question..."):
     st.markdown(f'<div class="message-assistant">{response}</div><div class="clearfix"></div>', unsafe_allow_html=True)
     st.session_state.messages.append({"role": "assistant", "content": response})
 
-# Bouton formulaire toujours visible en bas
-st.markdown("---")
-st.markdown("**💬 Tu as 2 minutes ? Donne-nous ton avis !**")
-st.link_button("📝 Remplir le formulaire de feedback", "https://forms.gle/zQPQsb9cX46188oh9")
+if st.session_state.compteur >= 3:
+    st.markdown("---")
+    st.markdown("Ton avis compte, dis-nous ce que tu penses !")
+    st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
