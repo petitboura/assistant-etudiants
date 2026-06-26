@@ -110,9 +110,16 @@ def get_last_edited_stocke(page_id):
     return None
 
 
+def get_table(nom_page):
+    """Choisit la table Supabase selon le nom de la page."""
+    if "outil" in nom_page.lower():
+        return "outils_chunks"
+    return "prompts_chunks"
+
 def indexer_page(page_id, nom_page, last_edited_time):
     """Supprime les anciens chunks de cette page, découpe + vectorise + insère les nouveaux."""
-    supabase.table("prompts_chunks").delete().eq("page_id", page_id).execute()
+    table = get_table(nom_page)
+    supabase.table(table).delete().eq("page_id", page_id).execute()
 
     texte, _ = get_texte_et_sous_pages(page_id)
     if not texte:
@@ -122,7 +129,7 @@ def indexer_page(page_id, nom_page, last_edited_time):
     morceaux = decouper_texte(texte)
     for morceau in morceaux:
         embedding = creer_embedding(morceau)
-        supabase.table("prompts_chunks").insert({
+        supabase.table(table).insert({
             "page_id": page_id,
             "nom_page": nom_page,
             "contenu": morceau,
@@ -130,7 +137,7 @@ def indexer_page(page_id, nom_page, last_edited_time):
             "last_edited_time": last_edited_time
         }).execute()
 
-    print(f"  -> '{nom_page}' indexée ({len(morceaux)} morceaux).")
+    print(f"  -> '{nom_page}' indexée dans '{table}' ({len(morceaux)} morceaux).")
 
 
 def parcourir_et_indexer(page_id, profondeur=0):
