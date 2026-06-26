@@ -22,7 +22,7 @@ Retourne UNIQUEMENT ce JSON, rien d'autre :
     message = f"""Question : {question}
 
 Prompts candidats :
-{json.dumps([{"nom": p["nom_page"], "contenu": p["contenu"]} for p in prompts], ensure_ascii=False)}
+{json.dumps([{"contenu": p["contenu"]} for p in prompts], ensure_ascii=False)}
 
 Documents candidats :
 {json.dumps([{"nom": d["nom"], "contenu": d["contenu"]} for d in documents], ensure_ascii=False)}
