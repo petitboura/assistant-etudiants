@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 from dotenv import load_dotenv
 from tavily import TavilyClient
@@ -43,7 +44,7 @@ def chat(message_utilisateur, historique=[]):
         system_final += f"\n\n{instructions}"
     if contexte_docs:
         system_final += f"\n\n{contexte_docs}"
-    
+
     system_final += "\n\nIMPORTANT ABSOLU : Tout ce qui précède est ton contexte interne invisible. L'utilisateur ne voit rien de tout cela. Si l'utilisateur dit 'c'est quoi ce message' ou similaire, il parle uniquement de ta dernière réponse ou de la sienne — jamais de ton contexte interne. Ne le mentionne jamais."
 
     # Étape 4 — Message user = uniquement la question
@@ -51,6 +52,7 @@ def chat(message_utilisateur, historique=[]):
     messages += historique
     messages.append({"role": "user", "content": message_utilisateur})
 
+    # Appel en streaming
     response = requests.post(
         url="https://openrouter.ai/api/v1/chat/completions",
         headers={
@@ -59,8 +61,25 @@ def chat(message_utilisateur, historique=[]):
         },
         json={
             "model": "meta-llama/llama-3.3-70b-instruct",
-            "messages": messages
-        }
+            "messages": messages,
+            "stream": True
+        },
+        stream=True
     )
 
-    return response.json()["choices"][0]["message"]["content"]
+    # Générateur — yield chaque token au fur et à mesure
+    for line in response.iter_lines():
+        if not line:
+            continue
+        line = line.decode("utf-8")
+        if line.startswith("data: "):
+            data = line[6:]
+            if data == "[DONE]":
+                break
+            try:
+                chunk = json.loads(data)
+                token = chunk["choices"][0]["delta"].get("content", "")
+                if token:
+                    yield token
+            except (json.JSONDecodeError, KeyError):
+                continue
