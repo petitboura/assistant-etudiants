@@ -1,5 +1,6 @@
 import streamlit as st
 import time
+import threading
 from main import chat
 
 st.set_page_config(page_title="Votre coatch mathématique", page_icon="🎓", layout="centered")
@@ -67,7 +68,7 @@ reflexions = [
     "Juste un instant, je réfléchis à la meilleure façon de vous répondre...",
     "Je compile les informations pour vous donner la réponse la plus précise possible...",
     "Je vérifie les détails pour vous fournir une réponse complète...",
-    "Encore un dernier détails...",
+    "Encore un dernier détail...",
 ]
 
 if st.session_state.compteur >= LIMITE:
@@ -80,18 +81,31 @@ elif prompt := st.chat_input("Pose ta question..."):
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
-    placeholder = st.empty()
-    for msg in reflexions:
-        placeholder.markdown(f"*{msg}*")
-        time.sleep(3)
-
     historique = [
         {"role": m["role"], "content": m["content"]}
         for m in st.session_state.messages[:-1]
     ]
-    response = chat(prompt, historique)
+
+    # Lancer chat() dans un thread
+    resultat = {}
+    def appeler_chat():
+        resultat["response"] = chat(prompt, historique)
+
+    thread = threading.Thread(target=appeler_chat)
+    thread.start()
+
+    # Afficher les messages de réflexion pendant que chat() tourne
+    placeholder = st.empty()
+    i = 0
+    while thread.is_alive():
+        placeholder.markdown(f"*{reflexions[i % len(reflexions)]}*")
+        time.sleep(2)
+        i += 1
+
+    thread.join()
     placeholder.empty()
 
+    response = resultat["response"]
     st.markdown(f'<div class="message-assistant">{response}</div><div class="clearfix"></div>', unsafe_allow_html=True)
     st.session_state.messages.append({"role": "assistant", "content": response})
 
