@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from supabase import create_client
 import openai
 
@@ -16,23 +17,22 @@ def vectoriser(texte):
 def chercher_candidats(question):
     vecteur = vectoriser(question)
 
-    prompts = supabase.rpc("recherche_prompts", {
-        "query_embedding": vecteur,
-        "match_count": 3
-    }).execute().data
+    def get_prompts():
+        return supabase.rpc("recherche_prompts", {"query_embedding": vecteur, "match_count": 3}).execute().data
 
-    documents = supabase.rpc("recherche_documents", {
-        "query_embedding": vecteur,
-        "match_count": 3
-    }).execute().data
+    def get_documents():
+        return supabase.rpc("recherche_documents", {"query_embedding": vecteur, "match_count": 3}).execute().data
 
-    outils = supabase.rpc("recherche_outils", {
-        "query_embedding": vecteur,
-        "match_count": 2
-    }).execute().data
+    def get_outils():
+        return supabase.rpc("recherche_outils", {"query_embedding": vecteur, "match_count": 2}).execute().data
+
+    with ThreadPoolExecutor() as executor:
+        f_prompts   = executor.submit(get_prompts)
+        f_documents = executor.submit(get_documents)
+        f_outils    = executor.submit(get_outils)
 
     return {
-        "prompts": prompts,
-        "documents": documents,
-        "outils": outils
+        "prompts":   f_prompts.result(),
+        "documents": f_documents.result(),
+        "outils":    f_outils.result()
     }
