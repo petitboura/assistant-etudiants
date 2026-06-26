@@ -9,25 +9,26 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600&display=swap');
     
     .message-user {
-        background-color: rgba(0, 0, 0, 0.3);
-        color: white;
-        padding: 12px 18px;
-        border-radius: 18px;
-        margin: 8px 0;
-        max-width: 75%;
-        margin-left: auto;
-        text-align: right;
-        border: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    .message-assistant {
-        font-family: 'Lora', serif;
-        color: #e5e5e5;
-        padding: 10px 4px;
-        margin: 8px 0;
-        max-width: 85%;
-        line-height: 1.7;
-    }
+    background-color: rgba(100, 100, 100, 0.2);
+    color: inherit;
+    padding: 12px 18px;
+    border-radius: 18px;
+    margin: 8px 0;
+    display: inline-block;
+    max-width: 75%;
+    float: right;
+    text-align: right;
+    border: 1px solid rgba(128,128,128,0.3);
+}
+
+.message-assistant {
+    font-family: 'Lora', serif;
+    color: inherit;
+    padding: 10px 4px;
+    margin: 8px 0;
+    max-width: 85%;
+    line-height: 1.7;
+}
     
     .clearfix { clear: both; }
     </style>
@@ -56,7 +57,7 @@ for message in st.session_state.messages:
 
 reflexions = [
     "Analyse de votre question...",
-    "Recherche dans les cours...",
+    "Recherche dans les documents...",
     "Formulation de la réponse...",
     "Rédaction en cours...",
     "Finalisation de la réponse...",
@@ -64,6 +65,7 @@ reflexions = [
     "Juste un instant, je réfléchis à la meilleure façon de vous répondre...",
     "Je compile les informations pour vous donner la réponse la plus précise possible...",
     "Je vérifie les détails pour vous fournir une réponse complète...",
+    "Encore un dernier détails...",
 ]
 
 if st.session_state.compteur >= LIMITE:
