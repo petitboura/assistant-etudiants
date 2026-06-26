@@ -9,32 +9,34 @@ st.markdown("""
     @import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600&display=swap');
     
     .message-user {
-    background-color: rgba(100, 100, 100, 0.2);
-    color: inherit;
-    padding: 12px 18px;
-    border-radius: 18px;
-    margin: 8px 0;
-    display: inline-block;
-    max-width: 75%;
-    float: right;
-    text-align: right;
-    border: 1px solid rgba(128,128,128,0.3);
-}
+        background-color: rgba(100, 100, 100, 0.2);
+        color: inherit;
+        padding: 12px 18px;
+        border-radius: 18px;
+        margin: 8px 0;
+        display: inline-block;
+        max-width: 75%;
+        float: right;
+        text-align: right;
+        border: 1px solid rgba(128,128,128,0.3);
+    }
 
-.message-assistant {
-    font-family: 'Lora', serif;
-    color: inherit;
-    padding: 10px 4px;
-    margin: 8px 0;
-    max-width: 85%;
-    line-height: 1.7;
-}
-    
+    .message-assistant {
+        font-family: 'Lora', serif;
+        color: inherit;
+        padding: 10px 4px;
+        margin: 8px 0;
+        max-width: 85%;
+        line-height: 1.7;
+    }
+
     .clearfix { clear: both; }
     </style>
-    
-    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
-    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+    <script>
+    window.MathJax = {tex: {inlineMath: [['$', '$']]}, svg: {fontCache: 'global'}};
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
 """, unsafe_allow_html=True)
 
 if "messages" not in st.session_state:
@@ -79,11 +81,10 @@ elif prompt := st.chat_input("Pose ta question..."):
     st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
     placeholder = st.empty()
-    placeholder = st.empty()
     for msg in reflexions:
         placeholder.markdown(f"*{msg}*")
         time.sleep(3)
-    
+
     historique = [
         {"role": m["role"], "content": m["content"]}
         for m in st.session_state.messages[:-1]
