@@ -1,48 +1,70 @@
 import os
-from dotenv import load_dotenv
 import requests
+from dotenv import load_dotenv
+from supabase import create_client
 from configuration import get_system_prompt
+from retriever import chercher_candidats
 from router import router
-from retriever import recuperer_ressources, get_liste_prompts
-from web import recherche_web
-import time
 
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SECRET")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
-def get_ressources_disponibles():
-    prompts = [p["nom"] for p in get_liste_prompts()]
-    pdfs = []  # à compléter plus tard avec liste Supabase
-    outils = ["tavily"]
-    return prompts, pdfs, outils
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def chat(message_utilisateur):
+def appeler_outil(nom_outil, question):
+    outil = supabase.table("outils").select("*").eq("nom", nom_outil).single().execute().data
+    if not outil:
+        return ""
+    
+    if outil["type"] == "api":
+        config = outil["config"]
+        cle = os.getenv(config["env_key"])
+        response = requests.post(
+            config["url"],
+            json={config["query_param"]: question, config["key_param"]: cle}
+        )
+        resultats = response.json().get(config["results_key"], [])
+        return "\n".join([r.get(config["content_key"], "") for r in resultats])
+    
+    return ""
+
+def chat(message_utilisateur, historique=[]):
     system_prompt = get_system_prompt()
 
-    # Étape 1 — Router décide
-    prompts_dispo, pdfs_dispo, outils_dispo = get_ressources_disponibles()
-    decision = router(message_utilisateur, prompts_dispo, pdfs_dispo, outils_dispo)
+    # Étape 1 — Recherche vectorielle dans toutes les tables
+    candidats = chercher_candidats(message_utilisateur)
 
-    # Étape 2 — Récupérer les ressources choisies
-    contexte = recuperer_ressources(decision)
+    # Étape 2 — Petit LLM décide quoi garder
+    decision = router(message_utilisateur, candidats)
 
-    # Étape 3 — Recherche web si nécessaire
-    if decision.get("outil") == "tavily":
-        resultats_web = recherche_web(message_utilisateur)
-        contexte += f"\n--- Recherche web ---\n{resultats_web}"
+    # Étape 3 — Assembler le contexte
+    contexte = ""
 
-    # Étape 4 — Assembler le prompt final
+    for contenu in decision.get("prompts", []):
+        contexte += f"\n--- Instruction ---\n{contenu}\n"
+
+    for contenu in decision.get("documents", []):
+        contexte += f"\n--- Document ---\n{contenu}\n"
+
+    for nom_outil in decision.get("outils", []):
+        resultat = appeler_outil(nom_outil, message_utilisateur)
+        contexte += f"\n--- {nom_outil} ---\n{resultat}\n"
+
+    # Étape 4 — Assembler le message final
     if contexte:
-        message_final = f"""Voici les ressources pertinentes :
-
-{contexte}
-
-Question de l'étudiant : {message_utilisateur}"""
+        message_final = f"Ressources pertinentes :\n{contexte}\n\nQuestion : {message_utilisateur}"
     else:
         message_final = message_utilisateur
 
-    # Étape 5 — Grand LLM répond
+    # Étape 5 — Historique + grand LLM
+    messages = [{"role": "system", "content": system_prompt}]
+    messages += historique
+    messages.append({"role": "user", "content": message_final})
+
     response = requests.post(
         url="https://openrouter.ai/api/v1/chat/completions",
         headers={
@@ -51,10 +73,7 @@ Question de l'étudiant : {message_utilisateur}"""
         },
         json={
             "model": "meta-llama/llama-3.3-70b-instruct",
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": message_final}
-            ]
+            "messages": messages
         }
     )
 

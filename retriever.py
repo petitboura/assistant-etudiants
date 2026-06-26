@@ -1,51 +1,35 @@
 import os
-from notion_client import Client
-from rag import rechercher_documents
+from supabase import create_client
+import openai
 
-notion = Client(auth=os.getenv("NOTION_TOKEN"))
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SECRET")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-def get_liste_prompts():
-    # Retourne la liste des pages Notion disponibles comme prompts
-    results = notion.search(filter={"property": "object", "value": "page"}).get("results", [])
-    prompts = []
-    for page in results:
-        try:
-            titre = page["properties"]["title"]["title"][0]["plain_text"]
-            prompts.append({"id": page["id"], "nom": titre})
-        except:
-            pass
-    return prompts
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+client = openai.OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
 
-def get_contenu_prompt(page_id):
-    # Récupère le contenu complet d'une page Notion
-    blocks = notion.blocks.children.list(block_id=page_id).get("results", [])
-    contenu = ""
-    for block in blocks:
-        type_block = block["type"]
-        try:
-            texte = block[type_block]["rich_text"][0]["plain_text"]
-            contenu += texte + "\n"
-        except:
-            pass
-    return contenu
+def vectoriser(texte):
+    response = client.embeddings.create(model="text-embedding-ada-002", input=texte)
+    return response.data[0].embedding
 
-def recuperer_ressources(decision_router):
-    contexte_final = ""
+def chercher_candidats(question):
+    vecteur = vectoriser(question)
 
-    # Récupérer les prompts choisis depuis Notion
-    if decision_router.get("prompts"):
-        liste_prompts = get_liste_prompts()
-        for nom_prompt in decision_router["prompts"]:
-            for p in liste_prompts:
-                if nom_prompt.lower() in p["nom"].lower():
-                    contenu = get_contenu_prompt(p["id"])
-                    contexte_final += f"\n--- {p['nom']} ---\n{contenu}\n"
+    prompts = supabase.rpc("recherche_prompts", {
+        "query_embedding": vecteur,
+        "match_count": 3
+    }).execute().data
 
-    # Récupérer les PDFs depuis Supabase via RAG
-    if decision_router.get("pdfs"):
-        for nom_pdf in decision_router["pdfs"]:
-            chunks = rechercher_documents(nom_pdf)
-            contexte_final += "\n--- Documents ---\n"
-            contexte_final += "\n".join(chunks)
+    documents = supabase.rpc("recherche_documents", {
+        "query_embedding": vecteur,
+        "match_count": 3
+    }).execute().data
 
-    return contexte_final
+    outils = supabase.table("outils").select("nom, description, type, config").eq("actif", True).execute().data
+
+    return {
+        "prompts": prompts,
+        "documents": documents,
+        "outils": outils
+    }

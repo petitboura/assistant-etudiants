@@ -77,11 +77,16 @@ elif prompt := st.chat_input("Pose ta question..."):
     st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
     placeholder = st.empty()
+    placeholder = st.empty()
     for msg in reflexions:
         placeholder.markdown(f"*{msg}*")
-        time.sleep(2)
+        time.sleep(3)
     
-    response = chat(prompt)
+    historique = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages[:-1]
+    ]
+    response = chat(prompt, historique)
     placeholder.empty()
 
     st.markdown(f'<div class="message-assistant">{response}</div><div class="clearfix"></div>', unsafe_allow_html=True)
