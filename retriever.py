@@ -26,7 +26,10 @@ def chercher_candidats(question):
         "match_count": 3
     }).execute().data
 
-    outils = supabase.table("outils").select("nom, description, type, config").eq("actif", True).execute().data
+    outils = supabase.rpc("recherche_outils", {
+        "query_embedding": vecteur,
+        "match_count": 2
+    }).execute().data
 
     return {
         "prompts": prompts,
