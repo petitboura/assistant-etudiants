@@ -79,7 +79,7 @@ elif prompt := st.chat_input("Pose ta question..."):
     for token in chat(prompt, historique):
         reponse_complete += token
         placeholder.markdown(
-            f'<div class="message-assistant">{reponse_complete}▌</div><div class="clearfix"></div>',
+            f'<div class="message-assistant">{reponse_complete}🎓</div><div class="clearfix"></div>',
             unsafe_allow_html=True
         )
 
