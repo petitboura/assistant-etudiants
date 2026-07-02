@@ -52,7 +52,6 @@ if "messages" not in st.session_state:
 if "compteur" not in st.session_state:
     st.session_state.compteur = 0
 
-LIMITE = 5
 
 if len(st.session_state.messages) == 0:
     st.title("🎓 Votre coatch mathématique")
@@ -64,13 +63,7 @@ for message in st.session_state.messages:
     else:
         st.markdown(f'<div class="message-assistant">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
-if st.session_state.compteur >= LIMITE:
-    st.warning("Désolé, nous sommes actuellement en phase de test et devons limiter nos coûts. Votre session est donc temporairement restreinte. Ne vous inquiétez pas : dès le lancement officiel de l'application, vous bénéficierez d'un accès complet sans limitation.")
-    st.markdown("---")
-    st.markdown("Ton avis compte, dis-nous ce que tu penses !")
-    st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
-
-elif prompt := st.chat_input("Pose ta question..."):
+if prompt := st.chat_input("Pose ta question..."):
     st.session_state.compteur += 1
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
