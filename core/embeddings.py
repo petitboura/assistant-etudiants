@@ -34,7 +34,7 @@ def _get_client():
 
 
 def vectoriser(texte):
-    response = _get_client().embeddings.create(model="text-embedding-ada-002", input=texte)
+    response = _get_client().embeddings.create(model="openai/text-embedding-ada-002", input=texte)
     return response.data[0].embedding
 
 
