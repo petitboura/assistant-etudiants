@@ -62,6 +62,12 @@ def _construire_system_prompt(message_utilisateur):
     if contexte_docs:
         system_final += f"\n\n{contexte_docs}"
     system_final += REGLE_CONTEXTE_INVISIBLE
+
+    logging.info(
+        f"Prompt système construit -> base_notion:{len(system_prompt)} caractères, "
+        f"instructions:{'oui' if instructions else 'NON'}, "
+        f"contexte_docs:{'oui' if contexte_docs else 'NON'}"
+    )
     return system_final
 
 
