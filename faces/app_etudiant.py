@@ -7,7 +7,6 @@ import os
 import re
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
 
-import markdown as md_lib
 import streamlit as st
 import streamlit.components.v1 as components
 from main import chat
@@ -45,32 +44,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def _rendre_markdown(texte):
-    """
-    Le contenu est inséré dans un <div>, ce qui fait que Streamlit
-    (CommonMark) bascule en mode "bloc HTML brut" et n'interprète plus
-    aucun Markdown à l'intérieur (gras, listes, titres...). On convertit
-    donc nous-mêmes le Markdown en HTML AVANT de l'insérer dans le div.
-
-    Les segments $...$ / $$...$$ sont protégés pendant la conversion,
-    car Markdown utilise aussi `_` et `*` pour l'italique/le gras, ce
-    qui casserait des indices comme x_1 dans une formule.
-    """
-    maths = []
-
-    def _extraire(m):
-        maths.append(m.group(0))
-        return f"@@MATH{len(maths) - 1}@@"
-
-    texte_protege = re.sub(r'\$\$.*?\$\$|\$[^$\n]+?\$', _extraire, texte, flags=re.DOTALL)
-    html_rendu = md_lib.markdown(texte_protege, extensions=['extra', 'sane_lists'])
-
-    for i, formule in enumerate(maths):
-        html_rendu = html_rendu.replace(f"@@MATH{i}@@", formule)
-
-    return html_rendu
-
-
 def _normaliser_latex(texte):
     """
     Le moteur Markdown de Streamlit traite `\\(`, `\\)`, `\\[`, `\\]` comme des
@@ -82,11 +55,6 @@ def _normaliser_latex(texte):
     texte = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', texte, flags=re.DOTALL)
     texte = re.sub(r'\\\((.*?)\\\)', r'$\1$', texte, flags=re.DOTALL)
     return texte
-
-
-def _preparer_contenu(texte):
-    """Normalise les délimiteurs LaTeX puis convertit le Markdown en HTML."""
-    return _rendre_markdown(_normaliser_latex(texte))
 
 
 def _typeset_mathjax():
@@ -156,7 +124,7 @@ for message in st.session_state.messages:
     if message["role"] == "user":
         st.markdown(f'<div class="message-user">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
     else:
-        contenu_affiche = _preparer_contenu(message["content"])
+        contenu_affiche = _normaliser_latex(message["content"])
         st.markdown(f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
 if prompt := st.chat_input("Pose ta question..."):
@@ -174,13 +142,13 @@ if prompt := st.chat_input("Pose ta question..."):
 
     for token in chat(prompt, historique):
         reponse_complete += token
-        contenu_affiche = _preparer_contenu(reponse_complete)
+        contenu_affiche = _normaliser_latex(reponse_complete)
         placeholder.markdown(
             f'<div class="message-assistant">{contenu_affiche}🎓</div><div class="clearfix"></div>',
             unsafe_allow_html=True
         )
 
-    contenu_affiche = _preparer_contenu(reponse_complete)
+    contenu_affiche = _normaliser_latex(reponse_complete)
     placeholder.markdown(
         f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>',
         unsafe_allow_html=True
