@@ -4,9 +4,11 @@ Face étudiant — interface Streamlit du coach mathématique.
 
 import sys
 import os
+import re
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
 
 import streamlit as st
+import streamlit.components.v1 as components
 from main import chat
 
 st.set_page_config(page_title="Votre coatch mathématique", page_icon="🎓", layout="centered")
@@ -39,12 +41,73 @@ st.markdown("""
 
     .clearfix { clear: both; }
     </style>
-
-    <script>
-    window.MathJax = {tex: {inlineMath: [['$', '$']]}, svg: {fontCache: 'global'}};
-    </script>
-    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
 """, unsafe_allow_html=True)
+
+
+def _normaliser_latex(texte):
+    """
+    Le moteur Markdown de Streamlit traite `\\(`, `\\)`, `\\[`, `\\]` comme des
+    caractères échappés et supprime le backslash avant même que MathJax ne
+    voie le texte. On convertit donc ces délimiteurs LaTeX vers `$ $` et
+    `$$ $$`, que Markdown laisse intacts (le `$` n'a pas de sens spécial
+    pour lui).
+    """
+    texte = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', texte, flags=re.DOTALL)
+    texte = re.sub(r'\\\((.*?)\\\)', r'$\1$', texte, flags=re.DOTALL)
+    return texte
+
+
+def _typeset_mathjax():
+    """
+    Les <script> injectés via st.markdown(unsafe_allow_html=True) ne
+    s'exécutent JAMAIS (limitation du DOM : les scripts insérés via
+    innerHTML ne sont pas exécutés par le navigateur). On passe donc par
+    un composant Streamlit (rendu dans une vraie page HTML, où les
+    scripts s'exécutent normalement) qui va lui-même injecter MathJax
+    dans la page PARENTE (window.parent), puis demander le rendu des
+    formules déjà présentes dans le DOM.
+    """
+    components.html(
+        """
+        <script>
+        (function() {
+            const doc = window.parent.document;
+            const win = window.parent;
+
+            function typeset() {
+                if (win.MathJax && win.MathJax.typesetPromise) {
+                    win.MathJax.typesetPromise();
+                }
+            }
+
+            if (!win.MathJax) {
+                win.MathJax = {
+                    tex: {
+                        inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+                        displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']]
+                    },
+                    svg: { fontCache: 'global' },
+                    startup: {
+                        ready: function() {
+                            MathJax.startup.defaultReady();
+                            MathJax.startup.promise.then(typeset);
+                        }
+                    }
+                };
+                const script = doc.createElement('script');
+                script.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js";
+                script.async = true;
+                doc.head.appendChild(script);
+            } else {
+                typeset();
+            }
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -61,7 +124,8 @@ for message in st.session_state.messages:
     if message["role"] == "user":
         st.markdown(f'<div class="message-user">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="message-assistant">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+        contenu_affiche = _normaliser_latex(message["content"])
+        st.markdown(f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
 if prompt := st.chat_input("Pose ta question..."):
     st.session_state.compteur += 1
@@ -78,17 +142,23 @@ if prompt := st.chat_input("Pose ta question..."):
 
     for token in chat(prompt, historique):
         reponse_complete += token
+        contenu_affiche = _normaliser_latex(reponse_complete)
         placeholder.markdown(
-            f'<div class="message-assistant">{reponse_complete}🎓</div><div class="clearfix"></div>',
+            f'<div class="message-assistant">{contenu_affiche}🎓</div><div class="clearfix"></div>',
             unsafe_allow_html=True
         )
 
+    contenu_affiche = _normaliser_latex(reponse_complete)
     placeholder.markdown(
-        f'<div class="message-assistant">{reponse_complete}</div><div class="clearfix"></div>',
+        f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>',
         unsafe_allow_html=True
     )
 
     st.session_state.messages.append({"role": "assistant", "content": reponse_complete})
+
+# Toujours en dernier : (re)déclenche le rendu MathJax sur tout ce qui
+# vient d'être affiché (historique + nouvelle réponse le cas échéant).
+_typeset_mathjax()
 
 if st.session_state.compteur >= 3:
     st.markdown("---")
