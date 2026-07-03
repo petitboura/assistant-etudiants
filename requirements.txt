@@ -8,3 +8,4 @@ requests
 notion-client
 tavily-python
 PyPDF2
+markdown
