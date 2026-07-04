@@ -31,6 +31,19 @@ GROQ_FALLBACKS = [
 ]
 MESSAGE_ERREUR = "Désolé, je rencontre un souci technique pour répondre. Merci de réessayer dans un instant."
 
+# D'apres la doc Groq (console.groq.com/docs/reasoning), le parametre
+# reasoning_effort n'est reconnu que par certains modeles (GPT-OSS 20B/120B,
+# Qwen 3). Les autres modeles de GROQ_FALLBACKS (ex: llama-3.3-70b-versatile,
+# llama-4-scout) ne sont PAS des modeles de raisonnement : leur envoyer ce
+# parametre risque une erreur API plutot qu'un simple no-op. On ne l'active
+# donc que pour les modeles confirmes compatibles.
+MODELES_AVEC_REASONING_EFFORT = {
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3-32b",
+    "qwen/qwen3.6-27b",  # successeur de qwen3-32b, a confirmer si le comportement differe
+}
+
 # Nombre maximum d'aller-retours "outil" autorisés pour une seule question,
 # pour éviter qu'un modèle ne boucle indéfiniment sur le même outil.
 MAX_ETAPES_OUTILS = 5
@@ -133,7 +146,7 @@ def _traiter_appels(appels, messages_agent, table_routage):
         })
 
 
-def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage):
+def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele=GROQ_PRIMARY, reasoning_effort=None):
     appel = attente.appel
     try:
         arguments_dict = json.loads(appel["arguments"] or "{}")
@@ -150,17 +163,29 @@ def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage):
             "table_routage": table_routage,
             "appel": appel,
             "appels_restants": attente.appels_restants,
+            "modele": modele,
+            "reasoning_effort": reasoning_effort,
         },
     }
 
 
 def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
-                 appels_en_cours_a_finir=None):
+                 appels_en_cours_a_finir=None, modele=GROQ_PRIMARY, reasoning_effort=None):
     """
-    Boucle d'agent avec GROQ_PRIMARY (le seul modele de la cascade qui
-    sait utiliser des outils). Genere des evenements "statut"/"reponse"/
-    "confirmation_requise". S'arrete (sans exception) des qu'une reponse
-    finale a ete produite OU qu'une confirmation est necessaire.
+    Boucle d'agent generique sur le modele Groq utilise (par defaut
+    GROQ_PRIMARY, mais peut recevoir n'importe quel modele Groq qui sait
+    faire du tool calling -> permet de reutiliser cette meme boucle pour
+    les modeles de secours de GROQ_FALLBACKS, avec les outils MCP branches
+    dessus aussi, plutot que de les perdre des que GROQ_PRIMARY sature son
+    quota TPM.
+
+    `reasoning_effort`, si fourni (ex: "none"), est transmis tel quel a
+    l'appel Groq : certains modeles de secours (ex: qwen3) font du
+    raisonnement par defaut, ce qui peut etre desactive pour rester rapide.
+
+    Genere des evenements "statut"/"reponse"/"confirmation_requise".
+    S'arrete (sans exception) des qu'une reponse finale a ete produite OU
+    qu'une confirmation est necessaire.
 
     `appels_en_cours_a_finir`, si fourni, est traite AVANT le prochain
     appel a Groq : c'est le cas lors d'une reprise apres confirmation, ou
@@ -168,22 +193,25 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
     appels restants, ou re-demander confirmation si l'un d'eux est aussi
     sensible) avant de redemander une reponse au modele.
     """
+    kwargs_reasoning = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
+
     if appels_en_cours_a_finir:
         try:
             for event in _traiter_appels(appels_en_cours_a_finir, messages_agent, table_routage):
                 yield event
         except _AttenteConfirmation as attente:
-            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage)
+            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele, reasoning_effort)
             return
 
     for _ in range(MAX_ETAPES_OUTILS):
         completion = client_groq.chat.completions.create(
-            model=GROQ_PRIMARY,
+            model=modele,
             messages=messages_agent,
             max_completion_tokens=1024,
             tools=outils_mcp if outils_mcp else None,
             stream=True,
             timeout=DELAI_MAX_PAR_APPEL,
+            **kwargs_reasoning,
         )
 
         reponse_directe = False
@@ -210,7 +238,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
                             etat["arguments"] += fragment.function.arguments
 
         if reponse_directe:
-            logging.info(f"Réponse via GROQ (sans outil, streaming): {GROQ_PRIMARY}")
+            logging.info(f"Réponse via GROQ (sans outil, streaming): {modele}")
             return
 
         if not appels_en_cours:
@@ -235,24 +263,25 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             for event in _traiter_appels(appels, messages_agent, table_routage):
                 yield event
         except _AttenteConfirmation as attente:
-            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage)
+            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele, reasoning_effort)
             return
 
     # MAX_ETAPES_OUTILS epuise sans reponse directe : on force une reponse
     # finale (sans autoriser de nouvel appel d'outil).
     completion = client_groq.chat.completions.create(
-        model=GROQ_PRIMARY,
+        model=modele,
         messages=messages_agent,
         max_completion_tokens=1024,
         tools=outils_mcp if outils_mcp else None,
         stream=True,
         timeout=DELAI_MAX_PAR_APPEL,
+        **kwargs_reasoning,
     )
     for chunk in completion:
         token = chunk.choices[0].delta.content or ""
         if token:
             yield {"type": "reponse", "texte": token}
-    logging.info(f"Réponse via GROQ (avec outil): {GROQ_PRIMARY}")
+    logging.info(f"Réponse via GROQ (avec outil): {modele}")
 
 
 def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
@@ -290,6 +319,8 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
         outils_mcp = etat["outils_mcp"]
         table_routage = etat["table_routage"]
         appel = etat["appel"]
+        modele_reprise = etat.get("modele", GROQ_PRIMARY)
+        reasoning_effort_reprise = etat.get("reasoning_effort")
 
         client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
 
@@ -315,9 +346,10 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
             yield from _agent_groq(
                 client_groq, messages_agent, outils_mcp, table_routage,
                 appels_en_cours_a_finir=etat.get("appels_restants") or None,
+                modele=modele_reprise, reasoning_effort=reasoning_effort_reprise,
             )
         except Exception as e:
-            logging.error(f"ERREUR GROQ (reprise apres confirmation) {GROQ_PRIMARY}: {e}")
+            logging.error(f"ERREUR GROQ (reprise apres confirmation) {modele_reprise}: {e}")
             yield {"type": "reponse", "texte": MESSAGE_ERREUR}
         return
 
@@ -347,7 +379,32 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
                 tout_est_timeout = False
                 logging.error(f"ERREUR GROQ {GROQ_PRIMARY}: {e}")
 
-        # 2. Gemini 2.5 Flash — fallback simple, sans outils MCP
+        # 2. Fallbacks Groq — AVEC les memes outils MCP (via _agent_groq),
+        # pour que Notion/Wolfram restent utilisables meme quand
+        # GROQ_PRIMARY sature son quota TPM (ce qui est le cas le plus
+        # frequent de bascule ici, pas une vraie panne du modele).
+        # reasoning_effort="none" : ces modeles (ex: qwen3) font du
+        # raisonnement par defaut, on le desactive pour rester rapide,
+        # comme avant cette modification.
+        for model in GROQ_FALLBACKS:
+            try:
+                messages_agent = list(messages_base)
+                reasoning_pour_ce_modele = "none" if model in MODELES_AVEC_REASONING_EFFORT else None
+                yield from _agent_groq(
+                    client_groq, messages_agent, outils_mcp, table_routage,
+                    modele=model, reasoning_effort=reasoning_pour_ce_modele,
+                )
+                return
+            except Exception as e:
+                if not _est_timeout(e):
+                    tout_est_timeout = False
+                    logging.error(f"ERREUR GROQ {model}: {e}")
+                continue
+
+        # 3. Gemini 2.5 Flash — tout dernier recours, sans outils MCP.
+        # Utile seulement si TOUS les modeles Groq (principal + fallbacks)
+        # sont indisponibles en meme temps ; dans ce cas l'etudiant a au
+        # moins une reponse texte, mais sans acces a Notion/Wolfram.
         try:
             client_google = genai.Client(api_key=get_secret("GOOGLE_API_KEY"))
             gemini_messages = [
@@ -371,29 +428,6 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
             if not _est_timeout(e):
                 tout_est_timeout = False
             logging.error(f"ERREUR GEMINI: {e}")
-
-        # 3-6. Fallbacks Groq — sans outils MCP
-        for model in GROQ_FALLBACKS:
-            try:
-                completion = client_groq.chat.completions.create(
-                    model=model,
-                    messages=messages_base,
-                    max_completion_tokens=1024,
-                    stream=True,
-                    timeout=DELAI_MAX_PAR_APPEL,
-                    reasoning_effort="none"
-                )
-                for chunk in completion:
-                    token = chunk.choices[0].delta.content or ""
-                    if token:
-                        yield {"type": "reponse", "texte": token}
-                logging.info(f"Réponse via GROQ fallback: {model}")
-                return
-            except Exception as e:
-                if not _est_timeout(e):
-                    tout_est_timeout = False
-                    logging.error(f"ERREUR GROQ {model}: {e}")
-                continue
 
         if not tout_est_timeout:
             break  # au moins une vraie erreur (pas juste lent) : inutile de retenter
