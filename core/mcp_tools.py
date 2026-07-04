@@ -40,7 +40,7 @@ async def _appeler_outil_async(url, nom_outil, arguments, headers=None):
     return ""
 
 
-def lister_tous_les_outils(get_secret):
+def lister_tous_les_outils(get_secret, user_id=None):
     """
     Se connecte a chaque serveur MCP du registre et retourne :
     - outils_pour_llm : la liste des outils au format attendu par l'API
@@ -49,14 +49,28 @@ def lister_tous_les_outils(get_secret):
     - table_routage : un dictionnaire {nom_outil: {"url":..., "headers":...}},
       pour pouvoir rappeler le bon serveur plus tard (avec la bonne
       authentification) sans aucun if/else en dur
+
+    `user_id` est transmis a chaque url_builder/headers_builder. La plupart
+    l'ignorent (cle API globale, ex: Tavily, Wolfram) ; certains outils
+    "par utilisateur" (ex: Notion) en ont besoin pour aller chercher le bon
+    token. Si un outil necessite un utilisateur et qu'aucun n'est connecte
+    (ou pas encore connecte a CET outil), il est ignore silencieusement :
+    il n'apparait simplement pas dans la liste proposee au modele.
     """
     outils_pour_llm = []
     table_routage = {}
 
     for serveur in SERVEURS_MCP:
         try:
-            url = serveur["url_builder"](get_secret)
-            headers = serveur["headers_builder"](get_secret) if "headers_builder" in serveur else None
+            if serveur.get("necessite_utilisateur") and not user_id:
+                continue
+
+            url = serveur["url_builder"](get_secret, user_id)
+            headers = serveur["headers_builder"](get_secret, user_id) if "headers_builder" in serveur else None
+
+            if serveur.get("necessite_utilisateur") and headers is None:
+                continue
+
             outils = asyncio.run(_lister_outils_async(url, headers))
             for outil in outils:
                 outils_pour_llm.append({
