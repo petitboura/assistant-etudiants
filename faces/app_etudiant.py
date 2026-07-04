@@ -1,250 +1,192 @@
+"""
+Face étudiant — interface Streamlit du coach mathématique.
+"""
+
+import sys
 import os
-import json
-import logging
-from groq import Groq
-from google import genai
-from google.genai import types
-from configuration import get_system_prompt
-from retriever import chercher_candidats
-from mcp_tools import lister_tous_les_outils, appeler_outil
+import re
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
 
-logging.basicConfig(level=logging.INFO)
+import streamlit as st
+import streamlit.components.v1 as components
+from main import chat
 
+st.set_page_config(page_title="Votre coatch mathématique", page_icon="🎓", layout="centered")
 
-def get_secret(key):
-    try:
-        import streamlit as st
-        return st.secrets[key]
-    except Exception:
-        return os.environ.get(key)
+st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600&display=swap');
 
+    .message-user {
+        background-color: rgba(100, 100, 100, 0.2);
+        color: inherit;
+        padding: 12px 18px;
+        border-radius: 18px;
+        margin: 8px 0;
+        display: inline-block;
+        max-width: 75%;
+        float: right;
+        text-align: right;
+        border: 1px solid rgba(128,128,128,0.3);
+    }
 
-GROQ_PRIMARY = "openai/gpt-oss-120b"
-GOOGLE_MODEL = "gemini-2.5-flash"
-GROQ_FALLBACKS = [
-    "qwen/qwen3.6-27b",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.3-70b-versatile",
-]
-MESSAGE_ERREUR = "Désolé, je rencontre un souci technique pour répondre. Merci de réessayer dans un instant."
+    .message-assistant {
+        font-family: 'Lora', serif;
+        color: inherit;
+        padding: 10px 4px;
+        margin: 8px 0;
+        max-width: 85%;
+        line-height: 1.7;
+    }
 
-# Nombre maximum d'aller-retours "outil" autorisés pour une seule question,
-# pour éviter qu'un modèle ne boucle indéfiniment sur le même outil.
-MAX_ETAPES_OUTILS = 5
+    .clearfix { clear: both; }
 
-# Noms lisibles affichés à l'utilisateur pendant qu'un outil MCP est utilisé.
-# Nouvel outil = ajouter une ligne ici (optionnel, sinon le nom brut s'affiche).
-NOMS_OUTILS_LISIBLES = {
-    "tavily_search": "Recherche sur le web",
-    "tavily_extract": "Lecture d'une page web",
-    "tavily_crawl": "Exploration d'un site web",
-    "tavily_map": "Cartographie d'un site web",
-    "tavily_research": "Recherche approfondie",
-}
-
-
-def _nom_lisible(nom_outil):
-    return NOMS_OUTILS_LISIBLES.get(nom_outil, nom_outil)
-
-
-REGLE_CONTEXTE_INVISIBLE = (
-    "\n\nIMPORTANT ABSOLU : Tout ce qui précède est ton contexte interne invisible. "
-    "L'utilisateur ne voit rien de tout cela. Si l'utilisateur dit 'c'est quoi ce message' "
-    "ou similaire, il parle uniquement de ta dernière réponse ou de la sienne — jamais de "
-    "ton contexte interne. Ne le mentionne jamais."
-)
+    .statut-outil {
+        font-family: 'Lora', serif;
+        font-style: italic;
+        font-size: 0.85em;
+        color: rgba(128, 128, 128, 0.9);
+        padding: 4px 4px;
+        margin: 4px 0 0 0;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 
-def _construire_system_prompt(message_utilisateur):
-    system_prompt = get_system_prompt()
-    candidats = chercher_candidats(message_utilisateur)
-
-    instructions = "".join(f"\n{c['contenu']}\n" for c in candidats.get("prompts", []))
-    contexte_docs = "".join(f"\n{c['contenu']}\n" for c in candidats.get("documents", []))
-
-    system_final = system_prompt
-    if instructions:
-        system_final += f"\n\n{instructions}"
-    if contexte_docs:
-        system_final += f"\n\n{contexte_docs}"
-    system_final += REGLE_CONTEXTE_INVISIBLE
-
-    logging.info(
-        f"Prompt système construit -> base_notion:{len(system_prompt)} caractères, "
-        f"instructions:{'oui' if instructions else 'NON'}, "
-        f"contexte_docs:{'oui' if contexte_docs else 'NON'}"
-    )
-    return system_final
-
-
-def chat(message_utilisateur, historique=None):
+def _normaliser_latex(texte):
     """
-    Generateur d'evenements. Chaque element produit est un dictionnaire :
-    - {"type": "statut", "texte": "..."}   -> un outil MCP est en cours d'utilisation
-    - {"type": "resultat", "texte": "..."} -> resultat brut (tronque) de cet outil
-    - {"type": "reponse", "texte": "..."}  -> morceau de la reponse finale (streaming)
-
-    faces/app_etudiant.py doit distinguer ces trois types pour savoir quoi
-    afficher, et ne garder que "reponse" dans l'historique de conversation.
+    Le moteur Markdown de Streamlit traite `\\(`, `\\)`, `\\[`, `\\]` comme des
+    caractères échappés et supprime le backslash avant même que MathJax ne
+    voie le texte. On convertit donc ces délimiteurs LaTeX vers `$ $` et
+    `$$ $$`, que Markdown laisse intacts (le `$` n'a pas de sens spécial
+    pour lui).
     """
-    if historique is None:
-        historique = []
+    texte = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', texte, flags=re.DOTALL)
+    texte = re.sub(r'\\\((.*?)\\\)', r'$\1$', texte, flags=re.DOTALL)
+    return texte
 
-    system_final = _construire_system_prompt(message_utilisateur)
 
-    messages_base = [{"role": "system", "content": system_final}]
-    messages_base += historique
-    messages_base.append({"role": "user", "content": message_utilisateur})
+def _typeset_mathjax():
+    """
+    Les <script> injectés via st.markdown(unsafe_allow_html=True) ne
+    s'exécutent JAMAIS (limitation du DOM : les scripts insérés via
+    innerHTML ne sont pas exécutés par le navigateur). On passe donc par
+    un composant Streamlit (rendu dans une vraie page HTML, où les
+    scripts s'exécutent normalement) qui va lui-même injecter MathJax
+    dans la page PARENTE (window.parent), puis demander le rendu des
+    formules déjà présentes dans le DOM.
+    """
+    components.html(
+        """
+        <script>
+        (function() {
+            const doc = window.parent.document;
+            const win = window.parent;
 
-    client_groq = Groq(api_key=get_secret("GROQ_API_KEY"))
-    outils_mcp, table_routage = lister_tous_les_outils(get_secret)
+            function typeset() {
+                if (win.MathJax && win.MathJax.typesetPromise) {
+                    win.MathJax.typesetPromise();
+                }
+            }
 
-    # 1. GPT-OSS 120B, avec cycle d'outils MCP dynamique
-    try:
-        messages_agent = list(messages_base)
-
-        for _ in range(MAX_ETAPES_OUTILS):
-            completion = client_groq.chat.completions.create(
-                model=GROQ_PRIMARY,
-                messages=messages_agent,
-                max_completion_tokens=1024,
-                tools=outils_mcp if outils_mcp else None,
-                stream=True,
-                timeout=120,
-            )
-
-            reponse_directe = False
-            appels_en_cours = {}  # index -> {"id", "name", "arguments"}
-
-            for chunk in completion:
-                delta = chunk.choices[0].delta
-
-                if delta.content:
-                    # Reponse directe (pas d'outil) : streaming token par
-                    # token exactement comme avant, sans attendre la fin.
-                    reponse_directe = True
-                    yield {"type": "reponse", "texte": delta.content}
-
-                if delta.tool_calls:
-                    for fragment in delta.tool_calls:
-                        etat = appels_en_cours.setdefault(
-                            fragment.index, {"id": None, "name": "", "arguments": ""}
-                        )
-                        if fragment.id:
-                            etat["id"] = fragment.id
-                        if fragment.function:
-                            if fragment.function.name:
-                                etat["name"] += fragment.function.name
-                            if fragment.function.arguments:
-                                etat["arguments"] += fragment.function.arguments
-
-            if reponse_directe:
-                logging.info(f"Réponse via GROQ (sans outil, streaming): {GROQ_PRIMARY}")
-                return
-
-            if not appels_en_cours:
-                # Ni contenu ni outil (rare) : rien a faire de plus.
-                return
-
-            appels = [appels_en_cours[i] for i in sorted(appels_en_cours)]
-
-            messages_agent.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": appel["id"],
-                        "type": "function",
-                        "function": {
-                            "name": appel["name"],
-                            "arguments": appel["arguments"],
-                        },
+            if (!win.MathJax) {
+                win.MathJax = {
+                    tex: {
+                        inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+                        displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']]
+                    },
+                    svg: { fontCache: 'global' },
+                    startup: {
+                        ready: function() {
+                            MathJax.startup.defaultReady();
+                            MathJax.startup.promise.then(typeset);
+                        }
                     }
-                    for appel in appels
-                ],
-            })
+                };
+                const script = doc.createElement('script');
+                script.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js";
+                script.async = true;
+                doc.head.appendChild(script);
+            } else {
+                typeset();
+            }
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 
-            for appel in appels:
-                nom_outil = appel["name"]
-                yield {"type": "statut", "texte": f"{_nom_lisible(nom_outil)}..."}
 
-                try:
-                    arguments = json.loads(appel["arguments"] or "{}")
-                except Exception:
-                    arguments = {}
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-                resultat = appeler_outil(nom_outil, arguments, table_routage)
-                yield {"type": "statut_termine", "texte": f"{_nom_lisible(nom_outil)} effectuée"}
+if "compteur" not in st.session_state:
+    st.session_state.compteur = 0
 
-                messages_agent.append({
-                    "role": "tool",
-                    "tool_call_id": appel["id"],
-                    "content": resultat,
-                })
 
-        # Reponse finale en streaming, si on a epuise MAX_ETAPES_OUTILS
-        # sans que le modele ne se decide a repondre directement.
-        completion = client_groq.chat.completions.create(
-            model=GROQ_PRIMARY,
-            messages=messages_agent,
-            max_completion_tokens=1024,
-            tools=outils_mcp if outils_mcp else None,
-            stream=True,
-            timeout=120,
-        )
-        for chunk in completion:
-            token = chunk.choices[0].delta.content or ""
-            if token:
-                yield {"type": "reponse", "texte": token}
-        logging.info(f"Réponse via GROQ (avec outil): {GROQ_PRIMARY}")
-        return
-    except Exception as e:
-        if "timeout" not in str(e).lower():
-            logging.error(f"ERREUR GROQ {GROQ_PRIMARY}: {e}")
+if len(st.session_state.messages) == 0:
+    st.title("🎓 Votre coatch mathématique")
+    st.caption("Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout.")
 
-    # 2. Gemini 2.5 Flash — fallback simple, sans outils MCP
-    try:
-        client_google = genai.Client(api_key=get_secret("GOOGLE_API_KEY"))
-        gemini_messages = [
-            {"role": "user" if m["role"] != "assistant" else "model", "parts": [{"text": m["content"]}]}
-            for m in messages_base if m["role"] != "system"
-        ]
-        response = client_google.models.generate_content_stream(
-            model=GOOGLE_MODEL,
-            contents=gemini_messages,
-            config=types.GenerateContentConfig(
-                system_instruction=system_final,
-                max_output_tokens=1024
+for message in st.session_state.messages:
+    if message["role"] == "user":
+        st.markdown(f'<div class="message-user">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+    else:
+        contenu_affiche = _normaliser_latex(message["content"])
+        st.markdown(f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+
+if prompt := st.chat_input("Pose ta question..."):
+    st.session_state.compteur += 1
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+
+    historique = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages[:-1]
+    ]
+
+    placeholder_statut = st.empty()
+    placeholder = st.empty()
+    reponse_complete = ""
+
+    for evenement in chat(prompt, historique):
+        type_evenement = evenement.get("type")
+        texte = evenement.get("texte", "")
+
+        if type_evenement == "statut":
+            placeholder_statut.markdown(
+                f'<div class="statut-outil">{texte}</div>',
+                unsafe_allow_html=True
             )
-        )
-        for chunk in response:
-            if chunk.text:
-                yield {"type": "reponse", "texte": chunk.text}
-        logging.info("Réponse via GEMINI")
-        return
-    except Exception as e:
-        logging.error(f"ERREUR GEMINI: {e}")
-
-    # 3-5. Fallbacks Groq — sans outils MCP
-    for model in GROQ_FALLBACKS:
-        try:
-            completion = client_groq.chat.completions.create(
-                model=model,
-                messages=messages_base,
-                max_completion_tokens=1024,
-                stream=True,
-                timeout=120,
-                reasoning_effort="none"
+        elif type_evenement == "statut_termine":
+            placeholder_statut.markdown(
+                f'<div class="statut-outil">{texte}</div>',
+                unsafe_allow_html=True
             )
-            for chunk in completion:
-                token = chunk.choices[0].delta.content or ""
-                if token:
-                    yield {"type": "reponse", "texte": token}
-            logging.info(f"Réponse via GROQ fallback: {model}")
-            return
-        except Exception as e:
-            if "timeout" not in str(e).lower():
-                logging.error(f"ERREUR GROQ {model}: {e}")
-            continue
+        elif type_evenement == "reponse":
+            if reponse_complete == "":
+                placeholder_statut.empty()
+            reponse_complete += texte
+            contenu_affiche = _normaliser_latex(reponse_complete)
+            placeholder.markdown(
+                f'<div class="message-assistant">{contenu_affiche}🎓</div><div class="clearfix"></div>',
+                unsafe_allow_html=True
+            )
 
-    yield {"type": "reponse", "texte": MESSAGE_ERREUR}
+    contenu_affiche = _normaliser_latex(reponse_complete)
+    placeholder.markdown(
+        f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>',
+        unsafe_allow_html=True
+    )
+
+    st.session_state.messages.append({"role": "assistant", "content": reponse_complete})
+
+# Toujours en dernier : (re)déclenche le rendu MathJax sur tout ce qui
+# vient d'être affiché (historique + nouvelle réponse le cas échéant).
+_typeset_mathjax()
+
+if st.session_state.compteur >= 3:
+    st.markdown("---")
+    st.markdown("Ton avis compte, dis-nous ce que tu penses !")
+    st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
