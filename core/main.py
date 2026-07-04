@@ -8,6 +8,13 @@ from configuration import get_system_prompt
 from retriever import chercher_candidats
 from mcp_tools import lister_tous_les_outils, appeler_outil
 
+_cache_outils = {"outils": None, "routage": None}
+
+def _outils_avec_cache():
+    if _cache_outils["outils"] is None:
+        _cache_outils["outils"], _cache_outils["routage"] = lister_tous_les_outils(get_secret)
+    return _cache_outils["outils"], _cache_outils["routage"]
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -97,8 +104,7 @@ def chat(message_utilisateur, historique=None):
     messages_base.append({"role": "user", "content": message_utilisateur})
 
     client_groq = Groq(api_key=get_secret("GROQ_API_KEY"))
-    outils_mcp, table_routage = lister_tous_les_outils(get_secret)
-
+    outils_mcp, table_routage = _outils_avec_cache()
     # 1. GPT-OSS 120B, avec cycle d'outils MCP dynamique
     try:
         messages_agent = list(messages_base)
