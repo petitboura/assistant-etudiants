@@ -49,18 +49,6 @@ st.markdown("""
         padding: 4px 4px;
         margin: 4px 0 0 0;
     }
-
-    .resultat-outil {
-        font-family: monospace;
-        font-size: 0.78em;
-        color: rgba(128, 128, 128, 0.8);
-        background-color: rgba(128, 128, 128, 0.08);
-        border-left: 2px solid rgba(128, 128, 128, 0.3);
-        padding: 6px 10px;
-        margin: 2px 0 8px 0;
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -158,6 +146,7 @@ if prompt := st.chat_input("Pose ta question..."):
         for m in st.session_state.messages[:-1]
     ]
 
+    placeholder_statut = st.empty()
     placeholder = st.empty()
     reponse_complete = ""
 
@@ -166,16 +155,18 @@ if prompt := st.chat_input("Pose ta question..."):
         texte = evenement.get("texte", "")
 
         if type_evenement == "statut":
-            st.markdown(
-                f'<div class="statut-outil">🔧 {texte}</div>',
+            placeholder_statut.markdown(
+                f'<div class="statut-outil">{texte}</div>',
                 unsafe_allow_html=True
             )
-        elif type_evenement == "resultat":
-            st.markdown(
-                f'<div class="resultat-outil">{texte}</div>',
+        elif type_evenement == "statut_termine":
+            placeholder_statut.markdown(
+                f'<div class="statut-outil">{texte}</div>',
                 unsafe_allow_html=True
             )
         elif type_evenement == "reponse":
+            if reponse_complete == "":
+                placeholder_statut.empty()
             reponse_complete += texte
             contenu_affiche = _normaliser_latex(reponse_complete)
             placeholder.markdown(
