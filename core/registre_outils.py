@@ -66,7 +66,7 @@ SERVEURS_MCP = [
         # le fallback Gemini SANS AUCUN outil (ni Notion ni Tavily).
         # Un etudiant n'a besoin que de consulter son Notion, pas de le
         # modifier -> on ne garde que les outils de lecture pour l'instant.
-        "outils_autorises": ["notion-search", "notion-fetch"],
+        "outils_autorises": ["notion-search"],
     },
 ]
 
