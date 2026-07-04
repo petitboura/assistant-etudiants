@@ -245,7 +245,7 @@ def _consommer_flux(generateur, placeholder_statut, placeholder, reponse_deja=""
     return reponse_complete, None
 
 
-
+if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "compteur" not in st.session_state:
