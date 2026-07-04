@@ -7,6 +7,7 @@ from google.genai import types
 from configuration import get_system_prompt
 from retriever import chercher_candidats
 from mcp_tools import lister_tous_les_outils, appeler_outil
+from registre_outils import OUTILS_SENSIBLES
 
 logging.basicConfig(level=logging.INFO)
 
@@ -42,6 +43,10 @@ NOMS_OUTILS_LISIBLES = {
     "tavily_crawl": "Exploration d'un site web",
     "tavily_map": "Cartographie d'un site web",
     "tavily_research": "Recherche approfondie",
+    "notion-search": "Recherche dans ton Notion",
+    "notion-fetch": "Lecture d'une page Notion",
+    "notion-create-pages": "Création d'une page Notion",
+    "notion-update-page": "Modification d'une page Notion",
 }
 
 
@@ -87,27 +92,236 @@ DELAI_MAX_PAR_APPEL = 10  # secondes : on bascule vite plutot que d'attendre
 MAX_PASSAGES_CASCADE = 2  # on ne retente toute la cascade que si TOUT a timeout
 
 
-def chat(message_utilisateur, historique=None, user_id=None):
+class _AttenteConfirmation(Exception):
+    """
+    Levee des qu'un outil sensible (ecriture) est rencontre, AVANT de
+    l'executer. `appel` est l'appel en question ; `appels_restants` sont
+    les appels du meme lot qui n'ont pas encore ete traites (ils seront
+    rejoues a la reprise, dans l'ordre, apres que celui-ci ait ete
+    confirme ou annule).
+    """
+    def __init__(self, appel, appels_restants):
+        self.appel = appel
+        self.appels_restants = appels_restants
+
+
+def _traiter_appels(appels, messages_agent, table_routage):
+    """
+    Execute une liste d'appels d'outils dans l'ordre, en ajoutant le
+    resultat de chacun a messages_agent au fur et a mesure. Des qu'un
+    outil sensible (OUTILS_SENSIBLES) est rencontre, s'arrete AVANT de
+    l'executer et leve _AttenteConfirmation.
+    """
+    for i, appel in enumerate(appels):
+        nom_outil = appel["name"]
+
+        if nom_outil in OUTILS_SENSIBLES:
+            raise _AttenteConfirmation(appel, appels[i + 1:])
+
+        yield {"type": "statut", "texte": f"{_nom_lisible(nom_outil)}..."}
+        try:
+            arguments = json.loads(appel["arguments"] or "{}")
+        except Exception:
+            arguments = {}
+        resultat = appeler_outil(nom_outil, arguments, table_routage)
+        yield {"type": "statut_termine", "texte": f"{_nom_lisible(nom_outil)} effectuée"}
+
+        messages_agent.append({
+            "role": "tool",
+            "tool_call_id": appel["id"],
+            "content": resultat,
+        })
+
+
+def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage):
+    appel = attente.appel
+    try:
+        arguments_dict = json.loads(appel["arguments"] or "{}")
+    except Exception:
+        arguments_dict = {}
+    return {
+        "type": "confirmation_requise",
+        "nom_outil": appel["name"],
+        "nom_lisible": _nom_lisible(appel["name"]),
+        "arguments": arguments_dict,
+        "etat_reprise": {
+            "messages_agent": messages_agent,
+            "outils_mcp": outils_mcp,
+            "table_routage": table_routage,
+            "appel": appel,
+            "appels_restants": attente.appels_restants,
+        },
+    }
+
+
+def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
+                 appels_en_cours_a_finir=None):
+    """
+    Boucle d'agent avec GROQ_PRIMARY (le seul modele de la cascade qui
+    sait utiliser des outils). Genere des evenements "statut"/"reponse"/
+    "confirmation_requise". S'arrete (sans exception) des qu'une reponse
+    finale a ete produite OU qu'une confirmation est necessaire.
+
+    `appels_en_cours_a_finir`, si fourni, est traite AVANT le prochain
+    appel a Groq : c'est le cas lors d'une reprise apres confirmation, ou
+    il faut d'abord finir le lot d'outils du tour precedent (executer les
+    appels restants, ou re-demander confirmation si l'un d'eux est aussi
+    sensible) avant de redemander une reponse au modele.
+    """
+    if appels_en_cours_a_finir:
+        try:
+            for event in _traiter_appels(appels_en_cours_a_finir, messages_agent, table_routage):
+                yield event
+        except _AttenteConfirmation as attente:
+            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage)
+            return
+
+    for _ in range(MAX_ETAPES_OUTILS):
+        completion = client_groq.chat.completions.create(
+            model=GROQ_PRIMARY,
+            messages=messages_agent,
+            max_completion_tokens=1024,
+            tools=outils_mcp if outils_mcp else None,
+            stream=True,
+            timeout=DELAI_MAX_PAR_APPEL,
+        )
+
+        reponse_directe = False
+        appels_en_cours = {}  # index -> {"id", "name", "arguments"}
+
+        for chunk in completion:
+            delta = chunk.choices[0].delta
+
+            if delta.content:
+                reponse_directe = True
+                yield {"type": "reponse", "texte": delta.content}
+
+            if delta.tool_calls:
+                for fragment in delta.tool_calls:
+                    etat = appels_en_cours.setdefault(
+                        fragment.index, {"id": None, "name": "", "arguments": ""}
+                    )
+                    if fragment.id:
+                        etat["id"] = fragment.id
+                    if fragment.function:
+                        if fragment.function.name:
+                            etat["name"] += fragment.function.name
+                        if fragment.function.arguments:
+                            etat["arguments"] += fragment.function.arguments
+
+        if reponse_directe:
+            logging.info(f"Réponse via GROQ (sans outil, streaming): {GROQ_PRIMARY}")
+            return
+
+        if not appels_en_cours:
+            return  # ni contenu ni outil (rare) : rien a faire de plus
+
+        appels = [appels_en_cours[i] for i in sorted(appels_en_cours)]
+
+        messages_agent.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": appel["id"],
+                    "type": "function",
+                    "function": {"name": appel["name"], "arguments": appel["arguments"]},
+                }
+                for appel in appels
+            ],
+        })
+
+        try:
+            for event in _traiter_appels(appels, messages_agent, table_routage):
+                yield event
+        except _AttenteConfirmation as attente:
+            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage)
+            return
+
+    # MAX_ETAPES_OUTILS epuise sans reponse directe : on force une reponse
+    # finale (sans autoriser de nouvel appel d'outil).
+    completion = client_groq.chat.completions.create(
+        model=GROQ_PRIMARY,
+        messages=messages_agent,
+        max_completion_tokens=1024,
+        tools=outils_mcp if outils_mcp else None,
+        stream=True,
+        timeout=DELAI_MAX_PAR_APPEL,
+    )
+    for chunk in completion:
+        token = chunk.choices[0].delta.content or ""
+        if token:
+            yield {"type": "reponse", "texte": token}
+    logging.info(f"Réponse via GROQ (avec outil): {GROQ_PRIMARY}")
+
+
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
-    - {"type": "statut", "texte": "..."}   -> un outil MCP est en cours d'utilisation
-    - {"type": "resultat", "texte": "..."} -> resultat brut (tronque) de cet outil
-    - {"type": "reponse", "texte": "..."}  -> morceau de la reponse finale (streaming)
+    - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
+    - {"type": "statut_termine", "texte": "..."} -> cet outil a fini (ou a ete annule)
+    - {"type": "reponse", "texte": "..."}        -> morceau de la reponse finale (streaming)
+    - {"type": "confirmation_requise", ...}      -> un outil qui MODIFIE les donnees de
+      l'etudiant (ex: creer une page Notion) attend une confirmation avant de s'executer.
+      Contient "nom_lisible", "arguments" (a afficher a l'etudiant), et "etat_reprise"
+      (a repasser tel quel a chat(reprise=...) une fois la decision prise).
 
-    faces/app_etudiant.py doit distinguer ces trois types pour savoir quoi
-    afficher, et ne garder que "reponse" dans l'historique de conversation.
+    faces/app_etudiant.py doit distinguer ces types pour savoir quoi afficher, et ne
+    garder que "reponse" dans l'historique de conversation.
 
     `user_id` (session.user.id de Supabase Auth, ou None si l'etudiant n'est
     pas connecte) est transmis au registre d'outils pour que les outils "par
-    utilisateur" (ex: Notion) sachent pour qui aller chercher un token. Sans
-    lui, ces outils sont simplement absents de la liste proposee au modele.
+    utilisateur" (ex: Notion) sachent pour qui aller chercher un token.
+
+    Pour reprendre apres une confirmation_requise, appeler :
+        chat(reprise={"etat_reprise": evenement["etat_reprise"], "approuve": True|False})
+    (message_utilisateur/historique/user_id sont alors ignores.)
 
     Si TOUS les maillons de la cascade (Groq principal, Gemini, fallbacks
     Groq) echouent uniquement a cause d'un timeout, on retente une seconde
-    fois toute la cascade (les serveurs etaient peut-etre juste temporairement
-    lents). Si au moins une erreur n'est pas un timeout (ex: 429, cle
-    invalide...), on ne retente pas et on part direct sur le message d'erreur.
+    fois toute la cascade. Si au moins une erreur n'est pas un timeout (ex:
+    429, cle invalide...), on ne retente pas et on part direct sur le
+    message d'erreur.
     """
+    if reprise is not None:
+        etat = reprise["etat_reprise"]
+        approuve = reprise["approuve"]
+        messages_agent = etat["messages_agent"]
+        outils_mcp = etat["outils_mcp"]
+        table_routage = etat["table_routage"]
+        appel = etat["appel"]
+
+        client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
+
+        if approuve:
+            yield {"type": "statut", "texte": f"{_nom_lisible(appel['name'])}..."}
+            try:
+                arguments = json.loads(appel["arguments"] or "{}")
+            except Exception:
+                arguments = {}
+            resultat = appeler_outil(appel["name"], arguments, table_routage)
+            yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
+        else:
+            resultat = "Action annulée par l'étudiant : cet outil n'a pas été exécuté."
+            yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} annulée"}
+
+        messages_agent.append({
+            "role": "tool",
+            "tool_call_id": appel["id"],
+            "content": resultat,
+        })
+
+        try:
+            yield from _agent_groq(
+                client_groq, messages_agent, outils_mcp, table_routage,
+                appels_en_cours_a_finir=etat.get("appels_restants") or None,
+            )
+        except Exception as e:
+            logging.error(f"ERREUR GROQ (reprise apres confirmation) {GROQ_PRIMARY}: {e}")
+            yield {"type": "reponse", "texte": MESSAGE_ERREUR}
+        return
+
+    # --- Chemin normal : nouvelle question --------------------------------
     if historique is None:
         historique = []
 
@@ -126,101 +340,7 @@ def chat(message_utilisateur, historique=None, user_id=None):
         # 1. GPT-OSS 120B, avec cycle d'outils MCP dynamique
         try:
             messages_agent = list(messages_base)
-
-            for _ in range(MAX_ETAPES_OUTILS):
-                completion = client_groq.chat.completions.create(
-                    model=GROQ_PRIMARY,
-                    messages=messages_agent,
-                    max_completion_tokens=1024,
-                    tools=outils_mcp if outils_mcp else None,
-                    stream=True,
-                    timeout=DELAI_MAX_PAR_APPEL,
-                )
-
-                reponse_directe = False
-                appels_en_cours = {}  # index -> {"id", "name", "arguments"}
-
-                for chunk in completion:
-                    delta = chunk.choices[0].delta
-
-                    if delta.content:
-                        # Reponse directe (pas d'outil) : streaming token par
-                        # token exactement comme avant, sans attendre la fin.
-                        reponse_directe = True
-                        yield {"type": "reponse", "texte": delta.content}
-
-                    if delta.tool_calls:
-                        for fragment in delta.tool_calls:
-                            etat = appels_en_cours.setdefault(
-                                fragment.index, {"id": None, "name": "", "arguments": ""}
-                            )
-                            if fragment.id:
-                                etat["id"] = fragment.id
-                            if fragment.function:
-                                if fragment.function.name:
-                                    etat["name"] += fragment.function.name
-                                if fragment.function.arguments:
-                                    etat["arguments"] += fragment.function.arguments
-
-                if reponse_directe:
-                    logging.info(f"Réponse via GROQ (sans outil, streaming): {GROQ_PRIMARY}")
-                    return
-
-                if not appels_en_cours:
-                    # Ni contenu ni outil (rare) : rien a faire de plus.
-                    return
-
-                appels = [appels_en_cours[i] for i in sorted(appels_en_cours)]
-
-                messages_agent.append({
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": appel["id"],
-                            "type": "function",
-                            "function": {
-                                "name": appel["name"],
-                                "arguments": appel["arguments"],
-                            },
-                        }
-                        for appel in appels
-                    ],
-                })
-
-                for appel in appels:
-                    nom_outil = appel["name"]
-                    yield {"type": "statut", "texte": f"{_nom_lisible(nom_outil)}..."}
-
-                    try:
-                        arguments = json.loads(appel["arguments"] or "{}")
-                    except Exception:
-                        arguments = {}
-
-                    resultat = appeler_outil(nom_outil, arguments, table_routage)
-                    yield {"type": "statut_termine", "texte": f"{_nom_lisible(nom_outil)} effectuée"}
-
-                    messages_agent.append({
-                        "role": "tool",
-                        "tool_call_id": appel["id"],
-                        "content": resultat,
-                    })
-
-            # Reponse finale en streaming, si on a epuise MAX_ETAPES_OUTILS
-            # sans que le modele ne se decide a repondre directement.
-            completion = client_groq.chat.completions.create(
-                model=GROQ_PRIMARY,
-                messages=messages_agent,
-                max_completion_tokens=1024,
-                tools=outils_mcp if outils_mcp else None,
-                stream=True,
-                timeout=DELAI_MAX_PAR_APPEL,
-            )
-            for chunk in completion:
-                token = chunk.choices[0].delta.content or ""
-                if token:
-                    yield {"type": "reponse", "texte": token}
-            logging.info(f"Réponse via GROQ (avec outil): {GROQ_PRIMARY}")
+            yield from _agent_groq(client_groq, messages_agent, outils_mcp, table_routage)
             return
         except Exception as e:
             if not _est_timeout(e):
