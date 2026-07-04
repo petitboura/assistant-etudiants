@@ -52,7 +52,6 @@ def _headers_notion(get_secret, user_id):
 
 
 SERVEURS_MCP = [
-    {"nom": "tavily", "url_builder": _url_tavily},
     {"nom": "wolfram", "url_builder": _url_wolfram},
     {
         "nom": "notion",
