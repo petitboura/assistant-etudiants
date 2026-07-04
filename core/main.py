@@ -87,7 +87,7 @@ DELAI_MAX_PAR_APPEL = 10  # secondes : on bascule vite plutot que d'attendre
 MAX_PASSAGES_CASCADE = 2  # on ne retente toute la cascade que si TOUT a timeout
 
 
-def chat(message_utilisateur, historique=None):
+def chat(message_utilisateur, historique=None, user_id=None):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}   -> un outil MCP est en cours d'utilisation
@@ -96,6 +96,11 @@ def chat(message_utilisateur, historique=None):
 
     faces/app_etudiant.py doit distinguer ces trois types pour savoir quoi
     afficher, et ne garder que "reponse" dans l'historique de conversation.
+
+    `user_id` (session.user.id de Supabase Auth, ou None si l'etudiant n'est
+    pas connecte) est transmis au registre d'outils pour que les outils "par
+    utilisateur" (ex: Notion) sachent pour qui aller chercher un token. Sans
+    lui, ces outils sont simplement absents de la liste proposee au modele.
 
     Si TOUS les maillons de la cascade (Groq principal, Gemini, fallbacks
     Groq) echouent uniquement a cause d'un timeout, on retente une seconde
@@ -113,7 +118,7 @@ def chat(message_utilisateur, historique=None):
     messages_base.append({"role": "user", "content": message_utilisateur})
 
     client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
-    outils_mcp, table_routage = lister_tous_les_outils(get_secret)
+    outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id)
 
     for _passage in range(MAX_PASSAGES_CASCADE):
         tout_est_timeout = True
