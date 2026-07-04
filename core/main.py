@@ -35,7 +35,7 @@ MAX_ETAPES_OUTILS = 5
 # Noms lisibles affichés à l'utilisateur pendant qu'un outil MCP est utilisé.
 # Nouvel outil = ajouter une ligne ici (optionnel, sinon le nom brut s'affiche).
 NOMS_OUTILS_LISIBLES = {
-    "tavily_search": "Recherche web",
+    "tavily_search": "Recherche sur le web",
     "tavily_extract": "Lecture d'une page web",
     "tavily_crawl": "Exploration d'un site web",
     "tavily_map": "Cartographie d'un site web",
@@ -153,7 +153,7 @@ def chat(message_utilisateur, historique=None):
                     arguments = {}
 
                 resultat = appeler_outil(nom_outil, arguments, table_routage)
-                yield {"type": "resultat", "texte": resultat[:400]}
+                yield {"type": "statut_termine", "texte": f"{_nom_lisible(nom_outil)} effectuée"}
 
                 messages_agent.append({
                     "role": "tool",
