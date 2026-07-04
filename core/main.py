@@ -102,6 +102,7 @@ def chat(message_utilisateur, historique=None):
     # 1. GPT-OSS 120B, avec cycle d'outils MCP dynamique
     try:
         messages_agent = list(messages_base)
+        outil_utilise = False
 
         for _ in range(MAX_ETAPES_OUTILS):
             completion = client_groq.chat.completions.create(
@@ -114,7 +115,17 @@ def chat(message_utilisateur, historique=None):
             choix = completion.choices[0].message
 
             if not choix.tool_calls:
+                if not outil_utilise:
+                    # Aucun outil n'a jamais ete demande : la reponse de cet
+                    # unique appel est deja la reponse finale, pas besoin
+                    # d'un deuxieme appel Groq (ca economise le quota).
+                    if choix.content:
+                        yield {"type": "reponse", "texte": choix.content}
+                    logging.info(f"Réponse via GROQ (sans outil): {GROQ_PRIMARY}")
+                    return
                 break
+
+            outil_utilise = True
 
             messages_agent.append({
                 "role": "assistant",
@@ -150,7 +161,8 @@ def chat(message_utilisateur, historique=None):
                     "content": resultat,
                 })
 
-        # Réponse finale en streaming (aucun outil supplémentaire demandé)
+        # Reponse finale en streaming, uniquement necessaire si au moins
+        # un outil a ete utilise (sinon on est deja sorti plus haut).
         completion = client_groq.chat.completions.create(
             model=GROQ_PRIMARY,
             messages=messages_agent,
@@ -163,7 +175,7 @@ def chat(message_utilisateur, historique=None):
             token = chunk.choices[0].delta.content or ""
             if token:
                 yield {"type": "reponse", "texte": token}
-        logging.info(f"Réponse via GROQ: {GROQ_PRIMARY}")
+        logging.info(f"Réponse via GROQ (avec outil): {GROQ_PRIMARY}")
         return
     except Exception as e:
         if "timeout" not in str(e).lower():
