@@ -26,8 +26,7 @@ connecte a l'app, ou si headers_builder renvoie None (etudiant connecte a
 l'app mais pas encore a CET outil) -> pas de bloc if/else a ecrire ici.
 """
 
-from oauth_notion import obtenir_token_valide
-
+from connexions.notion import obtenir_token_valide
 
 def _url_tavily(get_secret, user_id):
     return f"https://mcp.tavily.com/mcp/?tavilyApiKey={get_secret('TAVILY_API_KEY')}"
