@@ -10,6 +10,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
 import streamlit as st
 import streamlit.components.v1 as components
 from main import chat
+from auth import inscription, connexion, deconnexion
 
 st.set_page_config(page_title="Votre coatch mathématique", page_icon="🎓", layout="centered")
 
@@ -116,6 +117,53 @@ def _typeset_mathjax():
         height=0,
         width=0,
     )
+
+
+# --- Compte étudiant (optionnel) ---------------------------------------
+# Le chat reste utilisable sans connexion. Ce bloc, dans la barre latérale,
+# ne bloque jamais l'accès au coach : il propose juste de se connecter pour
+# celles et ceux qui en ont besoin (ex: plus tard, connecter son Notion).
+
+if "session_utilisateur" not in st.session_state:
+    st.session_state.session_utilisateur = None
+
+with st.sidebar:
+    if st.session_state.session_utilisateur is None:
+        st.markdown("### Compte (optionnel)")
+        st.caption(
+            "Le chat fonctionne sans compte. Connecte-toi seulement si tu "
+            "veux débloquer des fonctionnalités qui en ont besoin."
+        )
+
+        onglet_connexion, onglet_inscription = st.tabs(["Se connecter", "Créer un compte"])
+
+        with onglet_connexion:
+            email_connexion = st.text_input("Email", key="email_connexion")
+            mdp_connexion = st.text_input("Mot de passe", type="password", key="mdp_connexion")
+            if st.button("Se connecter", key="bouton_connexion"):
+                succes, resultat = connexion(email_connexion, mdp_connexion)
+                if succes:
+                    st.session_state.session_utilisateur = resultat
+                    st.rerun()
+                else:
+                    st.error(resultat)
+
+        with onglet_inscription:
+            email_inscription = st.text_input("Email", key="email_inscription")
+            mdp_inscription = st.text_input("Mot de passe", type="password", key="mdp_inscription")
+            if st.button("Créer mon compte", key="bouton_inscription"):
+                succes, message = inscription(email_inscription, mdp_inscription)
+                if succes:
+                    st.success(message)
+                else:
+                    st.error(message)
+    else:
+        email_connecte = st.session_state.session_utilisateur.user.email
+        st.markdown(f"Connecté : **{email_connecte}**")
+        if st.button("Se déconnecter"):
+            deconnexion()
+            st.session_state.session_utilisateur = None
+            st.rerun()
 
 
 if "messages" not in st.session_state:
