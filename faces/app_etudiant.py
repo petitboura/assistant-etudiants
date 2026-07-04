@@ -11,6 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from main import chat
 from auth import inscription, connexion, deconnexion
+from oauth_notion import demarrer_connexion_notion, finaliser_connexion_notion, etat_notion_en_attente, est_connecte
 
 st.set_page_config(page_title="Votre coatch mathématique", page_icon="🎓", layout="centered")
 
@@ -127,6 +128,21 @@ def _typeset_mathjax():
 if "session_utilisateur" not in st.session_state:
     st.session_state.session_utilisateur = None
 
+# --- Retour de redirection OAuth (Notion) -------------------------------
+# Meme URL de callback que Google (URL_RETOUR_APP) : on distingue les deux
+# en verifiant si le `state` recu correspond a une tentative Notion en
+# attente. Si oui, on finalise et on nettoie l'URL. Si non (ex: retour
+# Google, pas encore branche dans cette interface), on ne touche a rien.
+_params = st.query_params
+if "code" in _params and "state" in _params and etat_notion_en_attente(_params["state"]):
+    succes, message = finaliser_connexion_notion(_params["code"], _params["state"])
+    st.query_params.clear()
+    if succes:
+        st.session_state.notion_message = f"✅ Notion connecté ({message})."
+    else:
+        st.session_state.notion_message = f"❌ {message}"
+    st.rerun()
+
 with st.sidebar:
     if st.session_state.session_utilisateur is None:
         st.markdown("### Compte (optionnel)")
@@ -159,7 +175,25 @@ with st.sidebar:
                     st.error(message)
     else:
         email_connecte = st.session_state.session_utilisateur.user.email
+        user_id_connecte = st.session_state.session_utilisateur.user.id
         st.markdown(f"Connecté : **{email_connecte}**")
+
+        if "notion_message" in st.session_state:
+            st.info(st.session_state.pop("notion_message"))
+
+        st.markdown("---")
+        if est_connecte(user_id_connecte):
+            st.caption("📓 Notion connecté")
+        else:
+            st.caption("📓 Notion non connecté")
+            if st.button("Connecter mon Notion"):
+                url = demarrer_connexion_notion(user_id_connecte)
+                if url:
+                    st.link_button("Continuer vers Notion", url)
+                else:
+                    st.error("Connexion Notion impossible pour le moment.")
+
+        st.markdown("---")
         if st.button("Se déconnecter"):
             deconnexion()
             st.session_state.session_utilisateur = None
@@ -198,7 +232,12 @@ if prompt := st.chat_input("Pose ta question..."):
     placeholder = st.empty()
     reponse_complete = ""
 
-    for evenement in chat(prompt, historique):
+    user_id_courant = (
+        st.session_state.session_utilisateur.user.id
+        if st.session_state.session_utilisateur else None
+    )
+
+    for evenement in chat(prompt, historique, user_id_courant):
         type_evenement = evenement.get("type")
         texte = evenement.get("texte", "")
 
