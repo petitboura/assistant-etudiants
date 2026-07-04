@@ -40,6 +40,27 @@ st.markdown("""
     }
 
     .clearfix { clear: both; }
+
+    .statut-outil {
+        font-family: 'Lora', serif;
+        font-style: italic;
+        font-size: 0.85em;
+        color: rgba(128, 128, 128, 0.9);
+        padding: 4px 4px;
+        margin: 4px 0 0 0;
+    }
+
+    .resultat-outil {
+        font-family: monospace;
+        font-size: 0.78em;
+        color: rgba(128, 128, 128, 0.8);
+        background-color: rgba(128, 128, 128, 0.08);
+        border-left: 2px solid rgba(128, 128, 128, 0.3);
+        padding: 6px 10px;
+        margin: 2px 0 8px 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -140,13 +161,27 @@ if prompt := st.chat_input("Pose ta question..."):
     placeholder = st.empty()
     reponse_complete = ""
 
-    for token in chat(prompt, historique):
-        reponse_complete += token
-        contenu_affiche = _normaliser_latex(reponse_complete)
-        placeholder.markdown(
-            f'<div class="message-assistant">{contenu_affiche}🎓</div><div class="clearfix"></div>',
-            unsafe_allow_html=True
-        )
+    for evenement in chat(prompt, historique):
+        type_evenement = evenement.get("type")
+        texte = evenement.get("texte", "")
+
+        if type_evenement == "statut":
+            st.markdown(
+                f'<div class="statut-outil">🔧 {texte}</div>',
+                unsafe_allow_html=True
+            )
+        elif type_evenement == "resultat":
+            st.markdown(
+                f'<div class="resultat-outil">{texte}</div>',
+                unsafe_allow_html=True
+            )
+        elif type_evenement == "reponse":
+            reponse_complete += texte
+            contenu_affiche = _normaliser_latex(reponse_complete)
+            placeholder.markdown(
+                f'<div class="message-assistant">{contenu_affiche}🎓</div><div class="clearfix"></div>',
+                unsafe_allow_html=True
+            )
 
     contenu_affiche = _normaliser_latex(reponse_complete)
     placeholder.markdown(

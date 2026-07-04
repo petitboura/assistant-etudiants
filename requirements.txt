@@ -6,6 +6,6 @@ google-genai
 python-dotenv
 requests
 notion-client
-tavily-python
+mcp
 PyPDF2
 markdown
