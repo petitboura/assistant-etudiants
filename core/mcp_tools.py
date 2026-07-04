@@ -61,17 +61,22 @@ def lister_tous_les_outils(get_secret, user_id=None):
     table_routage = {}
 
     for serveur in SERVEURS_MCP:
+        nom = serveur["nom"]
         try:
             if serveur.get("necessite_utilisateur") and not user_id:
+                logging.info(f"MCP '{nom}' ignoré : nécessite un utilisateur connecté, aucun user_id fourni.")
                 continue
 
             url = serveur["url_builder"](get_secret, user_id)
             headers = serveur["headers_builder"](get_secret, user_id) if "headers_builder" in serveur else None
 
             if serveur.get("necessite_utilisateur") and headers is None:
+                logging.info(f"MCP '{nom}' ignoré : utilisateur {user_id} connecté à l'app mais pas à cet outil (headers=None).")
                 continue
 
             outils = asyncio.run(_lister_outils_async(url, headers))
+            noms_outils = [o.name for o in outils]
+            logging.info(f"MCP '{nom}' -> {len(outils)} outil(s) listé(s) : {noms_outils}")
             for outil in outils:
                 outils_pour_llm.append({
                     "type": "function",
@@ -83,8 +88,9 @@ def lister_tous_les_outils(get_secret, user_id=None):
                 })
                 table_routage[outil.name] = {"url": url, "headers": headers}
         except Exception as e:
-            logging.error(f"ERREUR MCP listing ({serveur['nom']}): {e}")
+            logging.error(f"ERREUR MCP listing ({nom}): {e}")
 
+    logging.info(f"Outils envoyés au LLM ce tour-ci : {[o['function']['name'] for o in outils_pour_llm]}")
     return outils_pour_llm, table_routage
 
 
@@ -94,13 +100,17 @@ def appeler_outil(nom_outil, arguments, table_routage):
     l'expose. Le routage (URL + headers) se fait automatiquement via
     table_routage, construite par lister_tous_les_outils().
     """
+    logging.info(f"Appel outil demandé par le LLM : {nom_outil}({arguments})")
     route = table_routage.get(nom_outil)
     if not route:
+        logging.error(f"Outil '{nom_outil}' demandé par le LLM mais absent de la table de routage.")
         return f"Erreur : outil '{nom_outil}' inconnu."
     try:
-        return asyncio.run(
+        resultat = asyncio.run(
             _appeler_outil_async(route["url"], nom_outil, arguments, route.get("headers"))
         )
+        logging.info(f"Résultat outil '{nom_outil}' : {len(resultat or '')} caractères")
+        return resultat
     except Exception as e:
         logging.error(f"ERREUR MCP appel a {nom_outil}: {e}")
         return f"Erreur lors de l'appel a l'outil '{nom_outil}'."
