@@ -102,7 +102,6 @@ def chat(message_utilisateur, historique=None):
     # 1. GPT-OSS 120B, avec cycle d'outils MCP dynamique
     try:
         messages_agent = list(messages_base)
-        outil_utilise = False
 
         for _ in range(MAX_ETAPES_OUTILS):
             completion = client_groq.chat.completions.create(
@@ -110,45 +109,67 @@ def chat(message_utilisateur, historique=None):
                 messages=messages_agent,
                 max_completion_tokens=1024,
                 tools=outils_mcp if outils_mcp else None,
+                stream=True,
                 timeout=120,
             )
-            choix = completion.choices[0].message
 
-            if not choix.tool_calls:
-                if not outil_utilise:
-                    # Aucun outil n'a jamais ete demande : la reponse de cet
-                    # unique appel est deja la reponse finale, pas besoin
-                    # d'un deuxieme appel Groq (ca economise le quota).
-                    if choix.content:
-                        yield {"type": "reponse", "texte": choix.content}
-                    logging.info(f"Réponse via GROQ (sans outil): {GROQ_PRIMARY}")
-                    return
-                break
+            reponse_directe = False
+            appels_en_cours = {}  # index -> {"id", "name", "arguments"}
 
-            outil_utilise = True
+            for chunk in completion:
+                delta = chunk.choices[0].delta
+
+                if delta.content:
+                    # Reponse directe (pas d'outil) : streaming token par
+                    # token exactement comme avant, sans attendre la fin.
+                    reponse_directe = True
+                    yield {"type": "reponse", "texte": delta.content}
+
+                if delta.tool_calls:
+                    for fragment in delta.tool_calls:
+                        etat = appels_en_cours.setdefault(
+                            fragment.index, {"id": None, "name": "", "arguments": ""}
+                        )
+                        if fragment.id:
+                            etat["id"] = fragment.id
+                        if fragment.function:
+                            if fragment.function.name:
+                                etat["name"] += fragment.function.name
+                            if fragment.function.arguments:
+                                etat["arguments"] += fragment.function.arguments
+
+            if reponse_directe:
+                logging.info(f"Réponse via GROQ (sans outil, streaming): {GROQ_PRIMARY}")
+                return
+
+            if not appels_en_cours:
+                # Ni contenu ni outil (rare) : rien a faire de plus.
+                return
+
+            appels = [appels_en_cours[i] for i in sorted(appels_en_cours)]
 
             messages_agent.append({
                 "role": "assistant",
-                "content": choix.content,
+                "content": None,
                 "tool_calls": [
                     {
-                        "id": appel.id,
+                        "id": appel["id"],
                         "type": "function",
                         "function": {
-                            "name": appel.function.name,
-                            "arguments": appel.function.arguments,
+                            "name": appel["name"],
+                            "arguments": appel["arguments"],
                         },
                     }
-                    for appel in choix.tool_calls
+                    for appel in appels
                 ],
             })
 
-            for appel in choix.tool_calls:
-                nom_outil = appel.function.name
+            for appel in appels:
+                nom_outil = appel["name"]
                 yield {"type": "statut", "texte": f"{_nom_lisible(nom_outil)}..."}
 
                 try:
-                    arguments = json.loads(appel.function.arguments or "{}")
+                    arguments = json.loads(appel["arguments"] or "{}")
                 except Exception:
                     arguments = {}
 
@@ -157,12 +178,12 @@ def chat(message_utilisateur, historique=None):
 
                 messages_agent.append({
                     "role": "tool",
-                    "tool_call_id": appel.id,
+                    "tool_call_id": appel["id"],
                     "content": resultat,
                 })
 
-        # Reponse finale en streaming, uniquement necessaire si au moins
-        # un outil a ete utilise (sinon on est deja sorti plus haut).
+        # Reponse finale en streaming, si on a epuise MAX_ETAPES_OUTILS
+        # sans que le modele ne se decide a repondre directement.
         completion = client_groq.chat.completions.create(
             model=GROQ_PRIMARY,
             messages=messages_agent,
