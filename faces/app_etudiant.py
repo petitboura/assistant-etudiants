@@ -6,6 +6,7 @@ import sys
 import os
 import re
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 import streamlit as st
 import streamlit.components.v1 as components
