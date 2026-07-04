@@ -23,11 +23,16 @@ def get_secret(key):
 GROQ_PRIMARY = "openai/gpt-oss-120b"
 GOOGLE_MODEL = "gemini-2.5-flash"
 GROQ_FALLBACKS = [
-    "qwen/qwen3-32b",
     "llama-3.3-70b-versatile",
     "qwen/qwen3.6-27b",
     "openai/gpt-oss-20b",
     "meta-llama/llama-4-scout-17b-16e-instruct",
+    # qwen3-32b a une limite de 6000 tokens/minute, souvent plus petite que
+    # la taille du prompt systeme + historique a elle seule (avant meme un
+    # appel d'outil) -> il echoue quasi systematiquement (413). On le garde
+    # en tout dernier recours plutot qu'en premier, pour ne pas gaspiller
+    # un aller-retour a chaque question.
+    "qwen/qwen3-32b",
 ]
 MESSAGE_ERREUR = "Désolé, je rencontre un souci technique pour répondre. Merci de réessayer dans un instant."
 
