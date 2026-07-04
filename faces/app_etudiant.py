@@ -9,7 +9,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 import streamlit as st
-import streamlit.components.v1 as components
 from main import chat
 from auth import inscription, connexion, deconnexion
 from connexions.notion import demarrer_connexion_notion, finaliser_connexion_notion, etat_notion_en_attente, est_connecte
@@ -79,7 +78,10 @@ def _typeset_mathjax():
     dans la page PARENTE (window.parent), puis demander le rendu des
     formules déjà présentes dans le DOM.
     """
-    components.html(
+    # st.components.v1.html est deprecie (suppression prevue apres le
+    # 1er juin 2026) au profit de st.iframe, qui accepte directement une
+    # chaine HTML/JS de la meme facon.
+    st.iframe(
         """
         <script>
         (function() {
@@ -117,7 +119,6 @@ def _typeset_mathjax():
         </script>
         """,
         height=0,
-        width=0,
     )
 
 
