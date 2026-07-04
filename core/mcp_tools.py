@@ -75,6 +75,11 @@ def lister_tous_les_outils(get_secret, user_id=None):
                 continue
 
             outils = asyncio.run(_lister_outils_async(url, headers))
+
+            outils_autorises = serveur.get("outils_autorises")
+            if outils_autorises is not None:
+                outils = [o for o in outils if o.name in outils_autorises]
+
             noms_outils = [o.name for o in outils]
             logging.info(f"MCP '{nom}' -> {len(outils)} outil(s) listé(s) : {noms_outils}")
             for outil in outils:
