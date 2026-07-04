@@ -369,9 +369,21 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
     for _passage in range(MAX_PASSAGES_CASCADE):
         tout_est_timeout = True
 
+        # Une SEULE liste de messages pour tout ce passage de la cascade
+        # Groq (modele principal + fallbacks), au lieu d'en recreer une a
+        # chaque modele. Raison : si un modele a deja appele un outil (ex:
+        # notion-search) et obtenu un resultat AVANT d'echouer sur l'appel
+        # Groq suivant (429/413 en essayant de rediger la reponse finale),
+        # le resultat de cet outil est deja present dans messages_agent
+        # (ajoute par _agent_groq/_traiter_appels). Si on repartait de
+        # messages_base a chaque modele, ce resultat serait perdu et le
+        # modele de secours suivant redemarrerait a zero, sans le contexte
+        # deja recupere (cause du bug ou la page Notion trouvee n'arrivait
+        # jamais dans la reponse finale).
+        messages_agent = list(messages_base)
+
         # 1. GPT-OSS 120B, avec cycle d'outils MCP dynamique
         try:
-            messages_agent = list(messages_base)
             yield from _agent_groq(client_groq, messages_agent, outils_mcp, table_routage)
             return
         except Exception as e:
@@ -386,9 +398,12 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
         # reasoning_effort="none" : ces modeles (ex: qwen3) font du
         # raisonnement par defaut, on le desactive pour rester rapide,
         # comme avant cette modification.
+        # IMPORTANT : on reutilise messages_agent tel quel (meme instance,
+        # mutee en place par _agent_groq) d'un modele a l'autre — on ne le
+        # reinitialise PAS a messages_base a chaque tour de boucle (voir
+        # commentaire ci-dessus).
         for model in GROQ_FALLBACKS:
             try:
-                messages_agent = list(messages_base)
                 reasoning_pour_ce_modele = "none" if model in MODELES_AVEC_REASONING_EFFORT else None
                 yield from _agent_groq(
                     client_groq, messages_agent, outils_mcp, table_routage,
