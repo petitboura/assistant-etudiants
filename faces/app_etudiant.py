@@ -11,7 +11,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 from main import chat
 from auth import inscription, connexion, deconnexion
-from oauth_notion import demarrer_connexion_notion, finaliser_connexion_notion, etat_notion_en_attente, est_connecte
+from connexions.notion import demarrer_connexion_notion, finaliser_connexion_notion, etat_notion_en_attente, est_connecte
 
 st.set_page_config(page_title="Votre coatch mathématique", page_icon="🎓", layout="centered")
 
