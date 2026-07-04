@@ -201,53 +201,30 @@ with st.sidebar:
             st.rerun()
 
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+def _afficher_arguments(arguments):
+    if not arguments:
+        return ""
+    lignes = [f"- **{cle}** : {valeur}" for cle, valeur in arguments.items()]
+    return "\n".join(lignes)
 
-if "compteur" not in st.session_state:
-    st.session_state.compteur = 0
 
+def _consommer_flux(generateur, placeholder_statut, placeholder, reponse_deja=""):
+    """
+    Consomme un flux d'évènements renvoyé par chat(). Met à jour les
+    placeholders au fur et à mesure. S'arrête dès qu'une confirmation est
+    demandée (outil sensible) : dans ce cas on ne considère PAS la réponse
+    comme terminée, on retourne l'évènement de confirmation pour que
+    l'appelant affiche les boutons Confirmer/Annuler.
 
-if len(st.session_state.messages) == 0:
-    st.title("🎓 Votre coatch mathématique")
-    st.caption("Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout.")
+    Retourne (reponse_complete, evenement_confirmation_ou_None).
+    """
+    reponse_complete = reponse_deja
 
-for message in st.session_state.messages:
-    if message["role"] == "user":
-        st.markdown(f'<div class="message-user">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
-    else:
-        contenu_affiche = _normaliser_latex(message["content"])
-        st.markdown(f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>', unsafe_allow_html=True)
-
-if prompt := st.chat_input("Pose ta question..."):
-    st.session_state.compteur += 1
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
-
-    historique = [
-        {"role": m["role"], "content": m["content"]}
-        for m in st.session_state.messages[:-1]
-    ]
-
-    placeholder_statut = st.empty()
-    placeholder = st.empty()
-    reponse_complete = ""
-
-    user_id_courant = (
-        st.session_state.session_utilisateur.user.id
-        if st.session_state.session_utilisateur else None
-    )
-
-    for evenement in chat(prompt, historique, user_id_courant):
+    for evenement in generateur:
         type_evenement = evenement.get("type")
         texte = evenement.get("texte", "")
 
-        if type_evenement == "statut":
-            placeholder_statut.markdown(
-                f'<div class="statut-outil">{texte}</div>',
-                unsafe_allow_html=True
-            )
-        elif type_evenement == "statut_termine":
+        if type_evenement in ("statut", "statut_termine"):
             placeholder_statut.markdown(
                 f'<div class="statut-outil">{texte}</div>',
                 unsafe_allow_html=True
@@ -261,6 +238,109 @@ if prompt := st.chat_input("Pose ta question..."):
                 f'<div class="message-assistant">{contenu_affiche}🎓</div><div class="clearfix"></div>',
                 unsafe_allow_html=True
             )
+        elif type_evenement == "confirmation_requise":
+            placeholder_statut.empty()
+            return reponse_complete, evenement
+
+    return reponse_complete, None
+
+
+
+    st.session_state.messages = []
+
+if "compteur" not in st.session_state:
+    st.session_state.compteur = 0
+
+if "confirmation_en_attente" not in st.session_state:
+    st.session_state.confirmation_en_attente = None
+
+
+if len(st.session_state.messages) == 0:
+    st.title("🎓 Votre coatch mathématique")
+    st.caption("Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout.")
+
+for message in st.session_state.messages:
+    if message["role"] == "user":
+        st.markdown(f'<div class="message-user">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+    else:
+        contenu_affiche = _normaliser_latex(message["content"])
+        st.markdown(f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+
+# --- Confirmation d'un outil sensible en attente ------------------------
+# Si le tour precedent s'est arrete sur une demande de confirmation (ex :
+# le modele veut creer une page Notion), on affiche l'action proposee et
+# on bloque toute nouvelle question tant que l'etudiant n'a pas choisi.
+if st.session_state.confirmation_en_attente is not None:
+    evenement_attente = st.session_state.confirmation_en_attente
+    nom_lisible = evenement_attente["nom_lisible"]
+    arguments = evenement_attente["arguments"]
+
+    st.warning(
+        f"🔒 L'assistant souhaite effectuer une action qui modifie ton Notion : "
+        f"**{nom_lisible}**"
+    )
+    details = _afficher_arguments(arguments)
+    if details:
+        st.markdown(details)
+
+    colonne_confirmer, colonne_annuler = st.columns(2)
+    decision = None
+    if colonne_confirmer.button("✅ Confirmer", key="confirmer_outil"):
+        decision = True
+    if colonne_annuler.button("❌ Annuler", key="annuler_outil"):
+        decision = False
+
+    if decision is not None:
+        placeholder_statut = st.empty()
+        placeholder = st.empty()
+
+        generateur = chat(reprise={
+            "etat_reprise": evenement_attente["etat_reprise"],
+            "approuve": decision,
+        })
+        reponse_complete, nouvelle_attente = _consommer_flux(generateur, placeholder_statut, placeholder)
+
+        st.session_state.confirmation_en_attente = nouvelle_attente
+
+        if nouvelle_attente is None:
+            contenu_affiche = _normaliser_latex(reponse_complete)
+            placeholder.markdown(
+                f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>',
+                unsafe_allow_html=True
+            )
+            st.session_state.messages.append({"role": "assistant", "content": reponse_complete})
+
+        st.rerun()
+
+    st.stop()
+
+
+if prompt := st.chat_input("Pose ta question..."):
+    st.session_state.compteur += 1
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+
+    historique = [
+        {"role": m["role"], "content": m["content"]}
+        for m in st.session_state.messages[:-1]
+    ]
+
+    placeholder_statut = st.empty()
+    placeholder = st.empty()
+
+    user_id_courant = (
+        st.session_state.session_utilisateur.user.id
+        if st.session_state.session_utilisateur else None
+    )
+
+    generateur = chat(prompt, historique, user_id_courant)
+    reponse_complete, evenement_confirmation = _consommer_flux(generateur, placeholder_statut, placeholder)
+
+    if evenement_confirmation is not None:
+        # On s'arrete ici : la reponse n'est pas encore terminee, il faut
+        # d'abord que l'etudiant confirme ou annule l'action proposee.
+        st.session_state.confirmation_en_attente = evenement_confirmation
+        st.rerun()
 
     contenu_affiche = _normaliser_latex(reponse_complete)
     placeholder.markdown(
