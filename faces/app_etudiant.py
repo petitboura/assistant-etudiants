@@ -118,7 +118,7 @@ def _typeset_mathjax():
         })();
         </script>
         """,
-        height=0,
+        height=1,
     )
 
 
