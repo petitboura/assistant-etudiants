@@ -1,7 +1,18 @@
 """
-Recherche vectorielle parallèle dans les tables Supabase :
-prompts_chunks (via recherche_prompts), documents (via recherche_documents),
-outils_chunks (via recherche_outils).
+Recherche vectorielle parallèle dans les tables Supabase, scopée par agent :
+prompts_chunks (via recherche_prompts), documents (via recherche_documents).
+
+recherche_outils a été retiré : la table outils_chunks a été supprimée, le
+rôle qu'elle visait (savoir quels outils sont pertinents) est déjà assuré
+par le mécanisme MCP (le modèle voit la liste des outils et choisit lui-même
+via tool calling, voir mcp_tools.py) — un second système de retrieval pour
+ça était redondant.
+
+Chaque RPC est appelée avec p_agent_id pour ne remonter que les chunks de
+l'agent courant (ex: "tutorat-maths"), afin qu'un futur second agent
+(ex: "telecom-ia") ne voie jamais les chunks d'un autre — évite le mélange
+RAG entre agents décrit dans la page "Différenciation entre deux IA du
+même domaine".
 """
 
 import os
@@ -11,6 +22,12 @@ from supabase import create_client
 from embeddings import vectoriser
 
 logging.basicConfig(level=logging.INFO)
+
+# Agent par défaut : un seul agent existe aujourd'hui (tutorat-maths). Le
+# jour où main.py/configuration.py sont généralisés pour accepter un
+# agent_id explicite de bout en bout, cette valeur par défaut disparaît
+# au profit d'un paramètre obligatoire.
+AGENT_ID_PAR_DEFAUT = "tutorat-maths"
 
 
 def get_secret(key):
@@ -30,47 +47,52 @@ if not SUPABASE_URL or not SUPABASE_SECRET:
 supabase = create_client(SUPABASE_URL, SUPABASE_SECRET)
 
 
-def chercher_candidats(question):
+def chercher_candidats(question, agent_id=AGENT_ID_PAR_DEFAUT):
+    if not agent_id:
+        # Un agent_id vide/None filtrerait la RPC sur p_agent_id = NULL et
+        # renverrait silencieusement 0 résultat partout : on préfère
+        # échouer bruyamment (log clair) plutôt que de laisser le RAG
+        # revenir vide sans qu'on comprenne pourquoi.
+        logging.error("chercher_candidats appelé sans agent_id : RAG désactivé pour cet appel.")
+        return {"prompts": [], "documents": []}
+
     try:
-        vecteur = vectoriser(question)
+        vecteur = vectoriser(question, task_type="RETRIEVAL_QUERY")
     except Exception as e:
         logging.error(f"ERREUR VECTORISATION (OpenRouter) : {e}")
-        return {"prompts": [], "documents": [], "outils": []}
+        return {"prompts": [], "documents": []}
 
     def get_prompts():
         try:
-            return supabase.rpc("recherche_prompts", {"query_embedding": vecteur, "match_count": 3}).execute().data
+            return supabase.rpc(
+                "recherche_prompts",
+                {"query_embedding": vecteur, "match_count": 3, "p_agent_id": agent_id},
+            ).execute().data
         except Exception as e:
-            logging.error(f"ERREUR SUPABASE RPC recherche_prompts : {e}")
+            logging.error(f"ERREUR SUPABASE RPC recherche_prompts (agent_id={agent_id}) : {e}")
             return []
 
     def get_documents():
         try:
-            return supabase.rpc("recherche_documents", {"query_embedding": vecteur, "match_count": 3}).execute().data
+            return supabase.rpc(
+                "recherche_documents",
+                {"query_embedding": vecteur, "match_count": 3, "p_agent_id": agent_id},
+            ).execute().data
         except Exception as e:
-            logging.error(f"ERREUR SUPABASE RPC recherche_documents : {e}")
-            return []
-
-    def get_outils():
-        try:
-            return supabase.rpc("recherche_outils", {"query_embedding": vecteur, "match_count": 2}).execute().data
-        except Exception as e:
-            logging.error(f"ERREUR SUPABASE RPC recherche_outils : {e}")
+            logging.error(f"ERREUR SUPABASE RPC recherche_documents (agent_id={agent_id}) : {e}")
             return []
 
     with ThreadPoolExecutor() as executor:
         f_prompts = executor.submit(get_prompts)
         f_documents = executor.submit(get_documents)
-        f_outils = executor.submit(get_outils)
 
     resultat = {
         "prompts": f_prompts.result() or [],
         "documents": f_documents.result() or [],
-        "outils": f_outils.result() or []
     }
     logging.info(
-        f"RAG -> prompts:{len(resultat['prompts'])} "
-        f"documents:{len(resultat['documents'])} "
-        f"outils:{len(resultat['outils'])}"
+        f"RAG (agent_id={agent_id}) -> prompts:{len(resultat['prompts'])} "
+        f"documents:{len(resultat['documents'])}"
     )
     return resultat
+
