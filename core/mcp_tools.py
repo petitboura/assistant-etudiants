@@ -7,18 +7,62 @@ modifier ce fichier-la, pas celui-ci.
 
 Comment ca marche : chaque serveur MCP sait decrire lui-meme les outils
 qu'il expose (list_tools). Ce fichier se contente de demander cette liste
-a chaque serveur configure dans le registre, de la transformer au format
-que Groq comprend, et de savoir rappeler le bon serveur (avec la bonne
-URL et les bons headers) quand Groq demande a executer un outil.
+a chaque serveur configure dans le registre ET autorise pour l'agent
+courant (agents.tools_enabled), de la transformer au format que Groq
+comprend, et de savoir rappeler le bon serveur (avec la bonne URL et les
+bons headers) quand Groq demande a executer un outil.
 """
 
+import os
 import asyncio
 import logging
 
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
+from supabase import create_client
 
 from registre_outils import SERVEURS_MCP
+
+logging.basicConfig(level=logging.INFO)
+
+
+def _get_secret_local(key):
+    try:
+        import streamlit as st
+        return st.secrets[key]
+    except Exception:
+        return os.environ.get(key)
+
+
+_supabase = create_client(_get_secret_local("SUPABASE_URL"), _get_secret_local("SUPABASE_SECRET"))
+
+
+def _outils_actives_pour_agent(agent_id):
+    """
+    Retourne la liste des noms de serveurs MCP (ex: ["wolfram", "notion"])
+    autorises pour cet agent, d'apres agents.tools_enabled.
+
+    Par defaut restrictif : si la colonne est vide/absente, ou si la
+    requete Supabase echoue, on retourne une liste vide plutot que "tous
+    les outils" -> un agent mal configure n'a AUCUN outil au lieu d'en
+    heriter silencieusement d'un autre. Force une config explicite par
+    agent, conformement au choix pris pour ce chantier.
+    """
+    if not agent_id:
+        logging.error("_outils_actives_pour_agent appelé sans agent_id : aucun outil activé.")
+        return []
+    try:
+        res = (
+            _supabase.table("agents")
+            .select("tools_enabled")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+        return (res.data or {}).get("tools_enabled") or []
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agents.tools_enabled, agent_id={agent_id}) : {e}")
+        return []
 
 
 async def _lister_outils_async(url, headers=None):
@@ -40,15 +84,22 @@ async def _appeler_outil_async(url, nom_outil, arguments, headers=None):
     return ""
 
 
-def lister_tous_les_outils(get_secret, user_id=None):
+def lister_tous_les_outils(get_secret, user_id=None, agent_id=None):
     """
-    Se connecte a chaque serveur MCP du registre et retourne :
+    Se connecte a chaque serveur MCP du registre AUTORISE POUR CET AGENT
+    (voir agents.tools_enabled) et retourne :
     - outils_pour_llm : la liste des outils au format attendu par l'API
       Groq (parametre tools=...), pour que le modele decide seul s'il
       les utilise
     - table_routage : un dictionnaire {nom_outil: {"url":..., "headers":...}},
       pour pouvoir rappeler le bon serveur plus tard (avec la bonne
       authentification) sans aucun if/else en dur
+
+    `agent_id` determine quels serveurs de SERVEURS_MCP sont meme
+    interroges (filtre AVANT tout appel reseau) : un agent sans
+    tools_enabled configure n'a acces a AUCUN outil, par defaut restrictif
+    (voir _outils_actives_pour_agent). Ajouter/retirer un outil pour un
+    agent = modifier agents.tools_enabled en base, jamais ce fichier.
 
     `user_id` est transmis a chaque url_builder/headers_builder. La plupart
     l'ignorent (cle API globale, ex: Tavily, Wolfram) ; certains outils
@@ -60,7 +111,15 @@ def lister_tous_les_outils(get_secret, user_id=None):
     outils_pour_llm = []
     table_routage = {}
 
-    for serveur in SERVEURS_MCP:
+    noms_serveurs_actives = _outils_actives_pour_agent(agent_id)
+    serveurs_pour_cet_agent = [s for s in SERVEURS_MCP if s["nom"] in noms_serveurs_actives]
+
+    logging.info(
+        f"Agent '{agent_id}' -> serveurs MCP activés : {noms_serveurs_actives or '(aucun)'} "
+        f"({len(serveurs_pour_cet_agent)}/{len(SERVEURS_MCP)} du registre retenus)"
+    )
+
+    for serveur in serveurs_pour_cet_agent:
         nom = serveur["nom"]
         try:
             if serveur.get("necessite_utilisateur") and not user_id:
@@ -119,3 +178,4 @@ def appeler_outil(nom_outil, arguments, table_routage):
     except Exception as e:
         logging.error(f"ERREUR MCP appel a {nom_outil}: {e}")
         return f"Erreur lors de l'appel a l'outil '{nom_outil}'."
+
