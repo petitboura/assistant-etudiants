@@ -1,6 +1,5 @@
 streamlit
 supabase
-openai
 groq
 google-genai
 python-dotenv
