@@ -1,11 +1,18 @@
 """
 Charge et met en cache le system prompt central depuis Notion.
 Rechargement automatique toutes les 5 minutes.
+
+Généralisé multi-agents : le NOTION_PAGE_ID n'est plus une variable globale
+codée en dur. Chaque agent (ex: "tutorat-maths", "telecom-ia") a sa propre
+page Notion, référencée dans la colonne `notion_page_id` de la table
+`agents` de Supabase. Le secret AGENT_ID (un par déploiement Streamlit
+Cloud) détermine quel agent est actif dans ce process.
 """
 
 import os
 import time
 import logging
+from supabase import create_client
 import requests
 
 
@@ -18,30 +25,85 @@ def get_secret(key):
 
 
 NOTION_TOKEN = get_secret("NOTION_TOKEN")
-NOTION_PAGE_ID = get_secret("NOTION_PAGE_ID")
 
-# Cache en mémoire
-_cache = {
-    "prompt": None,
-    "timestamp": 0
-}
+# Défaut "tutorat-maths" pour rester rétrocompatible avec les déploiements
+# existants qui n'ont pas encore de secret AGENT_ID configuré.
+AGENT_ID = get_secret("AGENT_ID") or "tutorat-maths"
+
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_SECRET = get_secret("SUPABASE_SECRET")
+
+_supabase = None
+
+
+def _get_supabase():
+    global _supabase
+    if _supabase is None:
+        _supabase = create_client(SUPABASE_URL, SUPABASE_SECRET)
+    return _supabase
+
+
+# Cache en mémoire, keyé par agent_id (au cas où plusieurs agents seraient
+# utilisés dans le même process, ex: tests ou futur usage multi-agent
+# dans une seule app).
+_cache = {}
 
 CACHE_DUREE = 300  # 5 minutes
+BACKOFF_ECHEC = 30  # secondes : pause avant de retenter après un échec de chargement
 
 
-def _cache_expire():
-    # timestamp == 0 -> jamais chargé, donc considéré comme expiré
-    return _cache["timestamp"] == 0 or time.time() - _cache["timestamp"] > CACHE_DUREE
+def _cache_expire(agent_id):
+    entree = _cache.get(agent_id)
+    if entree is None:
+        return True
+
+    duree = CACHE_DUREE if entree["succes"] else BACKOFF_ECHEC
+    return time.time() - entree["timestamp"] > duree
 
 
-def _charger_depuis_notion():
-    if not NOTION_TOKEN or not NOTION_PAGE_ID:
-        logging.error(
-            "NOTION_TOKEN ou NOTION_PAGE_ID manquant (vérifie tes secrets/variables d'environnement)."
+def _recuperer_notion_page_id(agent_id):
+    try:
+        resultat = (
+            _get_supabase()
+            .table("agents")
+            .select("notion_page_id")
+            .eq("id", agent_id)
+            .single()
+            .execute()
         )
+        return resultat.data.get("notion_page_id") if resultat.data else None
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (récupération notion_page_id pour agent_id={agent_id}) : {e}")
+        return None
+
+
+def _echec(agent_id, garder_ancien_prompt=True):
+    """
+    Enregistre un échec de chargement dans le cache, avec le timestamp
+    courant, pour déclencher le backoff (au lieu de rien écrire, ce qui
+    ferait retenter Notion/Supabase à CHAQUE message tant que la panne dure).
+
+    Si un prompt valide existait déjà (chargé avec succès avant la panne),
+    on le garde tel quel dans "prompt" -> les étudiants continuent d'avoir
+    un system prompt fonctionnel pendant la panne, juste pas rafraîchi.
+    """
+    ancien = _cache.get(agent_id)
+    prompt_a_garder = ancien["prompt"] if (garder_ancien_prompt and ancien) else None
+    _cache[agent_id] = {"prompt": prompt_a_garder, "timestamp": time.time(), "succes": False}
+
+
+def _charger_depuis_notion(agent_id):
+    notion_page_id = _recuperer_notion_page_id(agent_id)
+
+    if not NOTION_TOKEN or not notion_page_id:
+        logging.error(
+            f"NOTION_TOKEN ou notion_page_id manquant pour agent_id={agent_id} "
+            "(vérifie tes secrets/variables d'environnement et la table `agents`)."
+        )
+        _echec(agent_id)
         return
 
-    url = f"https://api.notion.com/v1/blocks/{NOTION_PAGE_ID}/children?page_size=100"
+    url = f"https://api.notion.com/v1/blocks/{notion_page_id}/children?page_size=100"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
         "Notion-Version": "2022-06-28"
@@ -51,6 +113,7 @@ def _charger_depuis_notion():
         response = requests.get(url, headers=headers, timeout=15)
     except Exception as e:
         logging.error(f"ERREUR NOTION (requête impossible) : {e}")
+        _echec(agent_id)
         return
 
     if response.status_code != 200:
@@ -58,6 +121,7 @@ def _charger_depuis_notion():
         logging.error(
             f"ERREUR NOTION {response.status_code} : {response.text[:500]}"
         )
+        _echec(agent_id)
         return
 
     data = response.json()
@@ -75,21 +139,24 @@ def _charger_depuis_notion():
     texte = texte.strip()
     if not texte:
         logging.warning(
-            "Le prompt Notion récupéré est VIDE. La page existe et répond (200 OK) "
-            "mais ne contient aucun bloc paragraph/liste/heading exploitable "
+            f"Le prompt Notion récupéré pour agent_id={agent_id} est VIDE. La page existe et "
+            "répond (200 OK) mais ne contient aucun bloc paragraph/liste/heading exploitable "
             "(peut-être du contenu dans des toggles, colonnes, ou sous-pages non gérées ici)."
         )
 
-    _cache["prompt"] = texte
-    _cache["timestamp"] = time.time()
+    _cache[agent_id] = {"prompt": texte, "timestamp": time.time(), "succes": True}
 
 
-def get_system_prompt():
-    if _cache_expire():
-        _charger_depuis_notion()
-    return _cache["prompt"]
+def get_system_prompt(agent_id=None):
+    agent_id = agent_id or AGENT_ID
+    if _cache_expire(agent_id):
+        _charger_depuis_notion(agent_id)
+    entree = _cache.get(agent_id)
+    return entree["prompt"] if entree else None
 
 
-def forcer_rechargement():
-    _cache["timestamp"] = 0
-    return get_system_prompt()
+def forcer_rechargement(agent_id=None):
+    agent_id = agent_id or AGENT_ID
+    _cache.pop(agent_id, None)
+    return get_system_prompt(agent_id)
+
