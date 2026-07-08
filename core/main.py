@@ -1,9 +1,11 @@
 import os
 import json
 import logging
+import concurrent.futures
 from groq import Groq
 from google import genai
 from google.genai import types
+from supabase import create_client
 from configuration import get_system_prompt
 from retriever import chercher_candidats
 from mcp_tools import lister_tous_les_outils, appeler_outil
@@ -20,6 +22,10 @@ def get_secret(key):
         return os.environ.get(key)
 
 
+SUPABASE_URL = get_secret("SUPABASE_URL")
+SUPABASE_SECRET = get_secret("SUPABASE_SECRET")
+supabase = create_client(SUPABASE_URL, SUPABASE_SECRET)
+
 GROQ_PRIMARY = "openai/gpt-oss-120b"
 GOOGLE_MODEL = "gemini-2.5-flash"
 GROQ_FALLBACKS = [
@@ -35,6 +41,16 @@ GROQ_FALLBACKS = [
     "qwen/qwen3-32b",
 ]
 MESSAGE_ERREUR = "Désolé, je rencontre un souci technique pour répondre. Merci de réessayer dans un instant."
+
+# Valeur de repli si le secret AGENT_ID n'est pas defini pour ce deploiement
+# (doit rester alignee avec AGENT_ID_PAR_DEFAUT dans retriever.py).
+AGENT_ID_PAR_DEFAUT = "tutorat-maths"
+
+# Au-dela de ce nombre de messages non resumes (table conversations), on
+# redemande un resume condense au modele plutot que d'empiler indefiniment
+# l'historique brut dans conversation_summaries.
+SEUIL_RESUME_MESSAGES = 20
+MODELE_RESUME = "llama-3.3-70b-versatile"  # rapide, pas besoin de raisonnement pour resumer
 
 # D'apres la doc Groq (console.groq.com/docs/reasoning), le parametre
 # reasoning_effort n'est reconnu que par certains modeles (GPT-OSS 20B/120B,
@@ -80,14 +96,43 @@ REGLE_CONTEXTE_INVISIBLE = (
 )
 
 
-def _construire_system_prompt(message_utilisateur):
-    system_prompt = get_system_prompt()
-    candidats = chercher_candidats(message_utilisateur)
+def _charger_resume_memoire(user_id, agent_id):
+    """
+    Recupere le resume long-terme (table conversation_summaries) de cet
+    etudiant pour cet agent, s'il existe. Retourne "" si l'etudiant n'est
+    pas connecte (user_id=None) ou si aucun resume n'existe encore.
+    """
+    if not user_id:
+        return ""
+    try:
+        res = (
+            supabase.table("conversation_summaries")
+            .select("summary")
+            .eq("user_id", user_id)
+            .eq("agent_id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+        return (res.data or {}).get("summary") or ""
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture conversation_summaries) : {e}")
+        return ""
+
+
+def _construire_system_prompt(message_utilisateur, agent_id, user_id=None):
+    system_prompt = get_system_prompt(agent_id)
+    candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
+    resume_memoire = _charger_resume_memoire(user_id, agent_id)
 
     instructions = "".join(f"\n{c['contenu']}\n" for c in candidats.get("prompts", []))
     contexte_docs = "".join(f"\n{c['contenu']}\n" for c in candidats.get("documents", []))
 
     system_final = system_prompt
+    if resume_memoire:
+        system_final += (
+            "\n\nCONTEXTE DES SESSIONS PRÉCÉDENTES AVEC CET ÉTUDIANT (résumé, à utiliser "
+            f"pour personnaliser ta réponse, ne jamais le réciter tel quel) :\n{resume_memoire}"
+        )
     if instructions:
         system_final += f"\n\n{instructions}"
     if contexte_docs:
@@ -96,6 +141,7 @@ def _construire_system_prompt(message_utilisateur):
 
     logging.info(
         f"Prompt système construit -> base_notion:{len(system_prompt)} caractères, "
+        f"memoire:{'oui' if resume_memoire else 'NON'}, "
         f"instructions:{'oui' if instructions else 'NON'}, "
         f"contexte_docs:{'oui' if contexte_docs else 'NON'}"
     )
@@ -108,6 +154,91 @@ def _est_timeout(erreur):
 
 DELAI_MAX_PAR_APPEL = 10  # secondes : on bascule vite plutot que d'attendre
 MAX_PASSAGES_CASCADE = 2  # on ne retente toute la cascade que si TOUT a timeout
+
+
+def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale):
+    """
+    Persiste l'echange (question + reponse) dans `conversations`, pour la
+    memoire long-terme. Ignore silencieusement si l'etudiant n'est pas
+    connecte (user_id=None) ou si la reponse est vide (ex: message
+    d'erreur technique, qu'on ne veut pas polluer la memoire avec).
+    """
+    if not user_id or not (reponse_finale or "").strip():
+        return
+    try:
+        supabase.table("conversations").insert([
+            {"user_id": user_id, "agent_id": agent_id, "role": "user", "content": message_utilisateur},
+            {"user_id": user_id, "agent_id": agent_id, "role": "assistant", "content": reponse_finale},
+        ]).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (sauvegarde conversations) : {e}")
+
+
+def _mettre_a_jour_resume_si_besoin(user_id, agent_id):
+    """
+    Si assez de nouveaux messages bruts se sont accumules (>= SEUIL_RESUME_MESSAGES)
+    depuis le dernier resume, en regenere un condense (ancien resume + messages
+    recents) via un modele Groq rapide, l'ecrit dans conversation_summaries, puis
+    purge les messages bruts desormais condenses. Ne bloque jamais la reponse a
+    l'etudiant : toute erreur est juste loguee, jamais remontee a l'appelant.
+    """
+    if not user_id:
+        return
+    try:
+        messages = (
+            supabase.table("conversations")
+            .select("id, role, content, created_at")
+            .eq("user_id", user_id)
+            .eq("agent_id", agent_id)
+            .order("created_at", desc=True)
+            .limit(SEUIL_RESUME_MESSAGES)
+            .execute()
+        ).data or []
+
+        if len(messages) < SEUIL_RESUME_MESSAGES:
+            return  # pas encore assez de matiere pour justifier un resume
+
+        ancien_resume = _charger_resume_memoire(user_id, agent_id)
+        messages_recents = "\n".join(
+            f"{'Étudiant' if m['role'] == 'user' else 'Assistant'} : {m['content']}"
+            for m in reversed(messages)
+        )
+
+        prompt_resume = (
+            "Condense ce qui suit en un résumé factuel et concis (5-8 lignes maximum) "
+            "du profil et de la progression de cet étudiant : ses sujets de difficulté "
+            "récurrents, son niveau apparent, les méthodes qui ont fonctionné pour lui. "
+            "Pas de politesse, pas de méta-commentaire, juste les faits utiles pour "
+            "personnaliser une future session.\n\n"
+        )
+        if ancien_resume:
+            prompt_resume += f"Résumé précédent :\n{ancien_resume}\n\n"
+        prompt_resume += f"Nouveaux échanges à intégrer :\n{messages_recents}"
+
+        client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
+        completion = client_groq.chat.completions.create(
+            model=MODELE_RESUME,
+            messages=[{"role": "user", "content": prompt_resume}],
+            max_completion_tokens=400,
+            timeout=DELAI_MAX_PAR_APPEL,
+        )
+        nouveau_resume = completion.choices[0].message.content.strip()
+
+        supabase.table("conversation_summaries").upsert({
+            "user_id": user_id,
+            "agent_id": agent_id,
+            "summary": nouveau_resume,
+        }).execute()
+
+        # Purge les messages bruts maintenant condenses, pour ne pas
+        # reconstruire indefiniment le meme resume a chaque appel suivant.
+        ids_a_purger = [m["id"] for m in messages if m.get("id") is not None]
+        if ids_a_purger:
+            supabase.table("conversations").delete().in_("id", ids_a_purger).execute()
+
+        logging.info(f"Résumé mémoire mis à jour pour user={user_id}, agent={agent_id}.")
+    except Exception as e:
+        logging.error(f"ERREUR mise à jour résumé mémoire : {e}")
 
 
 class _AttenteConfirmation(Exception):
@@ -123,32 +254,57 @@ class _AttenteConfirmation(Exception):
         self.appels_restants = appels_restants
 
 
+def _executer_un_appel(appel, table_routage):
+    try:
+        arguments = json.loads(appel["arguments"] or "{}")
+    except Exception:
+        arguments = {}
+    return appeler_outil(appel["name"], arguments, table_routage)
+
+
 def _traiter_appels(appels, messages_agent, table_routage):
     """
-    Execute une liste d'appels d'outils dans l'ordre, en ajoutant le
-    resultat de chacun a messages_agent au fur et a mesure. Des qu'un
-    outil sensible (OUTILS_SENSIBLES) est rencontre, s'arrete AVANT de
-    l'executer et leve _AttenteConfirmation.
+    Execute une liste d'appels d'outils, en ajoutant le resultat de chacun
+    a messages_agent au fur et a mesure. Des qu'un outil sensible
+    (OUTILS_SENSIBLES) est rencontre, s'arrete AVANT de l'executer et leve
+    _AttenteConfirmation avec les appels restants (lui inclus).
+
+    Les appels "surs" qui precedent ce premier outil sensible (le cas le
+    plus frequent : aucun outil sensible du tout dans le lot) sont
+    executes EN PARALLELE plutot qu'un par un, pour ne pas payer en
+    latence la somme des temps de reponse de chaque outil alors qu'ils
+    sont independants les uns des autres (ex: deux recherches web
+    simultanees). On ne parallelise jamais un outil sensible ni ce qui le
+    suit : la garantie "on s'arrete avant de l'executer" doit rester
+    valable meme dans le lot.
     """
-    for i, appel in enumerate(appels):
-        nom_outil = appel["name"]
+    index_sensible = next(
+        (i for i, appel in enumerate(appels) if appel["name"] in OUTILS_SENSIBLES),
+        None,
+    )
+    appels_surs = appels if index_sensible is None else appels[:index_sensible]
 
-        if nom_outil in OUTILS_SENSIBLES:
-            raise _AttenteConfirmation(appel, appels[i + 1:])
+    if appels_surs:
+        for appel in appels_surs:
+            yield {"type": "statut", "texte": f"{_nom_lisible(appel['name'])}..."}
 
-        yield {"type": "statut", "texte": f"{_nom_lisible(nom_outil)}..."}
-        try:
-            arguments = json.loads(appel["arguments"] or "{}")
-        except Exception:
-            arguments = {}
-        resultat = appeler_outil(nom_outil, arguments, table_routage)
-        yield {"type": "statut_termine", "texte": f"{_nom_lisible(nom_outil)} effectuée"}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(appels_surs)) as executor:
+            futures = {
+                executor.submit(_executer_un_appel, appel, table_routage): appel
+                for appel in appels_surs
+            }
+            for future in concurrent.futures.as_completed(futures):
+                appel = futures[future]
+                resultat = future.result()
+                yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
+                messages_agent.append({
+                    "role": "tool",
+                    "tool_call_id": appel["id"],
+                    "content": resultat,
+                })
 
-        messages_agent.append({
-            "role": "tool",
-            "tool_call_id": appel["id"],
-            "content": resultat,
-        })
+    if index_sensible is not None:
+        raise _AttenteConfirmation(appels[index_sensible], appels[index_sensible + 1:])
 
 
 def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele=GROQ_PRIMARY, reasoning_effort=None):
@@ -289,7 +445,21 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
     logging.info(f"Réponse via GROQ (avec outil): {modele}")
 
 
-def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
+def _capturer_reponse(generateur, accumulateur):
+    """
+    Relaie tous les evenements d'un generateur tel quel, en accumulant au
+    passage le texte des evenements "reponse" dans `accumulateur` (une
+    liste, mutee en place). Permet de reconstruire la reponse finale
+    complete une fois le generateur epuise, pour la persister en memoire,
+    sans dupliquer cette logique a chaque point de sortie de chat().
+    """
+    for event in generateur:
+        if event["type"] == "reponse":
+            accumulateur.append(event["texte"])
+        yield event
+
+
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
@@ -305,11 +475,21 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
 
     `user_id` (session.user.id de Supabase Auth, ou None si l'etudiant n'est
     pas connecte) est transmis au registre d'outils pour que les outils "par
-    utilisateur" (ex: Notion) sachent pour qui aller chercher un token.
+    utilisateur" (ex: Notion) sachent pour qui aller chercher un token. Il sert
+    aussi a scoper la memoire long-terme (conversations/conversation_summaries) :
+    sans user_id (etudiant non connecte), rien n'est lu ni ecrit en memoire.
+
+    `agent_id` (optionnel) determine quel prompt systeme et quelles donnees
+    RAG utiliser (voir configuration.py / retriever.py). Si non fourni, on
+    utilise le secret AGENT_ID du deploiement, puis AGENT_ID_PAR_DEFAUT.
 
     Pour reprendre apres une confirmation_requise, appeler :
         chat(reprise={"etat_reprise": evenement["etat_reprise"], "approuve": True|False})
     (message_utilisateur/historique/user_id sont alors ignores.)
+    LIMITE CONNUE : la memoire long-terme n'est PAS persistee sur ce chemin de
+    reprise (etat_reprise ne transporte ni agent_id, ni user_id, ni le message
+    utilisateur d'origine). A etendre si besoin en les ajoutant a etat_reprise
+    dans _evenement_confirmation.
 
     Si TOUS les maillons de la cascade (Groq principal, Gemini, fallbacks
     Groq) echouent uniquement a cause d'un timeout, on retente une seconde
@@ -362,14 +542,17 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
     if historique is None:
         historique = []
 
-    system_final = _construire_system_prompt(message_utilisateur)
+    if agent_id is None:
+        agent_id = get_secret("AGENT_ID") or AGENT_ID_PAR_DEFAUT
+
+    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id)
 
     messages_base = [{"role": "system", "content": system_final}]
     messages_base += historique
     messages_base.append({"role": "user", "content": message_utilisateur})
 
     client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
-    outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id)
+    outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id, agent_id)
 
     for _passage in range(MAX_PASSAGES_CASCADE):
         tout_est_timeout = True
@@ -386,10 +569,16 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
         # deja recupere (cause du bug ou la page Notion trouvee n'arrivait
         # jamais dans la reponse finale).
         messages_agent = list(messages_base)
+        reponse_accumulee = []
 
         # 1. GPT-OSS 120B, avec cycle d'outils MCP dynamique
         try:
-            yield from _agent_groq(client_groq, messages_agent, outils_mcp, table_routage)
+            yield from _capturer_reponse(
+                _agent_groq(client_groq, messages_agent, outils_mcp, table_routage),
+                reponse_accumulee,
+            )
+            _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee))
+            _mettre_a_jour_resume_si_besoin(user_id, agent_id)
             return
         except Exception as e:
             if not _est_timeout(e):
@@ -410,10 +599,15 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
         for model in GROQ_FALLBACKS:
             try:
                 reasoning_pour_ce_modele = "none" if model in MODELES_AVEC_REASONING_EFFORT else None
-                yield from _agent_groq(
-                    client_groq, messages_agent, outils_mcp, table_routage,
-                    modele=model, reasoning_effort=reasoning_pour_ce_modele,
+                yield from _capturer_reponse(
+                    _agent_groq(
+                        client_groq, messages_agent, outils_mcp, table_routage,
+                        modele=model, reasoning_effort=reasoning_pour_ce_modele,
+                    ),
+                    reponse_accumulee,
                 )
+                _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee))
+                _mettre_a_jour_resume_si_besoin(user_id, agent_id)
                 return
             except Exception as e:
                 if not _est_timeout(e):
@@ -441,8 +635,11 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
             )
             for chunk in response:
                 if chunk.text:
+                    reponse_accumulee.append(chunk.text)
                     yield {"type": "reponse", "texte": chunk.text}
             logging.info("Réponse via GEMINI")
+            _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee))
+            _mettre_a_jour_resume_si_besoin(user_id, agent_id)
             return
         except Exception as e:
             if not _est_timeout(e):
@@ -454,4 +651,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None):
 
         logging.info("Toute la cascade a timeout, on retente un passage complet.")
 
+    # Echec complet : on ne persiste jamais un message d'erreur technique
+    # en memoire (polluerait le resume avec du bruit sans valeur).
     yield {"type": "reponse", "texte": MESSAGE_ERREUR}
+
