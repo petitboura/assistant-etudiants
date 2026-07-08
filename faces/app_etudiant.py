@@ -8,12 +8,73 @@ import re
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'core'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
+import logging
 import streamlit as st
+from supabase import create_client
 from main import chat
 from auth import inscription, connexion, deconnexion
 from connexions.notion import demarrer_connexion_notion, finaliser_connexion_notion, etat_notion_en_attente, est_connecte
 
-st.set_page_config(page_title="Votre coatch mathématique", page_icon="🎓", layout="centered")
+logging.basicConfig(level=logging.INFO)
+
+
+def get_secret(key):
+    try:
+        return st.secrets[key]
+    except Exception:
+        return os.environ.get(key)
+
+
+# --- Agent de ce déploiement ---------------------------------------------
+# Un seul repo/code, une app Streamlit par agent : c'est ce secret qui
+# distingue un déploiement d'un autre (voir "Prochaine étape / Streamlit"
+# dans l'État d'avancement). Doit rester aligné avec AGENT_ID_PAR_DEFAUT
+# de retriever.py / main.py.
+AGENT_ID = get_secret("AGENT_ID") or "tutorat-maths"
+
+# Valeurs affichées si `agents.ui_config` est vide ou injoignable (ex:
+# pendant le déploiement du 1er agent, avant remplissage de la colonne).
+UI_CONFIG_PAR_DEFAUT = {
+    "titre_page": "Votre coatch mathématique",
+    "icone_page": "🎓",
+    "titre_accueil": "🎓 Votre coatch mathématique",
+    "sous_titre_accueil": "Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout.",
+    "emoji_reponse": "🎓",
+    "placeholder_saisie": "Pose ta question...",
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _charger_ui_config(agent_id):
+    """
+    Lit agents.ui_config pour cet agent. En cas d'échec (secret manquant,
+    agent absent, colonne vide) on retombe sur UI_CONFIG_PAR_DEFAUT plutôt
+    que de laisser l'app crasher : l'UI reste toujours utilisable, au pire
+    avec le texte d'un autre agent (celui codé en dur historiquement).
+    """
+    config = dict(UI_CONFIG_PAR_DEFAUT)
+    try:
+        supabase = create_client(get_secret("SUPABASE_URL"), get_secret("SUPABASE_SECRET"))
+        res = (
+            supabase.table("agents")
+            .select("ui_config")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+        config.update((res.data or {}).get("ui_config") or {})
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agents.ui_config, agent_id={agent_id}) : {e}")
+    return config
+
+
+UI_CONFIG = _charger_ui_config(AGENT_ID)
+
+st.set_page_config(
+    page_title=UI_CONFIG["titre_page"],
+    page_icon=UI_CONFIG["icone_page"],
+    layout="centered",
+)
 
 st.markdown("""
     <style>
@@ -236,7 +297,7 @@ def _consommer_flux(generateur, placeholder_statut, placeholder, reponse_deja=""
             reponse_complete += texte
             contenu_affiche = _normaliser_latex(reponse_complete)
             placeholder.markdown(
-                f'<div class="message-assistant">{contenu_affiche}🎓</div><div class="clearfix"></div>',
+                f'<div class="message-assistant">{contenu_affiche}{UI_CONFIG["emoji_reponse"]}</div><div class="clearfix"></div>',
                 unsafe_allow_html=True
             )
         elif type_evenement == "confirmation_requise":
@@ -257,8 +318,8 @@ if "confirmation_en_attente" not in st.session_state:
 
 
 if len(st.session_state.messages) == 0:
-    st.title("🎓 Votre coatch mathématique")
-    st.caption("Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout.")
+    st.title(UI_CONFIG["titre_accueil"])
+    st.caption(UI_CONFIG["sous_titre_accueil"])
 
 for message in st.session_state.messages:
     if message["role"] == "user":
@@ -295,11 +356,21 @@ if st.session_state.confirmation_en_attente is not None:
         placeholder_statut = st.empty()
         placeholder = st.empty()
 
-        generateur = chat(reprise={
-            "etat_reprise": evenement_attente["etat_reprise"],
-            "approuve": decision,
-        })
-        reponse_complete, nouvelle_attente = _consommer_flux(generateur, placeholder_statut, placeholder)
+        try:
+            generateur = chat(reprise={
+                "etat_reprise": evenement_attente["etat_reprise"],
+                "approuve": decision,
+            })
+            reponse_complete, nouvelle_attente = _consommer_flux(generateur, placeholder_statut, placeholder)
+        except Exception as e:
+            # Ne doit normalement pas arriver (chat() catche déjà ses propres
+            # erreurs API), mais on préfère un message propre à un crash
+            # Streamlit si un cas imprévu remonte quand même (ex: bug dans
+            # la construction de l'état de reprise).
+            logging.error(f"ERREUR INATTENDUE (reprise chat(), agent_id={AGENT_ID}) : {e}")
+            placeholder_statut.empty()
+            placeholder.error("Désolé, une erreur inattendue est survenue. Merci de réessayer.")
+            reponse_complete, nouvelle_attente = "", None
 
         st.session_state.confirmation_en_attente = nouvelle_attente
 
@@ -316,7 +387,7 @@ if st.session_state.confirmation_en_attente is not None:
     st.stop()
 
 
-if prompt := st.chat_input("Pose ta question..."):
+if prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
     st.session_state.compteur += 1
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
@@ -334,8 +405,16 @@ if prompt := st.chat_input("Pose ta question..."):
         if st.session_state.session_utilisateur else None
     )
 
-    generateur = chat(prompt, historique, user_id_courant)
-    reponse_complete, evenement_confirmation = _consommer_flux(generateur, placeholder_statut, placeholder)
+    try:
+        generateur = chat(prompt, historique, user_id_courant, agent_id=AGENT_ID)
+        reponse_complete, evenement_confirmation = _consommer_flux(generateur, placeholder_statut, placeholder)
+    except Exception as e:
+        # Idem : chat() catche déjà ses erreurs API en interne (cascade
+        # Groq -> Gemini), ce try/except couvre uniquement l'imprévu.
+        logging.error(f"ERREUR INATTENDUE (chat(), agent_id={AGENT_ID}) : {e}")
+        placeholder_statut.empty()
+        placeholder.error("Désolé, une erreur inattendue est survenue. Merci de réessayer.")
+        reponse_complete, evenement_confirmation = "", None
 
     if evenement_confirmation is not None:
         # On s'arrete ici : la reponse n'est pas encore terminee, il faut
@@ -359,3 +438,4 @@ if st.session_state.compteur >= 3:
     st.markdown("---")
     st.markdown("Ton avis compte, dis-nous ce que tu penses !")
     st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
+
