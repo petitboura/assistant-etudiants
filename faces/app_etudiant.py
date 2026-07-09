@@ -25,12 +25,32 @@ def get_secret(key):
         return os.environ.get(key)
 
 
-# --- Agent de ce déploiement ---------------------------------------------
-# Un seul repo/code, une app Streamlit par agent : c'est ce secret qui
-# distingue un déploiement d'un autre (voir "Prochaine étape / Streamlit"
-# dans l'État d'avancement). Doit rester aligné avec AGENT_ID_PAR_DEFAUT
-# de retriever.py / main.py.
-AGENT_ID = get_secret("AGENT_ID") or "tutorat-maths"
+# --- Agent de cette session -----------------------------------------------
+# ÉTAPE 1 (généralisation multi-agent) : un seul déploiement doit pouvoir
+# servir n'importe quel agent, choisi dynamiquement à chaque visite plutôt
+# que figé par déploiement. Ordre de priorité :
+#   1. Paramètre d'URL ?agent=... (ex: djiguigne.com/?agent=telecom-ia)
+#      -> c'est la voie normale une fois la plateforme en ligne.
+#   2. Secret AGENT_ID (ancien comportement, un déploiement = un agent)
+#      -> gardé pour ne rien casser sur les déploiements Streamlit Cloud
+#      existants (assistant-etudiants, telecom-ia) qui n'ont pas encore
+#      été migrés vers des URLs paramétrées.
+#   3. "tutorat-maths" en tout dernier recours.
+# Doit rester aligné avec AGENT_ID_PAR_DEFAUT de retriever.py / main.py.
+def _resoudre_agent_id():
+    try:
+        agent_depuis_url = st.query_params.get("agent")
+    except Exception:
+        # st.query_params n'existe que sur des versions récentes de
+        # Streamlit ; on retombe silencieusement sur le secret si absent.
+        agent_depuis_url = None
+
+    if agent_depuis_url:
+        return agent_depuis_url
+    return get_secret("AGENT_ID") or "tutorat-maths"
+
+
+AGENT_ID = _resoudre_agent_id()
 
 # Valeurs affichées si `agents.ui_config` est vide ou injoignable (ex:
 # pendant le déploiement du 1er agent, avant remplissage de la colonne).
@@ -41,6 +61,17 @@ UI_CONFIG_PAR_DEFAUT = {
     "sous_titre_accueil": "Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout.",
     "emoji_reponse": "🎓",
     "placeholder_saisie": "Pose ta question...",
+    # Point 5 (Interface) du cadre de conception. rendu_visuel=True par
+    # défaut pour ne pas casser tutorat-maths, qui dépend du rendu LaTeX
+    # mais n'a pas cette clé dans sa ligne Supabase (créé avant l'ajout
+    # de ce champ). Les nouveaux agents créés via creer_agent.py écrivent
+    # explicitement leur propre valeur, donc ce défaut ne s'applique qu'aux
+    # agents historiques.
+    "rendu_visuel": True,
+    "couleur_fond": "rgba(100, 100, 100, 0.2)",
+    "couleur_accent": "#8B5E3C",
+    "police": "Lora (serif, actuelle)",
+    "css_avance": "",
 }
 
 
@@ -68,6 +99,39 @@ def _charger_ui_config(agent_id):
     return config
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _agent_est_actif(agent_id):
+    """
+    ÉTAPE 3 (page "mes agents") : un créateur peut désactiver son agent
+    (suppression douce, colonne agents.actif) depuis faces/mes_agents.py.
+    Cette fonction empêche l'app de continuer à répondre pour un agent
+    désactivé, sinon la désactivation n'aurait aucun effet visible pour
+    les utilisateurs finaux.
+
+    Cache court (60s, pas 300s comme ui_config) : une désactivation doit
+    prendre effet rapidement, contrairement à un simple changement de
+    couleur/texte qui peut attendre un peu.
+
+    Par défaut True en cas d'erreur/colonne absente : on ne veut pas
+    qu'une panne Supabase coupe tous les agents existants d'un coup.
+    """
+    try:
+        supabase = create_client(get_secret("SUPABASE_URL"), get_secret("SUPABASE_SECRET"))
+        res = (
+            supabase.table("agents")
+            .select("actif")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+        if res.data is None:
+            return True
+        return res.data.get("actif", True)
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agents.actif, agent_id={agent_id}) : {e}")
+        return True
+
+
 UI_CONFIG = _charger_ui_config(AGENT_ID)
 
 st.set_page_config(
@@ -76,12 +140,24 @@ st.set_page_config(
     layout="centered",
 )
 
-st.markdown("""
+if not _agent_est_actif(AGENT_ID):
+    st.warning("Cet agent n'est plus disponible.")
+    st.stop()
+
+# Police système : pile de fallback standard, pas d'import Google Fonts
+# nécessaire contrairement à Lora.
+_POLICE_CSS = (
+    "'Lora', serif"
+    if UI_CONFIG["police"] == "Lora (serif, actuelle)"
+    else "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+)
+
+st.markdown(f"""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600&display=swap');
 
-    .message-user {
-        background-color: rgba(100, 100, 100, 0.2);
+    .message-user {{
+        background-color: {UI_CONFIG["couleur_fond"]};
         color: inherit;
         padding: 12px 18px;
         border-radius: 18px;
@@ -91,27 +167,34 @@ st.markdown("""
         float: right;
         text-align: right;
         border: 1px solid rgba(128,128,128,0.3);
-    }
+    }}
 
-    .message-assistant {
-        font-family: 'Lora', serif;
+    .message-assistant {{
+        font-family: {_POLICE_CSS};
         color: inherit;
         padding: 10px 4px;
         margin: 8px 0;
         max-width: 85%;
         line-height: 1.7;
-    }
+    }}
 
-    .clearfix { clear: both; }
+    .clearfix {{ clear: both; }}
 
-    .statut-outil {
-        font-family: 'Lora', serif;
+    .statut-outil {{
+        font-family: {_POLICE_CSS};
         font-style: italic;
         font-size: 0.85em;
         color: rgba(128, 128, 128, 0.9);
         padding: 4px 4px;
         margin: 4px 0 0 0;
-    }
+    }}
+
+    a {{ color: {UI_CONFIG["couleur_accent"]}; }}
+
+    /* CSS avancé du créateur (faces/creer_agent.py, section 5 -
+       "réservé aux personnes à l'aise en CSS"). Placé en dernier pour
+       pouvoir surcharger les règles ci-dessus si besoin. */
+    {UI_CONFIG["css_avance"]}
     </style>
 """, unsafe_allow_html=True)
 
@@ -432,10 +515,14 @@ if prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
 
 # Toujours en dernier : (re)déclenche le rendu MathJax sur tout ce qui
 # vient d'être affiché (historique + nouvelle réponse le cas échéant).
-_typeset_mathjax()
+# Conditionné à UI_CONFIG["rendu_visuel"] (point 5, Interface) : inutile
+# de charger MathJax pour un agent qui ne manipule jamais de formules.
+if UI_CONFIG["rendu_visuel"]:
+    _typeset_mathjax()
 
 if st.session_state.compteur >= 3:
     st.markdown("---")
     st.markdown("Ton avis compte, dis-nous ce que tu penses !")
     st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
+
 
