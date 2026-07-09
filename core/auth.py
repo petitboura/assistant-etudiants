@@ -58,10 +58,22 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SECRET)
 def inscription(email, mot_de_passe):
     """
     Cree un compte etudiant par email/mot de passe.
-    Retourne (succes: bool, message: str).
+    Retourne (succes: bool, resultat).
+
+    `resultat` est soit :
+    - une session Supabase valide (objet avec .user, .access_token...) si
+      la confirmation par email est desactivee sur ce projet -> sign_up()
+      connecte alors directement le compte, pas besoin de repasser par
+      connexion() juste apres (evite d'obliger l'utilisateur a se
+      reconnecter une deuxieme fois immediatement apres son inscription).
+    - une chaine de message (str) si une confirmation par email est
+      requise -> aucune session n'existe encore, l'appelant doit afficher
+      le message tel quel.
     """
     try:
-        supabase.auth.sign_up({"email": email, "password": mot_de_passe})
+        resultat = supabase.auth.sign_up({"email": email, "password": mot_de_passe})
+        if resultat.session:
+            return True, resultat.session
         return True, "Compte cree. Verifie ta boite mail si une confirmation est demandee."
     except Exception as e:
         logging.error(f"ERREUR INSCRIPTION ({email}): {e}")
