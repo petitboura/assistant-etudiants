@@ -543,12 +543,23 @@ if bouton_soumission:
             try:
                 supabase.table("agents").insert(nouvelle_ligne).execute()
                 st.success("Agent créé avec succès !")
-                st.markdown(
-                    f"Ton agent est déjà accessible avec ce lien "
-                    f"(à adapter selon ton URL de déploiement réelle) :\n\n"
-                    f"`?agent={agent_id}`"
-                )
-                st.code(agent_id, language=None)
+
+                url_base = get_secret("URL_RETOUR_APP")
+                if url_base:
+                    lien = f"{url_base.rstrip('/')}/?agent={agent_id}"
+                    st.markdown(f"Ton agent est déjà accessible ici :\n\n{lien}")
+                    st.code(lien, language=None)
+                else:
+                    # Filet de sécurité si le secret n'est pas configuré sur ce
+                    # déploiement (ex: test en local) : on ne peut pas deviner
+                    # l'URL publique, donc on redonne au moins le paramètre
+                    # à coller soi-même plutôt que d'afficher un lien cassé.
+                    logging.error("URL_RETOUR_APP absent : impossible de construire le lien complet de l'agent.")
+                    st.warning(
+                        "URL_RETOUR_APP n'est pas configuré sur ce déploiement, impossible d'afficher le lien complet. "
+                        f"Ajoute manuellement `?agent={agent_id}` à l'URL de ton déploiement."
+                    )
+                    st.code(agent_id, language=None)
 
                 # --- Indexation des sources de connaissance -----------------
                 # Chacune est indépendante : un échec sur l'une (ex: PDF illisible)
