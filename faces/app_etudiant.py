@@ -524,5 +524,3 @@ if st.session_state.compteur >= 3:
     st.markdown("---")
     st.markdown("Ton avis compte, dis-nous ce que tu penses !")
     st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
-
-
