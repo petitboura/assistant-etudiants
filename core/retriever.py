@@ -23,10 +23,10 @@ from embeddings import vectoriser
 
 logging.basicConfig(level=logging.INFO)
 
-# Agent par défaut : un seul agent existe aujourd'hui (tutorat-maths). Le
-# jour où main.py/configuration.py sont généralisés pour accepter un
-# agent_id explicite de bout en bout, cette valeur par défaut disparaît
-# au profit d'un paramètre obligatoire.
+# Valeur de repli uniquement : main.py transmet déjà systématiquement un
+# agent_id explicite à chercher_candidats() depuis la généralisation
+# multi-agent. Ce défaut ne sert que si ce module est appelé isolément
+# (ex: script/test), pas dans le chemin normal de chat().
 AGENT_ID_PAR_DEFAUT = "tutorat-maths"
 
 
@@ -59,7 +59,7 @@ def chercher_candidats(question, agent_id=AGENT_ID_PAR_DEFAUT):
     try:
         vecteur = vectoriser(question, task_type="RETRIEVAL_QUERY")
     except Exception as e:
-        logging.error(f"ERREUR VECTORISATION (OpenRouter) : {e}")
+        logging.error(f"ERREUR VECTORISATION (Gemini) : {e}")
         return {"prompts": [], "documents": []}
 
     def get_prompts():
@@ -95,4 +95,3 @@ def chercher_candidats(question, agent_id=AGENT_ID_PAR_DEFAUT):
         f"documents:{len(resultat['documents'])}"
     )
     return resultat
-
