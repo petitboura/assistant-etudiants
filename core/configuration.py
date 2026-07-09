@@ -26,8 +26,14 @@ def get_secret(key):
 
 NOTION_TOKEN = get_secret("NOTION_TOKEN")
 
-# Défaut "tutorat-maths" pour rester rétrocompatible avec les déploiements
-# existants qui n'ont pas encore de secret AGENT_ID configuré.
+# ÉTAPE 1 (généralisation multi-agent) : depuis que faces/app_etudiant.py
+# résout AGENT_ID dynamiquement (URL ?agent=... en priorité, secret en
+# repli) et le transmet explicitement à chaque appel de chat()/
+# get_system_prompt(), cette variable-ci n'est PLUS la source de vérité
+# de l'agent actif. Elle ne sert plus que de filet de sécurité si
+# get_system_prompt()/forcer_rechargement() sont appelés sans agent_id
+# (ex: script/test lancé isolément). Défaut "tutorat-maths" pour rester
+# rétrocompatible avec d'anciens appels sans paramètre.
 AGENT_ID = get_secret("AGENT_ID") or "tutorat-maths"
 
 SUPABASE_URL = get_secret("SUPABASE_URL")
@@ -61,20 +67,31 @@ def _cache_expire(agent_id):
     return time.time() - entree["timestamp"] > duree
 
 
-def _recuperer_notion_page_id(agent_id):
+def _recuperer_config_prompt(agent_id):
+    """
+    Récupère notion_page_id ET system_prompt en un seul appel Supabase.
+
+    Deux sources possibles, cette fonction ne choisit pas laquelle utiliser
+    (voir _charger_depuis_notion) :
+    - notion_page_id : agents historiques gérés à la main par Boumi
+      (tutorat-maths, telecom-ia), prompt édité dans une page Notion.
+    - system_prompt : agents créés via le formulaire de la plateforme
+      (étape 2), saisi directement par le créateur, pas de compte Notion
+      nécessaire.
+    """
     try:
         resultat = (
             _get_supabase()
             .table("agents")
-            .select("notion_page_id")
+            .select("notion_page_id, system_prompt")
             .eq("id", agent_id)
             .single()
             .execute()
         )
-        return resultat.data.get("notion_page_id") if resultat.data else None
+        return resultat.data or {}
     except Exception as e:
-        logging.error(f"ERREUR SUPABASE (récupération notion_page_id pour agent_id={agent_id}) : {e}")
-        return None
+        logging.error(f"ERREUR SUPABASE (récupération config prompt pour agent_id={agent_id}) : {e}")
+        return {}
 
 
 def _echec(agent_id, garder_ancien_prompt=True):
@@ -93,12 +110,30 @@ def _echec(agent_id, garder_ancien_prompt=True):
 
 
 def _charger_depuis_notion(agent_id):
-    notion_page_id = _recuperer_notion_page_id(agent_id)
+    """
+    Malgré son nom (conservé pour ne pas casser les imports existants dans
+    main.py), cette fonction ne charge plus systématiquement depuis Notion :
+    elle choisit la source selon ce qui est renseigné pour CET agent.
+
+    Priorité : system_prompt (saisie directe, agents créés via la
+    plateforme) d'abord si présent, sinon notion_page_id (agents
+    historiques). Un agent créé via le formulaire n'a pas de
+    notion_page_id -> on ne tente même pas d'appel Notion pour lui, ce qui
+    évite une erreur inutile et un backoff de 30s à chaque rechargement.
+    """
+    config = _recuperer_config_prompt(agent_id)
+    system_prompt = (config.get("system_prompt") or "").strip()
+
+    if system_prompt:
+        _cache[agent_id] = {"prompt": system_prompt, "timestamp": time.time(), "succes": True}
+        return
+
+    notion_page_id = config.get("notion_page_id")
 
     if not NOTION_TOKEN or not notion_page_id:
         logging.error(
-            f"NOTION_TOKEN ou notion_page_id manquant pour agent_id={agent_id} "
-            "(vérifie tes secrets/variables d'environnement et la table `agents`)."
+            f"Ni system_prompt ni (NOTION_TOKEN + notion_page_id) disponibles pour agent_id={agent_id} "
+            "(vérifie la table `agents` : au moins l'une des deux sources doit être renseignée)."
         )
         _echec(agent_id)
         return
