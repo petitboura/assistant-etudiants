@@ -101,12 +101,17 @@ def lister_tous_les_outils(get_secret, user_id=None, agent_id=None):
     (voir _outils_actives_pour_agent). Ajouter/retirer un outil pour un
     agent = modifier agents.tools_enabled en base, jamais ce fichier.
 
-    `user_id` est transmis a chaque url_builder/headers_builder. La plupart
-    l'ignorent (cle API globale, ex: Tavily, Wolfram) ; certains outils
-    "par utilisateur" (ex: Notion) en ont besoin pour aller chercher le bon
-    token. Si un outil necessite un utilisateur et qu'aucun n'est connecte
-    (ou pas encore connecte a CET outil), il est ignore silencieusement :
-    il n'apparait simplement pas dans la liste proposee au modele.
+    `user_id` et `agent_id` sont transmis a chaque url_builder/
+    headers_builder. La plupart les ignorent (cle API globale, ex:
+    Tavily, Wolfram) ; certains outils "par utilisateur" (ex: Notion) en
+    ont besoin pour aller chercher le bon token. Notion specifiquement
+    scope sa connexion par (user_id, agent_id) et non user_id seul
+    (Option A, juillet 2026) : un etudiant connecte a Notion pour un
+    agent n'est PAS automatiquement connecte pour un autre -> voir
+    connexions/notion.py. Si un outil necessite un utilisateur et qu'aucun
+    n'est connecte (ou pas encore connecte a CET outil POUR CET AGENT), il
+    est ignore silencieusement : il n'apparait simplement pas dans la
+    liste proposee au modele.
     """
     outils_pour_llm = []
     table_routage = {}
@@ -126,11 +131,11 @@ def lister_tous_les_outils(get_secret, user_id=None, agent_id=None):
                 logging.info(f"MCP '{nom}' ignoré : nécessite un utilisateur connecté, aucun user_id fourni.")
                 continue
 
-            url = serveur["url_builder"](get_secret, user_id)
-            headers = serveur["headers_builder"](get_secret, user_id) if "headers_builder" in serveur else None
+            url = serveur["url_builder"](get_secret, user_id, agent_id)
+            headers = serveur["headers_builder"](get_secret, user_id, agent_id) if "headers_builder" in serveur else None
 
             if serveur.get("necessite_utilisateur") and headers is None:
-                logging.info(f"MCP '{nom}' ignoré : utilisateur {user_id} connecté à l'app mais pas à cet outil (headers=None).")
+                logging.info(f"MCP '{nom}' ignoré : utilisateur {user_id} pas connecté à cet outil POUR L'AGENT '{agent_id}' (headers=None).")
                 continue
 
             outils = asyncio.run(_lister_outils_async(url, headers))
@@ -178,4 +183,3 @@ def appeler_outil(nom_outil, arguments, table_routage):
     except Exception as e:
         logging.error(f"ERREUR MCP appel a {nom_outil}: {e}")
         return f"Erreur lors de l'appel a l'outil '{nom_outil}'."
-
