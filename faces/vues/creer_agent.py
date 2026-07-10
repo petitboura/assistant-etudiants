@@ -166,6 +166,14 @@ NB_LIGNES_COMPORTEMENT = 4
 # normale, pas via st.session_state : suffisant ici car la valeur n'a pas
 # besoin de survivre à un rerun déclenché par autre chose que ce widget
 # lui-même.
+st.divider()
+st.subheader("🎨 Style visuel — aperçu en direct")
+st.caption(
+    "Ces réglages sont en dehors du formulaire principal pour réagir immédiatement "
+    "(le reste des couleurs — fonds, textes, police — se trouve plus bas, dans la "
+    "section \"Thème visuel\" du formulaire)."
+)
+
 bulle_assistant_visible = st.checkbox(
     "Afficher les réponses dans une bulle visible",
     value=True,
@@ -246,6 +254,8 @@ else:
         help="Une seule couleur pour tout le titre d'accueil. \"#000000\" = couleur par défaut (pas de surcharge).",
     )
     titre_couleurs_lettres = None
+
+st.divider()
 
 with st.form("formulaire_creation_agent"):
     st.subheader("1. Identité de base")
@@ -440,6 +450,7 @@ with st.form("formulaire_creation_agent"):
     )
 
     st.markdown("*Couleurs — arrière-plans*")
+    st.caption("↑ La visibilité de la bulle assistant se règle tout en haut de la page (\"Style visuel — aperçu en direct\").")
     col_fond_page, col_fond_bulle_user, col_fond_bulle_assistant = st.columns(3)
     with col_fond_page:
         couleur_fond_page = st.color_picker(
