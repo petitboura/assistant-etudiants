@@ -158,24 +158,100 @@ st.divider()
 # Les lignes laissées vides sont simplement ignorées à la composition.
 NB_LIGNES_COMPORTEMENT = 4
 
+# Hors du st.form (comme documenté ci-dessus pour NB_LIGNES_COMPORTEMENT) :
+# ce choix doit être réactif immédiatement pour cacher/afficher le color
+# picker "Fond — bulle assistant" juste en dessous, ce qu'un widget DANS
+# un st.form ne peut pas faire (aucun rerun tant que le formulaire n'est
+# pas soumis). Lu par le formulaire plus bas via cette variable Python
+# normale, pas via st.session_state : suffisant ici car la valeur n'a pas
+# besoin de survivre à un rerun déclenché par autre chose que ce widget
+# lui-même.
+bulle_assistant_visible = st.checkbox(
+    "Afficher les réponses dans une bulle visible",
+    value=True,
+    help=(
+        "Décoche pour un style texte libre, sans encadré autour des réponses de "
+        "l'agent (comme ChatGPT/Claude) — plus moderne et épuré. Coché = les "
+        "réponses apparaissent dans une bulle colorée (style Ooredoo, plus "
+        "\"chat classique\")."
+    ),
+)
+
+nom_agent = st.text_input(
+    "Nom de l'agent",
+    placeholder="Ex: Coach fitness, Support client boutique...",
+    help="Affiché aux utilisateurs finaux, dans l'onglet du navigateur et sur l'écran d'accueil.",
+)
+
+icone_agent = st.text_input(
+    "Icône (emoji)",
+    value="🤖",
+    max_chars=2,
+    help="Un seul emoji, affiché dans l'onglet du navigateur et à côté du titre d'accueil.",
+)
+
+# --- Style du titre d'accueil (lettre par lettre ou couleur unique) ----
+# Hors du st.form, comme bulle_assistant_visible plus haut : le nombre de
+# color pickers générés dépend de la longueur du titre (icône + nom), qui
+# doit donc être déjà connue et à jour à ce stade -> nom_agent/icone_agent
+# sont sortis du formulaire pour la même raison de réactivité.
+_titre_complet_apercu = f"{icone_agent.strip()} {nom_agent.strip()}".strip()
+
+st.markdown("**Style du titre d'accueil**")
+style_titre = st.radio(
+    "Style du titre d'accueil",
+    ["Couleur unique", "Multicolore (chaque lettre)"],
+    horizontal=True,
+    label_visibility="collapsed",
+    help=(
+        "Multicolore : effet \"logo\", chaque caractère du titre a sa propre couleur "
+        "(ex: chaque lettre d'un nom de marque dans une couleur différente)."
+    ),
+)
+
+if style_titre == "Multicolore (chaque lettre)":
+    if not _titre_complet_apercu:
+        st.caption("Remplis le nom de l'agent ci-dessus pour choisir une couleur par lettre.")
+        titre_couleurs_lettres = None
+    else:
+        st.caption(
+            f"Une couleur par caractère de \"{_titre_complet_apercu}\" "
+            f"({len(_titre_complet_apercu)} pickers) :"
+        )
+        # Une couleur par CARACTÈRE, espaces inclus dans le comptage pour
+        # que l'alignement caractère<->couleur reste simple et exact au
+        # rendu (voir chat.py), même si un espace n'a visuellement pas de
+        # couleur propre. Régénéré à chaque frappe car nom_agent/icone_agent
+        # sont hors du form (rerun immédiat) -> jamais désynchronisé du
+        # texte réellement affiché, contrairement à un form classique.
+        palette_defaut = [
+            "#E63946", "#F1A208", "#2A9D8F", "#264653", "#8338EC",
+            "#FF006E", "#3A86FF", "#06D6A0", "#EF476F", "#FFD166",
+        ]
+        colonnes_lettres = st.columns(min(len(_titre_complet_apercu), 10))
+        titre_couleurs_lettres = []
+        for i, caractere in enumerate(_titre_complet_apercu):
+            with colonnes_lettres[i % len(colonnes_lettres)]:
+                couleur_lettre = st.color_picker(
+                    caractere if caractere.strip() else "␣",
+                    palette_defaut[i % len(palette_defaut)],
+                    key=f"titre_lettre_{i}",
+                    label_visibility="visible",
+                )
+            titre_couleurs_lettres.append(couleur_lettre)
+else:
+    titre_couleur_unique = st.color_picker(
+        "Couleur du titre",
+        "#000000",
+        help="Une seule couleur pour tout le titre d'accueil. \"#000000\" = couleur par défaut (pas de surcharge).",
+    )
+    titre_couleurs_lettres = None
+
 with st.form("formulaire_creation_agent"):
     st.subheader("1. Identité de base")
     st.caption(
         "Ce qui reste stable quel que soit le type d'interaction : le ton, "
         "les limites, la posture générale de l'agent."
-    )
-
-    nom_agent = st.text_input(
-        "Nom de l'agent",
-        placeholder="Ex: Coach fitness, Support client boutique...",
-        help="Affiché aux utilisateurs finaux, dans l'onglet du navigateur et sur l'écran d'accueil.",
-    )
-
-    icone_agent = st.text_input(
-        "Icône (emoji)",
-        value="🤖",
-        max_chars=2,
-        help="Un seul emoji, affiché dans l'onglet du navigateur et à côté du titre d'accueil.",
     )
 
     ton = st.selectbox(
@@ -383,16 +459,23 @@ with st.form("formulaire_creation_agent"):
             help="La couleur de fond des messages QUE TU ENVOIES (à droite de l'écran).",
         )
     with col_fond_bulle_assistant:
-        couleur_bulle_assistant = st.color_picker(
-            "Fond — bulle assistant",
-            "#FFFFFF",
-            help=(
-                "La couleur de fond des réponses DE L'AGENT (à gauche). Blanc = style "
-                "\"carte\" bien visible (comme Ooredoo). Pour un style texte libre sans "
-                "bulle visible (comme l'agent maths actuel), utilise le CSS avancé "
-                "ci-dessous avec `background-color: transparent`."
-            ),
-        )
+        if bulle_assistant_visible:
+            couleur_bulle_assistant = st.color_picker(
+                "Fond — bulle assistant",
+                "#FFFFFF",
+                help=(
+                    "La couleur de fond des réponses DE L'AGENT (à gauche). Blanc = "
+                    "style \"carte\" bien visible (comme Ooredoo)."
+                ),
+            )
+        else:
+            # Case "Afficher les réponses dans une bulle visible" décochée
+            # au-dessus du formulaire : le color picker n'a plus de sens
+            # (transparent quoi qu'il arrive), donc on ne l'affiche pas —
+            # évite de laisser un réglage actif mais sans effet, source de
+            # confusion pour un créateur non-technique.
+            couleur_bulle_assistant = "transparent"
+            st.caption("🫥 Bulle masquée (style texte libre)")
 
     st.markdown("*Couleurs — texte*")
     col_texte_user, col_texte_assistant, col_texte_bouton = st.columns(3)
@@ -629,6 +712,14 @@ if bouton_soumission:
                 "icone_page": icone_agent.strip(),
                 "titre_accueil": f"{icone_agent.strip()} {nom_agent.strip()}",
                 "sous_titre_accueil": sous_titre.strip(),
+                # Style du titre d'accueil (chantier thème). Un seul des deux
+                # est vraiment utilisé par chat.py selon lequel est non-None :
+                # titre_couleurs_lettres a priorité s'il est rempli (voir
+                # chat.py, rendu du titre). "#000000" pour titre_couleur_unique
+                # = pas de couleur personnalisée (comportement historique,
+                # rendu Streamlit par défaut selon le thème clair/sombre).
+                "titre_couleur_unique": titre_couleur_unique if style_titre == "Couleur unique" else "#000000",
+                "titre_couleurs_lettres": titre_couleurs_lettres,
                 "emoji_reponse": icone_agent.strip(),
                 "placeholder_saisie": placeholder_saisie.strip() or "Pose ta question...",
                 # Point 5 (Interface) du cadre de conception. couleur_fond,
@@ -643,6 +734,7 @@ if bouton_soumission:
                 "couleur_fond": couleur_fond,
                 "couleur_accent": couleur_accent,
                 "couleur_bulle_assistant": couleur_bulle_assistant,
+                "bulle_assistant_visible": bulle_assistant_visible,
                 "couleur_bordure": couleur_bordure,
                 "couleur_fond_page": couleur_fond_page,
                 "couleur_texte_utilisateur": couleur_texte_utilisateur,
