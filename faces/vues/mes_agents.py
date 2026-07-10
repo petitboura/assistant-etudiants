@@ -203,6 +203,7 @@ for agent in mes_agents:
             "Icône", value=icone, max_chars=2, key=f"icone_{agent['id']}"
         )
 
+        st.markdown("**🎨 Style visuel — aperçu en direct**")
         bulle_assistant_visible = st.checkbox(
             "Afficher les réponses dans une bulle visible",
             value=ui_config.get("bulle_assistant_visible", True),
@@ -276,6 +277,7 @@ for agent in mes_agents:
 
             st.caption("Thème visuel")
             st.markdown("*Arrière-plans*")
+            st.caption("↑ La visibilité de la bulle assistant se règle juste au-dessus (\"Style visuel — aperçu en direct\").")
             col_fond_page, col_fond_bulle, col_fond_assistant = st.columns(3)
             with col_fond_page:
                 nouvelle_couleur_fond_page = st.color_picker(
