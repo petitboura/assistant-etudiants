@@ -38,6 +38,12 @@ from supabase import create_client
 # explicite que faces/app_etudiant.py, pour ne plus en dépendre).
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'core'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'indexers'))
+# Le dossier vues/ lui-même : st.navigation() exécute cette page via exec(),
+# ce qui n'ajoute PAS automatiquement son propre dossier à sys.path
+# (contrairement à un lancement direct `python vues/creer_agent.py`) ->
+# sans cette ligne, l'import de theme_djiguigne.py juste à côté échoue
+# avec ModuleNotFoundError.
+sys.path.append(os.path.dirname(__file__))
 
 from auth import inscription, connexion, deconnexion  # noqa: E402
 from index_documents import indexer_document, indexer_texte  # noqa: E402
