@@ -869,6 +869,10 @@ if bouton_soumission:
                             )
 
                 st.caption("Note : un lien/sous-domaine dédié arrive dans une prochaine étape de la plateforme.")
+
+                st.write("")
+                if st.button("📂 Aller à Mes agents", use_container_width=True, key=f"vers_mes_agents_{agent_id}"):
+                    st.switch_page("vues/mes_agents.py")
             except Exception as e:
                 logging.error(f"ERREUR SUPABASE (insertion agent {agent_id}) : {e}")
                 st.error("Impossible de créer l'agent (erreur technique). Réessaie dans un instant.")
