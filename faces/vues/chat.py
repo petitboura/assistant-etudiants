@@ -92,6 +92,16 @@ UI_CONFIG_PAR_DEFAUT = {
     "couleur_bouton_fond": "",  # "" = utilise couleur_accent
     "rayon_bulles": "18px",
     "taille_texte": "",  # "" = taille par défaut de Streamlit, pas de surcharge
+    # Chantier thème (bulle assistant + titre logo multicolore). Défauts
+    # choisis pour NE RIEN changer visuellement aux agents existants sans
+    # ces clés : bulle_assistant_visible=True -> couleur_bulle_assistant
+    # s'applique telle quelle (déjà "transparent" par défaut plus haut,
+    # donc identique à avant). titre_couleur_unique="#000000" et
+    # titre_couleurs_lettres=None -> st.title() classique, pas de <span>
+    # custom (voir rendu plus bas).
+    "bulle_assistant_visible": True,
+    "titre_couleur_unique": "#000000",
+    "titre_couleurs_lettres": None,
 }
 
 
@@ -184,6 +194,22 @@ _TAILLE_CSS = TAILLES.get(UI_CONFIG["taille_texte"], UI_CONFIG["taille_texte"])
 _COULEUR_LIEN = UI_CONFIG["couleur_lien"] or UI_CONFIG["couleur_accent"]
 _COULEUR_BOUTON_FOND = UI_CONFIG["couleur_bouton_fond"] or UI_CONFIG["couleur_accent"]
 
+# Chantier thème, point 1 (toggle bulle assistant) : si le créateur a
+# décoché "Afficher les réponses dans une bulle visible", on force
+# transparent quoi que contienne couleur_bulle_assistant en base (au cas
+# où une valeur opaque y traînerait d'un réglage précédent), et on retire
+# le padding horizontal + arrondi qui donnent un effet "boîte" même sur
+# fond transparent (visible via l'ombre/la sélection de texte sinon).
+_BULLE_VISIBLE = UI_CONFIG.get("bulle_assistant_visible", True)
+if _BULLE_VISIBLE:
+    _COULEUR_BULLE_ASSISTANT = UI_CONFIG["couleur_bulle_assistant"]
+    _PADDING_BULLE_ASSISTANT = "10px 4px"
+    _RAYON_BULLE_ASSISTANT = _RAYON_CSS
+else:
+    _COULEUR_BULLE_ASSISTANT = "transparent"
+    _PADDING_BULLE_ASSISTANT = "10px 0"
+    _RAYON_BULLE_ASSISTANT = "0px"
+
 st.markdown(f"""
     <style>
     {_IMPORT_POLICE}
@@ -212,12 +238,12 @@ st.markdown(f"""
     .message-assistant {{
         font-family: {_POLICE_CSS};
         color: {UI_CONFIG["couleur_texte_assistant"]};
-        background-color: {UI_CONFIG["couleur_bulle_assistant"]};
-        padding: 10px 4px;
+        background-color: {_COULEUR_BULLE_ASSISTANT};
+        padding: {_PADDING_BULLE_ASSISTANT};
         margin: 8px 0;
         max-width: 85%;
         line-height: 1.7;
-        border-radius: {_RAYON_CSS};
+        border-radius: {_RAYON_BULLE_ASSISTANT};
         font-size: {_TAILLE_CSS};
     }}
 
@@ -392,12 +418,17 @@ with st.sidebar:
             st.info(st.session_state.pop("notion_message"))
 
         st.markdown("---")
-        if est_connecte(user_id_connecte):
-            st.caption("📓 Notion connecté")
+        if est_connecte(user_id_connecte, AGENT_ID):
+            st.caption("📓 Notion connecté (pour cet agent)")
         else:
-            st.caption("📓 Notion non connecté")
+            # Option A (scoping strict) : même si cet étudiant a déjà
+            # connecté Notion pour un AUTRE agent, ça ne compte pas ici —
+            # message volontairement explicite pour ne pas laisser croire
+            # à un bug si l'étudiant se souvient s'être déjà connecté
+            # ailleurs sur la plateforme.
+            st.caption("📓 Notion non connecté pour cet agent")
             if st.button("Connecter mon Notion"):
-                url = demarrer_connexion_notion(user_id_connecte)
+                url = demarrer_connexion_notion(user_id_connecte, AGENT_ID)
                 if url:
                     st.link_button("Continuer vers Notion", url)
                 else:
@@ -464,8 +495,46 @@ if "confirmation_en_attente" not in st.session_state:
     st.session_state.confirmation_en_attente = None
 
 
+def _rendre_titre_accueil(ui_config):
+    """
+    Chantier thème, point 2 : remplace st.title() par un rendu custom dès
+    qu'une personnalisation de couleur existe, pour permettre le mode
+    multicolore (une couleur par caractère, effet "logo"). Retombe sur
+    l'équivalent visuel de st.title() (taille/graisse similaires) si
+    aucune personnalisation n'est enregistrée, pour ne rien changer aux
+    agents existants sans ces clés.
+
+    Priorité : titre_couleurs_lettres (liste) si rempli et de la même
+    longueur que le texte -> mode multicolore. Sinon titre_couleur_unique
+    si différent de "#000000" (valeur "pas de surcharge"). Sinon rendu
+    par défaut.
+    """
+    texte = ui_config["titre_accueil"]
+    couleurs_lettres = ui_config.get("titre_couleurs_lettres")
+    couleur_unique = ui_config.get("titre_couleur_unique", "#000000")
+
+    style_titre_base = "font-size: 2.25rem; font-weight: 700; line-height: 1.2; margin: 0.5rem 0 0.25rem 0;"
+
+    if couleurs_lettres and len(couleurs_lettres) == len(texte):
+        # Longueur non concordante (ex: titre modifié en base sans
+        # régénérer les couleurs) -> on ignore le mode multicolore plutôt
+        # que de mal aligner lettres et couleurs ; voir branches suivantes.
+        spans = "".join(
+            f'<span style="color: {couleur};">{caractere}</span>'
+            for caractere, couleur in zip(texte, couleurs_lettres)
+        )
+        st.markdown(f'<div style="{style_titre_base}">{spans}</div>', unsafe_allow_html=True)
+    elif couleur_unique and couleur_unique.lower() != "#000000":
+        st.markdown(
+            f'<div style="{style_titre_base} color: {couleur_unique};">{texte}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.title(texte)
+
+
 if len(st.session_state.messages) == 0:
-    st.title(UI_CONFIG["titre_accueil"])
+    _rendre_titre_accueil(UI_CONFIG)
     st.caption(UI_CONFIG["sous_titre_accueil"])
 
 for message in st.session_state.messages:
