@@ -42,6 +42,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'indexers'))
 from auth import inscription, connexion, deconnexion  # noqa: E402
 from index_documents import indexer_document, indexer_texte  # noqa: E402
 from storage import upload_document  # noqa: E402
+from themes import POLICES_AFFICHEES, POLICE_PAR_DEFAUT, RAYONS, RAYON_PAR_DEFAUT, TAILLES, TAILLE_PAR_DEFAUT  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
@@ -356,24 +357,136 @@ with st.form("formulaire_creation_agent"):
     )
 
     st.markdown("**Thème visuel**")
-    col_fond, col_accent = st.columns(2)
-    with col_fond:
-        couleur_fond = st.color_picker(
-            "Couleur des bulles de message",
-            "#646464",
-            help="Couleur de fond des bulles de message de l'utilisateur.",
+    st.caption(
+        "Contrôle complet de l'apparence de ton agent. Chaque réglage explique son "
+        "impact — si tu n'es pas sûr, laisse la valeur par défaut, pensée pour bien "
+        "fonctionner ensemble."
+    )
+
+    st.markdown("*Couleurs — arrière-plans*")
+    col_fond_page, col_fond_bulle_user, col_fond_bulle_assistant = st.columns(3)
+    with col_fond_page:
+        couleur_fond_page = st.color_picker(
+            "Fond de la page",
+            "#FFFFFF",
+            help=(
+                "La couleur derrière tout le reste, visible sur les bords de l'écran et "
+                "entre les bulles. Un fond légèrement teinté (ex: gris très clair, rose "
+                "pâle) donne un look plus habillé qu'un simple blanc — voir l'exemple "
+                "Ooredoo (fond gris rosé) vs un agent par défaut (fond blanc)."
+            ),
         )
-    with col_accent:
-        couleur_accent = st.color_picker(
-            "Couleur d'accent",
-            "#8B5E3C",
-            help="Utilisée pour les éléments mis en avant (ex: liens, boutons).",
+    with col_fond_bulle_user:
+        couleur_fond = st.color_picker(
+            "Fond — bulle utilisateur",
+            "#646464",
+            help="La couleur de fond des messages QUE TU ENVOIES (à droite de l'écran).",
+        )
+    with col_fond_bulle_assistant:
+        couleur_bulle_assistant = st.color_picker(
+            "Fond — bulle assistant",
+            "#FFFFFF",
+            help=(
+                "La couleur de fond des réponses DE L'AGENT (à gauche). Blanc = style "
+                "\"carte\" bien visible (comme Ooredoo). Pour un style texte libre sans "
+                "bulle visible (comme l'agent maths actuel), utilise le CSS avancé "
+                "ci-dessous avec `background-color: transparent`."
+            ),
+        )
+
+    st.markdown("*Couleurs — texte*")
+    col_texte_user, col_texte_assistant, col_texte_bouton = st.columns(3)
+    with col_texte_user:
+        couleur_texte_utilisateur = st.color_picker(
+            "Texte — bulle utilisateur",
+            "#FFFFFF",
+            help=(
+                "Couleur du texte DANS la bulle utilisateur. Doit contraster avec le "
+                "\"Fond — bulle utilisateur\" choisi juste au-dessus, sinon illisible."
+            ),
+        )
+    with col_texte_assistant:
+        couleur_texte_assistant = st.color_picker(
+            "Texte — bulle assistant",
+            "#000000",
+            help=(
+                "Couleur du texte des réponses de l'agent. Doit contraster avec le "
+                "\"Fond — bulle assistant\" choisi juste au-dessus."
+            ),
+        )
+    with col_texte_bouton:
+        couleur_texte_bouton = st.color_picker(
+            "Texte des boutons",
+            "#FFFFFF",
+            help=(
+                "Couleur du texte à l'intérieur des boutons (envoyer, confirmer/annuler, "
+                "etc). Doit contraster avec la couleur d'accent choisie ci-dessous — "
+                "blanc marche bien sur un accent foncé, noir sur un accent clair."
+            ),
+        )
+
+    st.markdown("*Couleurs — accent (liens et boutons)*")
+    couleur_accent = st.color_picker(
+        "Couleur d'accent",
+        "#8B5E3C",
+        help=(
+            "La couleur \"signature\" de ton agent : utilisée par défaut à la fois pour "
+            "les liens et pour le fond des boutons (envoyer, confirmer/annuler). Pour la "
+            "grande majorité des cas, ce seul réglage suffit."
+        ),
+    )
+    with st.expander("Distinguer la couleur des liens de celle des boutons (optionnel)"):
+        st.caption(
+            "Laisse vide (couleur par défaut du color picker retirée manuellement, "
+            "champ ci-dessous) pour que liens ET boutons utilisent la couleur d'accent "
+            "ci-dessus. Ne remplis que si tu veux vraiment deux couleurs différentes."
+        )
+        distinguer_lien_bouton = st.checkbox(
+            "Utiliser une couleur différente pour les liens et pour les boutons",
+            value=False,
+        )
+        couleur_lien = ""
+        couleur_bouton_fond = ""
+        if distinguer_lien_bouton:
+            col_lien, col_bouton = st.columns(2)
+            with col_lien:
+                couleur_lien = st.color_picker("Couleur des liens", "#8B5E3C")
+            with col_bouton:
+                couleur_bouton_fond = st.color_picker("Couleur de fond des boutons", "#8B5E3C")
+
+    col_bordure, col_rayon, col_taille = st.columns(3)
+    with col_bordure:
+        couleur_bordure = st.color_picker(
+            "Couleur des bordures",
+            "#808080",
+            help="Bordure autour de la bulle utilisateur.",
+        )
+    with col_rayon:
+        rayon_bulles = st.selectbox(
+            "Arrondi des bulles",
+            list(RAYONS.keys()),
+            index=list(RAYONS.keys()).index(RAYON_PAR_DEFAUT),
+            help="La forme des coins des bulles de message, de carré à très arrondi.",
+        )
+    with col_taille:
+        taille_texte = st.selectbox(
+            "Taille du texte",
+            list(TAILLES.keys()),
+            index=list(TAILLES.keys()).index(TAILLE_PAR_DEFAUT),
+            help="La taille du texte des messages (utilisateur et assistant).",
         )
 
     police = st.selectbox(
         "Police du texte des réponses",
-        ["Lora (serif, actuelle)", "Police système (sans-serif)"],
-        help="Le style typographique des réponses de l'agent.",
+        POLICES_AFFICHEES,
+        index=POLICES_AFFICHEES.index(POLICE_PAR_DEFAUT),
+        help=(
+            "Le style typographique de l'agent. Une police serif (Lora, Merriweather) "
+            "évoque le pédagogique/éditorial ; une sans-serif (Poppins, Inter) évoque le "
+            "moderne/professionnel ; monospace (Roboto Mono) évoque le technique. Chaque "
+            "police (sauf \"Police système\") est chargée depuis Google Fonts, ce qui "
+            "ajoute un tout petit délai de chargement au premier affichage."
+        ),
     )
 
     with st.expander("⚙️ Options avancées — réservé aux personnes à l'aise en CSS"):
@@ -529,6 +642,16 @@ if bouton_soumission:
                 "memoire_visible": memoire_visible,
                 "couleur_fond": couleur_fond,
                 "couleur_accent": couleur_accent,
+                "couleur_bulle_assistant": couleur_bulle_assistant,
+                "couleur_bordure": couleur_bordure,
+                "couleur_fond_page": couleur_fond_page,
+                "couleur_texte_utilisateur": couleur_texte_utilisateur,
+                "couleur_texte_assistant": couleur_texte_assistant,
+                "couleur_texte_bouton": couleur_texte_bouton,
+                "couleur_lien": couleur_lien,
+                "couleur_bouton_fond": couleur_bouton_fond,
+                "rayon_bulles": rayon_bulles,
+                "taille_texte": taille_texte,
                 "police": police,
                 "css_avance": css_avance.strip(),
             }
