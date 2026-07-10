@@ -16,6 +16,7 @@ sans perdre de données, et reste réversible en cas d'erreur.
 
 import os
 import sys
+import re
 import logging
 
 import streamlit as st
@@ -27,6 +28,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'indexers'))
 from auth import inscription, connexion, deconnexion  # noqa: E402
 from index_documents import indexer_document, indexer_texte, supprimer_chunks_existants  # noqa: E402
 from storage import upload_document, list_documents, delete_document, get_document_url  # noqa: E402
+from themes import POLICES_AFFICHEES, POLICE_PAR_DEFAUT, RAYONS, RAYON_PAR_DEFAUT, TAILLES, TAILLE_PAR_DEFAUT  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
@@ -36,6 +38,18 @@ def get_secret(key):
         return st.secrets[key]
     except Exception:
         return os.environ.get(key)
+
+
+def _hex_sur(valeur, defaut):
+    """
+    st.color_picker exige un hex valide ("#RRGGBB") pour son paramètre
+    value. couleur_lien/couleur_bouton_fond peuvent valoir "" en base
+    (réglage optionnel non activé, voir creer_agent.py) -> ce garde-fou
+    retombe sur un défaut sûr plutôt que de crasher le formulaire.
+    """
+    if isinstance(valeur, str) and re.fullmatch(r"#[0-9A-Fa-f]{6}", valeur):
+        return valeur
+    return defaut
 
 
 SUPABASE_URL = get_secret("SUPABASE_URL")
@@ -187,6 +201,124 @@ for agent in mes_agents:
                 height=70,
                 key=f"soustitre_{agent['id']}",
             )
+
+            st.caption("Thème visuel")
+            st.markdown("*Arrière-plans*")
+            col_fond_page, col_fond_bulle, col_fond_assistant = st.columns(3)
+            with col_fond_page:
+                nouvelle_couleur_fond_page = st.color_picker(
+                    "Fond de la page",
+                    value=_hex_sur(ui_config.get("couleur_fond_page"), "#FFFFFF"),
+                    key=f"couleur_fond_page_{agent['id']}",
+                )
+            with col_fond_bulle:
+                nouvelle_couleur_fond = st.color_picker(
+                    "Fond — bulle utilisateur",
+                    value=_hex_sur(ui_config.get("couleur_fond"), "#646464"),
+                    key=f"couleur_fond_{agent['id']}",
+                )
+            with col_fond_assistant:
+                nouvelle_couleur_bulle_assistant = st.color_picker(
+                    "Fond — bulle assistant",
+                    value=_hex_sur(ui_config.get("couleur_bulle_assistant"), "#FFFFFF"),
+                    key=f"couleur_bulle_assistant_{agent['id']}",
+                )
+
+            st.markdown("*Texte*")
+            col_texte_user, col_texte_assistant, col_texte_bouton = st.columns(3)
+            with col_texte_user:
+                nouvelle_couleur_texte_utilisateur = st.color_picker(
+                    "Texte — bulle utilisateur",
+                    value=_hex_sur(ui_config.get("couleur_texte_utilisateur"), "#FFFFFF"),
+                    key=f"couleur_texte_user_{agent['id']}",
+                )
+            with col_texte_assistant:
+                nouvelle_couleur_texte_assistant = st.color_picker(
+                    "Texte — bulle assistant",
+                    value=_hex_sur(ui_config.get("couleur_texte_assistant"), "#000000"),
+                    key=f"couleur_texte_assistant_{agent['id']}",
+                )
+            with col_texte_bouton:
+                nouvelle_couleur_texte_bouton = st.color_picker(
+                    "Texte des boutons",
+                    value=_hex_sur(ui_config.get("couleur_texte_bouton"), "#FFFFFF"),
+                    key=f"couleur_texte_bouton_{agent['id']}",
+                    help="Doit contraster avec la couleur d'accent ci-dessous.",
+                )
+
+            st.markdown("*Accent, bordures, forme*")
+            nouvelle_couleur_accent = st.color_picker(
+                "Couleur d'accent (liens + boutons, sauf réglage séparé ci-dessous)",
+                value=_hex_sur(ui_config.get("couleur_accent"), "#8B5E3C"),
+                key=f"couleur_accent_{agent['id']}",
+            )
+
+            _lien_actuel = _hex_sur(ui_config.get("couleur_lien"), None)
+            _bouton_actuel = _hex_sur(ui_config.get("couleur_bouton_fond"), None)
+            distinguer_lien_bouton = st.checkbox(
+                "Utiliser une couleur différente pour les liens et pour les boutons",
+                value=bool(_lien_actuel or _bouton_actuel),
+                key=f"distinguer_{agent['id']}",
+            )
+            nouvelle_couleur_lien = ""
+            nouvelle_couleur_bouton_fond = ""
+            if distinguer_lien_bouton:
+                col_lien, col_bouton = st.columns(2)
+                with col_lien:
+                    nouvelle_couleur_lien = st.color_picker(
+                        "Couleur des liens",
+                        value=_lien_actuel or "#8B5E3C",
+                        key=f"couleur_lien_{agent['id']}",
+                    )
+                with col_bouton:
+                    nouvelle_couleur_bouton_fond = st.color_picker(
+                        "Couleur de fond des boutons",
+                        value=_bouton_actuel or "#8B5E3C",
+                        key=f"couleur_bouton_fond_{agent['id']}",
+                    )
+
+            col_bordure, col_rayon, col_taille = st.columns(3)
+            with col_bordure:
+                nouvelle_couleur_bordure = st.color_picker(
+                    "Couleur des bordures",
+                    value=_hex_sur(ui_config.get("couleur_bordure"), "#808080"),
+                    key=f"couleur_bordure_{agent['id']}",
+                )
+            with col_rayon:
+                _rayon_actuel = ui_config.get("rayon_bulles", RAYON_PAR_DEFAUT)
+                if _rayon_actuel not in RAYONS:
+                    _rayon_actuel = RAYON_PAR_DEFAUT
+                nouveau_rayon_bulles = st.selectbox(
+                    "Arrondi des bulles",
+                    list(RAYONS.keys()),
+                    index=list(RAYONS.keys()).index(_rayon_actuel),
+                    key=f"rayon_{agent['id']}",
+                )
+            with col_taille:
+                _taille_actuelle = ui_config.get("taille_texte") or TAILLE_PAR_DEFAUT
+                if _taille_actuelle not in TAILLES:
+                    _taille_actuelle = TAILLE_PAR_DEFAUT
+                nouvelle_taille_texte = st.selectbox(
+                    "Taille du texte",
+                    list(TAILLES.keys()),
+                    index=list(TAILLES.keys()).index(_taille_actuelle),
+                    key=f"taille_{agent['id']}",
+                )
+
+            _police_actuelle = ui_config.get("police", POLICE_PAR_DEFAUT)
+            if _police_actuelle not in POLICES_AFFICHEES:
+                # Gère les alias historiques ("Lora (serif, actuelle)", etc.)
+                # qui ne sont pas dans la liste affichée : on retombe sur le
+                # nouveau libellé équivalent plutôt que de planter sur un
+                # index introuvable dans POLICES_AFFICHEES.
+                _police_actuelle = POLICE_PAR_DEFAUT
+            nouvelle_police = st.selectbox(
+                "Police du texte des réponses",
+                POLICES_AFFICHEES,
+                index=POLICES_AFFICHEES.index(_police_actuelle),
+                key=f"police_{agent['id']}",
+            )
+
             nouveau_prompt = st.text_area(
                 "System prompt (comportement)",
                 value=agent.get("system_prompt") or "",
@@ -302,6 +434,19 @@ for agent in mes_agents:
                     "titre_accueil": f"{nouvelle_icone.strip()} {nouveau_nom.strip()}",
                     "sous_titre_accueil": nouveau_sous_titre.strip(),
                     "emoji_reponse": nouvelle_icone.strip() or "🤖",
+                    "couleur_fond": nouvelle_couleur_fond,
+                    "couleur_accent": nouvelle_couleur_accent,
+                    "couleur_bulle_assistant": nouvelle_couleur_bulle_assistant,
+                    "couleur_bordure": nouvelle_couleur_bordure,
+                    "couleur_fond_page": nouvelle_couleur_fond_page,
+                    "couleur_texte_utilisateur": nouvelle_couleur_texte_utilisateur,
+                    "couleur_texte_assistant": nouvelle_couleur_texte_assistant,
+                    "couleur_texte_bouton": nouvelle_couleur_texte_bouton,
+                    "couleur_lien": nouvelle_couleur_lien,
+                    "couleur_bouton_fond": nouvelle_couleur_bouton_fond,
+                    "rayon_bulles": nouveau_rayon_bulles,
+                    "taille_texte": nouvelle_taille_texte,
+                    "police": nouvelle_police,
                 },
             }
             try:
