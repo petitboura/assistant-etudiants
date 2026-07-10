@@ -74,6 +74,30 @@ CSS = """
     background: #0E0B09 !important;
     border-right: 1px solid var(--dj-bordure);
 }
+
+/* --- Blocs st.code() (ex: lien d'agent à copier) -----------------------
+   Streamlit ne stylise PAS ces blocs via le thème custom ci-dessus : ils
+   gardent leur apparence par défaut (fond clair), qui jure avec le fond
+   sombre forcé sur le reste de l'app, et rend le texte + l'icône du
+   bouton "copier" quasi invisibles (contraste clair-sur-clair). On les
+   aligne explicitement sur les couleurs de la marque. */
+[data-testid="stCodeBlock"] {
+    background: var(--dj-surface) !important;
+    border: 1px solid var(--dj-bordure) !important;
+    border-radius: 10px !important;
+}
+[data-testid="stCodeBlock"] pre,
+[data-testid="stCodeBlock"] code {
+    background: transparent !important;
+    color: var(--dj-texte) !important;
+}
+[data-testid="stCodeBlock"] button {
+    background: var(--dj-surface) !important;
+    border: 1px solid var(--dj-bordure) !important;
+}
+[data-testid="stCodeBlock"] button svg {
+    fill: var(--dj-texte) !important;
+}
 [data-testid="stSidebarNav"] li a { color: var(--dj-texte-muet) !important; font-family: 'Inter', sans-serif; }
 [data-testid="stSidebarNav"] li a[aria-current="page"] { color: var(--dj-accent-1) !important; font-weight: 600; }
 .block-container { padding-top: 2.2rem !important; max-width: 1080px; }
