@@ -48,11 +48,13 @@ if _agent_depuis_url or _agent_id_secret:
     pages = [st.Page("vues/chat.py", title="Assistant", default=True)]
     navigation = st.navigation(pages, position="hidden")
 else:
-    # Contexte créateur : navigation entre les deux pages du tableau de
-    # bord. "default=True" sur "Créer un agent" : c'est la page d'entrée
-    # naturelle pour un tout premier visiteur sans compte ni agent.
+    # Contexte créateur : navigation entre les trois pages du tableau de
+    # bord. "default=True" est maintenant sur "Accueil" (la vitrine) : un
+    # tout premier visiteur sans compte ni agent doit d'abord voir la
+    # présentation de la marque, pas directement un formulaire vide.
     pages = [
-        st.Page("vues/creer_agent.py", title="Créer un agent", icon="🧩", default=True),
+        st.Page("vues/vitrine.py", title="Accueil", icon="🟠", default=True),
+        st.Page("vues/creer_agent.py", title="Créer un agent", icon="🧩"),
         st.Page("vues/mes_agents.py", title="Mes agents", icon="📂"),
     ]
     navigation = st.navigation(pages)
