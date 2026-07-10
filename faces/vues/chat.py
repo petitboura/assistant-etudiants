@@ -14,6 +14,7 @@ from supabase import create_client
 from main import chat
 from auth import inscription, connexion, deconnexion
 from connexions.notion import demarrer_connexion_notion, finaliser_connexion_notion, etat_notion_en_attente, est_connecte
+from themes import police_vers_css, RAYONS, RAYON_PAR_DEFAUT, TAILLES, TAILLE_PAR_DEFAUT
 
 logging.basicConfig(level=logging.INFO)
 
@@ -70,8 +71,27 @@ UI_CONFIG_PAR_DEFAUT = {
     "rendu_visuel": True,
     "couleur_fond": "rgba(100, 100, 100, 0.2)",
     "couleur_accent": "#8B5E3C",
+    # Nouveaux champs de thème (contrôle visuel complet, pas juste un
+    # accent isolé). Défauts choisis pour ne RIEN changer visuellement
+    # aux agents déjà créés qui n'ont pas ces clés dans leur ui_config :
+    # "transparent" = pas de bulle assistant (comportement historique),
+    # la bordure grise reprend exactement l'ancienne valeur codée en dur.
+    "couleur_bulle_assistant": "transparent",
+    "couleur_bordure": "rgba(128, 128, 128, 0.3)",
     "police": "Lora (serif, actuelle)",
     "css_avance": "",
+    # --- Contrôle visuel étendu (maximum contrôlable par formulaire) ---
+    # Défauts choisis pour être EXACTEMENT le rendu actuel quand la clé est
+    # absente : aucun agent existant ne doit changer d'apparence tant que
+    # son créateur n'a pas explicitement choisi une nouvelle valeur.
+    "couleur_fond_page": "",  # "" = pas de surcharge (comportement Streamlit normal, clair/sombre auto)
+    "couleur_texte_utilisateur": "inherit",  # s'adapte au mode clair/sombre du visiteur
+    "couleur_texte_assistant": "inherit",
+    "couleur_texte_bouton": "#FFFFFF",  # texte des boutons (à choisir contrasté avec couleur_accent)
+    "couleur_lien": "",  # "" = utilise couleur_accent (comportement actuel, un seul réglage pour les deux)
+    "couleur_bouton_fond": "",  # "" = utilise couleur_accent
+    "rayon_bulles": "18px",
+    "taille_texte": "",  # "" = taille par défaut de Streamlit, pas de surcharge
 }
 
 
@@ -144,38 +164,61 @@ if not _agent_est_actif(AGENT_ID):
     st.warning("Cet agent n'est plus disponible.")
     st.stop()
 
-# Police système : pile de fallback standard, pas d'import Google Fonts
-# nécessaire contrairement à Lora.
-_POLICE_CSS = (
-    "'Lora', serif"
-    if UI_CONFIG["police"] == "Lora (serif, actuelle)"
-    else "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-)
+# Police : import Google Fonts (si besoin) + pile CSS finale, résolus via
+# le module partagé core/themes.py (voir sa docstring pour les alias de
+# compatibilité ascendante).
+_IMPORT_POLICE, _POLICE_CSS = police_vers_css(UI_CONFIG["police"])
+
+# Rayon des bulles et taille du texte : mêmes libellés que dans le
+# formulaire (creer_agent.py/mes_agents.py) -> valeur CSS réelle. Si la
+# valeur stockée ne correspond à aucun libellé connu (champ jamais
+# rempli, ou ancien format "18px" déjà en px directement), on l'utilise
+# telle quelle : ça permet aussi bien un ancien agent qu'un futur réglage
+# fin non exposé dans le formulaire.
+_RAYON_CSS = RAYONS.get(UI_CONFIG["rayon_bulles"], UI_CONFIG["rayon_bulles"] or "18px")
+_TAILLE_CSS = TAILLES.get(UI_CONFIG["taille_texte"], UI_CONFIG["taille_texte"])
+
+# couleur_lien / couleur_bouton_fond permettent de distinguer liens et
+# boutons ; "" (réglage non touché par le créateur) retombe sur
+# couleur_accent, le comportement historique (un seul réglage pour les deux).
+_COULEUR_LIEN = UI_CONFIG["couleur_lien"] or UI_CONFIG["couleur_accent"]
+_COULEUR_BOUTON_FOND = UI_CONFIG["couleur_bouton_fond"] or UI_CONFIG["couleur_accent"]
 
 st.markdown(f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600&display=swap');
+    {_IMPORT_POLICE}
+
+    /* "" (valeur non définie) produit une déclaration CSS invalide, que
+       le navigateur ignore silencieusement -> pas de surcharge, comme
+       souhaité, sans if/else Python séparé pour chaque propriété. */
+    .stApp {{
+        background-color: {UI_CONFIG["couleur_fond_page"]};
+    }}
 
     .message-user {{
         background-color: {UI_CONFIG["couleur_fond"]};
-        color: inherit;
+        color: {UI_CONFIG["couleur_texte_utilisateur"]};
         padding: 12px 18px;
-        border-radius: 18px;
+        border-radius: {_RAYON_CSS};
         margin: 8px 0;
         display: inline-block;
         max-width: 75%;
         float: right;
         text-align: right;
-        border: 1px solid rgba(128,128,128,0.3);
+        border: 1px solid {UI_CONFIG["couleur_bordure"]};
+        font-size: {_TAILLE_CSS};
     }}
 
     .message-assistant {{
         font-family: {_POLICE_CSS};
-        color: inherit;
+        color: {UI_CONFIG["couleur_texte_assistant"]};
+        background-color: {UI_CONFIG["couleur_bulle_assistant"]};
         padding: 10px 4px;
         margin: 8px 0;
         max-width: 85%;
         line-height: 1.7;
+        border-radius: {_RAYON_CSS};
+        font-size: {_TAILLE_CSS};
     }}
 
     .clearfix {{ clear: both; }}
@@ -189,9 +232,22 @@ st.markdown(f"""
         margin: 4px 0 0 0;
     }}
 
-    a {{ color: {UI_CONFIG["couleur_accent"]}; }}
+    a {{ color: {_COULEUR_LIEN}; }}
 
-    /* CSS avancé du créateur (faces/creer_agent.py, section 5 -
+    /* Thème des boutons natifs Streamlit (envoi du chat, Confirmer/Annuler,
+       formulaires, liens-boutons). Ciblage par sélecteurs CSS génériques
+       (pas une API Streamlit officielle) : ça fonctionne sur les versions
+       actuelles, mais une future version de Streamlit qui renommerait ses
+       classes internes casserait ce theming (pas le reste de l'app, juste
+       ces couleurs). */
+    .stButton button, .stFormSubmitButton button, .stLinkButton a,
+    div[data-testid="stChatInput"] button {{
+        background-color: {_COULEUR_BOUTON_FOND} !important;
+        border-color: {_COULEUR_BOUTON_FOND} !important;
+        color: {UI_CONFIG["couleur_texte_bouton"]} !important;
+    }}
+
+    /* CSS avancé du créateur (faces/vues/creer_agent.py, section 5 -
        "réservé aux personnes à l'aise en CSS"). Placé en dernier pour
        pouvoir surcharger les règles ci-dessus si besoin. */
     {UI_CONFIG["css_avance"]}
