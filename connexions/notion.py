@@ -13,14 +13,21 @@ meme si on doit en enregistrer un nouveau pour les futures connexions.
 
 FLOW (identique dans l'esprit a demarrer_connexion_google /
 finaliser_connexion_google) :
-1. demarrer_connexion_notion(user_id) -> URL a ouvrir. Range code_verifier +
-   state dans notion_oauth_temp (l'etudiant quitte l'app, la session
-   Streamlit redemarre a zero au retour).
+1. demarrer_connexion_notion(user_id, agent_id) -> URL a ouvrir. Range
+   code_verifier + state + agent_id dans notion_oauth_temp (l'etudiant
+   quitte l'app, la session Streamlit redemarre a zero au retour).
 2. finaliser_connexion_notion(code, state) -> echange le code, stocke les
-   tokens dans connexions_notion.
-3. obtenir_token_valide(user_id) -> access_token pret a l'emploi, rafraichi
-   automatiquement si proche de l'expiration (appele a chaque message dans
-   registre_outils.py, pas seulement a la connexion).
+   tokens dans connexions_notion, scopes par (user_id, agent_id).
+3. obtenir_token_valide(user_id, agent_id) -> access_token pret a l'emploi
+   POUR CET AGENT PRECIS, rafraichi automatiquement si proche de
+   l'expiration (appele a chaque message dans registre_outils.py, pas
+   seulement a la connexion).
+
+OPTION A (scoping strict, juillet 2026) : une connexion Notion ne vaut
+QUE pour l'agent pour lequel elle a ete etablie. Se connecter pour un
+autre agent (meme cree par le meme createur) redemande le flux OAuth
+complet -> aucun partage automatique de l'acces Notion d'un etudiant
+entre agents. Voir PRIMARY KEY (user_id, agent_id) sur connexions_notion.
 
 Notion emet des access_token valables ~1h et des refresh_token valables
 jusqu'a 180 jours (ou 30 jours d'inactivite, selon ce qui arrive en
@@ -131,10 +138,17 @@ def _client_dcr_actif(metadata):
     return ligne_creee["id"], creds["client_id"], creds.get("client_secret")
 
 
-def demarrer_connexion_notion(user_id):
+def demarrer_connexion_notion(user_id, agent_id):
     """
     Premiere etape : genere l'URL d'autorisation Notion a ouvrir pour
     l'etudiant. Retourne None si la config manque.
+
+    OPTION A (scoping strict, juillet 2026) : agent_id est desormais
+    obligatoire et enregistre avec la tentative -> le token obtenu ne
+    vaudra QUE pour cet agent (voir finaliser_connexion_notion et la
+    contrainte PRIMARY KEY (user_id, agent_id) sur connexions_notion).
+    Se connecter pour un autre agent redemande ce flux depuis le debut,
+    meme si l'etudiant est deja connecte a un autre agent.
     """
     if not URL_RETOUR:
         logging.error("Connexion Notion impossible : URL_RETOUR_APP manquant.")
@@ -154,6 +168,7 @@ def demarrer_connexion_notion(user_id):
         supabase.table("notion_oauth_temp").insert({
             "state": state,
             "user_id": user_id,
+            "agent_id": agent_id,
             "code_verifier": code_verifier,
             "client_ref": client_ref,
         }).execute()
@@ -199,6 +214,7 @@ def finaliser_connexion_notion(code, state):
 
     tentative = ligne.data[0]
     user_id = tentative["user_id"]
+    agent_id = tentative["agent_id"]
     code_verifier = tentative["code_verifier"]
     client_ref = tentative["client_ref"]
 
@@ -234,6 +250,7 @@ def finaliser_connexion_notion(code, state):
     try:
         supabase.table("connexions_notion").upsert({
             "user_id": user_id,
+            "agent_id": agent_id,
             "client_ref": client_ref,
             "access_token": tokens["access_token"],
             "refresh_token": tokens["refresh_token"],
@@ -241,7 +258,7 @@ def finaliser_connexion_notion(code, state):
             "workspace_nom": tokens.get("workspace_name"),
             "workspace_id": tokens.get("workspace_id"),
             "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).execute()
+        }, on_conflict="user_id,agent_id").execute()
     except Exception as e:
         logging.error(f"ERREUR ECRITURE connexions_notion : {e}")
         return False, "Connexion Notion impossible (erreur interne au stockage)."
@@ -293,23 +310,31 @@ def _rafraichir(connexion):
         "refresh_token": tokens.get("refresh_token", connexion["refresh_token"]),
         "expires_at": expires_at.isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
-    }).eq("user_id", connexion["user_id"]).execute()
+    }).eq("user_id", connexion["user_id"]).eq("agent_id", connexion["agent_id"]).execute()
 
     return tokens["access_token"]
 
 
-def obtenir_token_valide(user_id):
+def obtenir_token_valide(user_id, agent_id):
     """
-    Retourne un access_token Notion utilisable pour cet etudiant, en le
-    rafraichissant si besoin. Retourne None si l'etudiant n'a jamais
-    connecte son Notion, ou si la connexion est morte (a reconnecter).
+    Retourne un access_token Notion utilisable pour cet etudiant SUR CET
+    AGENT PRECIS (Option A, scoping strict), en le rafraichissant si
+    besoin. Retourne None si l'etudiant n'a jamais connecte son Notion
+    POUR CET AGENT (meme s'il l'a deja connecte pour un autre agent -
+    aucun partage automatique), ou si la connexion est morte.
     Appelee a chaque message (voir registre_outils.py), pas seulement a la
     connexion, pour ne jamais utiliser un token perime.
     """
-    if not user_id:
+    if not user_id or not agent_id:
         return None
 
-    ligne = supabase.table("connexions_notion").select("*").eq("user_id", user_id).execute()
+    ligne = (
+        supabase.table("connexions_notion")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("agent_id", agent_id)
+        .execute()
+    )
     if not ligne.data:
         return None
 
@@ -321,8 +346,14 @@ def obtenir_token_valide(user_id):
     return _rafraichir(connexion)
 
 
-def est_connecte(user_id):
-    if not user_id:
+def est_connecte(user_id, agent_id):
+    if not user_id or not agent_id:
         return False
-    ligne = supabase.table("connexions_notion").select("user_id").eq("user_id", user_id).execute()
+    ligne = (
+        supabase.table("connexions_notion")
+        .select("user_id")
+        .eq("user_id", user_id)
+        .eq("agent_id", agent_id)
+        .execute()
+    )
     return bool(ligne.data)
