@@ -9,9 +9,14 @@ existantes via st.switch_page — donc pas de risque de casser quoi que ce
 soit côté données en la modifiant plus tard.
 """
 
+import os
+import sys
+
 import streamlit as st
 
-from theme_djiguigne import injecter_theme, afficher_logo_hero
+sys.path.append(os.path.dirname(__file__))
+
+from theme_djiguigne import injecter_theme, afficher_logo_hero  # noqa: E402
 
 st.set_page_config(
     page_title="Djiguignè AI — Assistants IA prêts à l'emploi",
