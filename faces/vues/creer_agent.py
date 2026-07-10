@@ -44,6 +44,11 @@ from index_documents import indexer_document, indexer_texte  # noqa: E402
 from storage import upload_document  # noqa: E402
 from themes import POLICES_AFFICHEES, POLICE_PAR_DEFAUT, RAYONS, RAYON_PAR_DEFAUT, TAILLES, TAILLE_PAR_DEFAUT  # noqa: E402
 
+# Identité visuelle Djiguignè AI (voir vues/theme_djiguigne.py) : ce module
+# ne restyle QUE l'habillage (couleurs, polices, header) et ne touche à
+# aucune logique métier ci-dessous.
+from theme_djiguigne import injecter_theme, afficher_entete  # noqa: E402
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -78,13 +83,11 @@ DESCRIPTIONS_OUTILS = {
 }
 
 st.set_page_config(
-    page_title="Créer un agent — djiguigne",
+    page_title="Créer un agent — Djiguignè AI",
     page_icon="🧩",
     layout="centered",
 )
-
-st.title("🧩 Créer ton agent IA")
-st.caption("Configure ton assistant, il sera accessible immédiatement — aucun déploiement de ton côté.")
+injecter_theme()
 
 
 # --- Connexion obligatoire --------------------------------------------
@@ -95,14 +98,26 @@ if "session_utilisateur" not in st.session_state:
     st.session_state.session_utilisateur = None
 
 if not st.session_state.session_utilisateur:
-    st.info("Connecte-toi pour créer un agent — c'est ce qui te permettra de le retrouver et le modifier plus tard.")
+    afficher_entete()
+    st.markdown(
+        """
+        <div style="text-align:center; margin: 0.5rem 0 1.8rem 0; animation: dj-fade-up 0.5s ease both;">
+            <h1 class="dj-display" style="font-size:2.1rem; margin-bottom:0.3rem;">Crée ton agent IA</h1>
+            <p style="color:var(--dj-texte-muet); font-size:1.02rem; max-width:480px; margin:0 auto;">
+                Configure ton assistant, il est en ligne immédiatement — aucun
+                déploiement de ton côté.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     onglet_connexion, onglet_inscription = st.tabs(["Se connecter", "Créer un compte"])
 
     with onglet_connexion:
         email = st.text_input("Email", key="email_connexion")
         mot_de_passe = st.text_input("Mot de passe", type="password", key="mdp_connexion")
-        if st.button("Se connecter", key="btn_connexion"):
+        if st.button("Se connecter", key="btn_connexion", use_container_width=True):
             succes, resultat = connexion(email, mot_de_passe)
             if succes:
                 st.session_state.session_utilisateur = resultat
@@ -117,7 +132,7 @@ if not st.session_state.session_utilisateur:
     with onglet_inscription:
         email_new = st.text_input("Email", key="email_inscription")
         mdp_new = st.text_input("Mot de passe", type="password", key="mdp_inscription")
-        if st.button("Créer mon compte", key="btn_inscription"):
+        if st.button("Créer mon compte", key="btn_inscription", use_container_width=True):
             succes, resultat = inscription(email_new, mdp_new)
             if succes:
                 if hasattr(resultat, "user"):
@@ -140,16 +155,20 @@ if not st.session_state.session_utilisateur:
 user_id = st.session_state.session_utilisateur.user.id
 email_utilisateur = st.session_state.session_utilisateur.user.email
 
-col_a, col_b = st.columns([4, 1])
-with col_a:
-    st.caption(f"Connecté en tant que **{email_utilisateur}**")
-with col_b:
-    if st.button("Déconnexion"):
-        deconnexion()
-        st.session_state.session_utilisateur = None
-        st.rerun()
 
-st.divider()
+def _deconnexion_creer_agent():
+    deconnexion()
+    st.session_state.session_utilisateur = None
+    st.rerun()
+
+
+afficher_entete(email_utilisateur=email_utilisateur, sur_clic_deconnexion=_deconnexion_creer_agent)
+st.markdown(
+    """
+    <h1 class="dj-display" style="font-size:1.7rem;">🧩 Nouvel agent</h1>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Nombre de lignes proposées pour le point 2 (comportement situationnel).
 # Fixe et non dynamique car un st.form Streamlit ne peut pas ajouter de
