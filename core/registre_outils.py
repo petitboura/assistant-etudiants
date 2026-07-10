@@ -12,27 +12,32 @@ s'authentifient pas tous pareil :
 - cle glissee dans l'URL (ex: Tavily)       -> url_builder seul
 - cle envoyee en header HTTP (si besoin un jour) -> url_builder + headers_builder
 
-Chaque *_builder est une fonction qui recoit (get_secret, user_id) et
-retourne soit une URL (str), soit des headers (dict), soit None. Le
-parametre user_id est ignore par la plupart des outils (cle API globale,
-comme Tavily/Wolfram) ; il n'est utile que pour un outil "par utilisateur"
-(cle "necessite_utilisateur": True), ou chaque etudiant connecte son
-propre compte plutot que d'utiliser une cle partagee par toute l'app.
+Chaque *_builder est une fonction qui recoit (get_secret, user_id, agent_id)
+et retourne soit une URL (str), soit des headers (dict), soit None. Les
+parametres user_id/agent_id sont ignores par la plupart des outils (cle
+API globale, comme Tavily/Wolfram) ; ils ne sont utiles que pour un outil
+"par utilisateur" (cle "necessite_utilisateur": True), ou chaque etudiant
+connecte son propre compte plutot que d'utiliser une cle partagee par
+toute l'app. Pour Notion specifiquement, la connexion est EN PLUS scopee
+par agent_id (Option A, juillet 2026) : un etudiant connecte a Notion
+pour l'agent X n'est PAS automatiquement connecte pour l'agent Y, meme
+s'il s'agit du meme etudiant -> voir connexions/notion.py.
 
 POUR UN OUTIL "PAR UTILISATEUR" (ex: Notion) :
 Ajoute "necessite_utilisateur": True dans son entree. Le dispatcher
 (mcp_tools.py) l'ignore alors automatiquement si aucun etudiant n'est
 connecte a l'app, ou si headers_builder renvoie None (etudiant connecte a
-l'app mais pas encore a CET outil) -> pas de bloc if/else a ecrire ici.
+l'app mais pas encore a CET outil POUR CET AGENT) -> pas de bloc if/else
+a ecrire ici.
 """
 
 from connexions.notion import obtenir_token_valide
 
-def _url_tavily(get_secret, user_id):
+def _url_tavily(get_secret, user_id, agent_id):
     return f"https://mcp.tavily.com/mcp/?tavilyApiKey={get_secret('TAVILY_API_KEY')}"
 
 
-def _url_wolfram(get_secret, user_id):
+def _url_wolfram(get_secret, user_id, agent_id):
     # Wolfram MCP Service ne demande plus de cle API (verifie sur la page
     # officielle wolfram.com/artificial-intelligence/mcp-service : "API
     # keys are no longer required to access Wolfram MCP Service").
@@ -40,12 +45,12 @@ def _url_wolfram(get_secret, user_id):
     return "https://services.wolfram.com/api/mcp"
 
 
-def _url_notion(get_secret, user_id):
+def _url_notion(get_secret, user_id, agent_id):
     return "https://mcp.notion.com/mcp"
 
 
-def _headers_notion(get_secret, user_id):
-    token = obtenir_token_valide(user_id)
+def _headers_notion(get_secret, user_id, agent_id):
+    token = obtenir_token_valide(user_id, agent_id)
     if not token:
         return None
     return {"Authorization": f"Bearer {token}"}
