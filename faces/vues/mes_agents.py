@@ -30,6 +30,10 @@ from index_documents import indexer_document, indexer_texte, supprimer_chunks_ex
 from storage import upload_document, list_documents, delete_document, get_document_url  # noqa: E402
 from themes import POLICES_AFFICHEES, POLICE_PAR_DEFAUT, RAYONS, RAYON_PAR_DEFAUT, TAILLES, TAILLE_PAR_DEFAUT  # noqa: E402
 
+# Identité visuelle Djiguignè AI (voir vues/theme_djiguigne.py) : restyle
+# uniquement l'habillage, aucune logique métier ci-dessous n'est modifiée.
+from theme_djiguigne import injecter_theme, afficher_entete  # noqa: E402
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -63,8 +67,8 @@ except Exception as e:
     logging.error(f"ERREUR import registre_outils : {e}")
     OUTILS_DISPONIBLES = []
 
-st.set_page_config(page_title="Mes agents — djiguigne", page_icon="📂", layout="centered")
-st.title("📂 Mes agents")
+st.set_page_config(page_title="Mes agents — Djiguignè AI", page_icon="📂", layout="centered")
+injecter_theme()
 
 
 # --- Connexion obligatoire (identique à creer_agent.py) ----------------
@@ -72,14 +76,26 @@ if "session_utilisateur" not in st.session_state:
     st.session_state.session_utilisateur = None
 
 if not st.session_state.session_utilisateur:
-    st.info("Connecte-toi pour voir et gérer tes agents.")
+    afficher_entete()
+    st.markdown(
+        """
+        <div style="text-align:center; margin: 0.5rem 0 1.8rem 0; animation: dj-fade-up 0.5s ease both;">
+            <h1 class="dj-display" style="font-size:2.1rem; margin-bottom:0.3rem;">Tes agents t'attendent</h1>
+            <p style="color:var(--dj-texte-muet); font-size:1.02rem; max-width:480px; margin:0 auto;">
+                Connecte-toi pour retrouver, modifier et suivre tous les
+                assistants que tu as créés.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     onglet_connexion, onglet_inscription = st.tabs(["Se connecter", "Créer un compte"])
 
     with onglet_connexion:
         email = st.text_input("Email", key="email_connexion")
         mot_de_passe = st.text_input("Mot de passe", type="password", key="mdp_connexion")
-        if st.button("Se connecter", key="btn_connexion"):
+        if st.button("Se connecter", key="btn_connexion", use_container_width=True):
             succes, resultat = connexion(email, mot_de_passe)
             if succes:
                 st.session_state.session_utilisateur = resultat
@@ -90,7 +106,7 @@ if not st.session_state.session_utilisateur:
     with onglet_inscription:
         email_new = st.text_input("Email", key="email_inscription")
         mdp_new = st.text_input("Mot de passe", type="password", key="mdp_inscription")
-        if st.button("Créer mon compte", key="btn_inscription"):
+        if st.button("Créer mon compte", key="btn_inscription", use_container_width=True):
             succes, resultat = inscription(email_new, mdp_new)
             if succes:
                 if hasattr(resultat, "user"):
@@ -111,19 +127,22 @@ if not st.session_state.session_utilisateur:
 user_id = st.session_state.session_utilisateur.user.id
 email_utilisateur = st.session_state.session_utilisateur.user.email
 
-col_a, col_b, col_c = st.columns([3, 1.6, 1])
-with col_a:
-    st.caption(f"Connecté en tant que **{email_utilisateur}**")
-with col_b:
-    if st.button("➕ Créer un autre agent", use_container_width=True):
-        st.switch_page("vues/creer_agent.py")
-with col_c:
-    if st.button("Déconnexion", use_container_width=True):
-        deconnexion()
-        st.session_state.session_utilisateur = None
-        st.rerun()
 
-st.divider()
+def _deconnexion_mes_agents():
+    deconnexion()
+    st.session_state.session_utilisateur = None
+    st.rerun()
+
+
+afficher_entete(email_utilisateur=email_utilisateur, sur_clic_deconnexion=_deconnexion_mes_agents)
+
+col_titre, col_action = st.columns([3, 1.4])
+with col_titre:
+    st.markdown('<h1 class="dj-display" style="font-size:1.7rem;">📂 Tableau de bord</h1>', unsafe_allow_html=True)
+with col_action:
+    st.markdown("<div style='height:0.4rem'></div>", unsafe_allow_html=True)
+    if st.button("➕ Nouvel agent", use_container_width=True, key="btn_nouvel_agent_dashboard"):
+        st.switch_page("vues/creer_agent.py")
 
 
 def _charger_mes_agents(user_id):
@@ -161,17 +180,65 @@ def _extraire_id_notion(lien_ou_id):
 mes_agents = _charger_mes_agents(user_id)
 
 if not mes_agents:
-    st.info("Tu n'as pas encore créé d'agent.")
-    if st.button("🧩 Créer mon premier agent"):
+    st.markdown(
+        """
+        <div style="text-align:center; padding: 3.5rem 1rem; border:1px dashed var(--dj-bordure);
+                    border-radius:16px; margin-top:1rem; animation: dj-fade-up 0.5s ease both;">
+            <div style="font-size:2.2rem; margin-bottom:0.6rem;">🧩</div>
+            <h3 class="dj-display" style="margin-bottom:0.3rem;">Aucun agent pour l'instant</h3>
+            <p style="color:var(--dj-texte-muet);">Ton premier assistant sera en ligne en quelques minutes.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.write("")
+    if st.button("🧩 Créer mon premier agent", use_container_width=True):
         st.switch_page("vues/creer_agent.py")
     st.stop()
+
+# --- Bandeau de statistiques -------------------------------------------
+# Purement informatif (aucune écriture), calculé à partir de ce qui est
+# déjà chargé ci-dessus -> pas de requête Supabase supplémentaire.
+_nb_total = len(mes_agents)
+_nb_actifs = sum(1 for a in mes_agents if a.get("actif", True))
+_nb_inactifs = _nb_total - _nb_actifs
+
+st.markdown(
+    f"""
+    <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; margin: 1.2rem 0 1.8rem 0;">
+        <div class="dj-stat-card" style="background:var(--dj-surface); border:1px solid var(--dj-bordure);
+                    border-radius:14px; padding:1rem 1.2rem;">
+            <div style="font-family:'JetBrains Mono',monospace; font-size:1.6rem; font-weight:600; color:var(--dj-texte);">{_nb_total}</div>
+            <div style="color:var(--dj-texte-muet); font-size:0.82rem;">Agents au total</div>
+        </div>
+        <div class="dj-stat-card" style="background:var(--dj-surface); border:1px solid var(--dj-bordure);
+                    border-radius:14px; padding:1rem 1.2rem; animation-delay:0.06s;">
+            <div style="font-family:'JetBrains Mono',monospace; font-size:1.6rem; font-weight:600; color:var(--dj-succes);">{_nb_actifs}</div>
+            <div style="color:var(--dj-texte-muet); font-size:0.82rem;">Actifs</div>
+        </div>
+        <div class="dj-stat-card" style="background:var(--dj-surface); border:1px solid var(--dj-bordure);
+                    border-radius:14px; padding:1rem 1.2rem; animation-delay:0.12s;">
+            <div style="font-family:'JetBrains Mono',monospace; font-size:1.6rem; font-weight:600; color:var(--dj-inactif);">{_nb_inactifs}</div>
+            <div style="color:var(--dj-texte-muet); font-size:0.82rem;">Désactivés</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 for agent in mes_agents:
     ui_config = agent.get("ui_config") or {}
     icone = ui_config.get("icone_page", "🤖")
-    statut = "🟢 actif" if agent.get("actif", True) else "⚪ désactivé"
+    actif = agent.get("actif", True)
+    statut_html = (
+        '<span class="dj-badge dj-badge-actif"><span class="dj-badge-dot"></span>actif</span>'
+        if actif
+        else '<span class="dj-badge dj-badge-inactif"><span class="dj-badge-dot"></span>désactivé</span>'
+    )
 
-    with st.expander(f"{icone} {agent['nom']} — {statut}"):
+    with st.expander(f"{icone}  {agent['nom']}"):
+        st.markdown(statut_html, unsafe_allow_html=True)
+        st.write("")
         url_base = get_secret("URL_RETOUR_APP")
         if url_base:
             lien_agent = f"{url_base.rstrip('/')}/?agent={agent['id']}"
