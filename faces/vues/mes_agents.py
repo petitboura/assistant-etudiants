@@ -190,11 +190,83 @@ for agent in mes_agents:
             st.caption("Identifiant de ton agent (URL_RETOUR_APP non configuré, lien complet indisponible)")
             st.code(agent["id"], language=None)
 
-        with st.form(f"formulaire_edition_{agent['id']}"):
-            nouveau_nom = st.text_input("Nom", value=agent["nom"], key=f"nom_{agent['id']}")
-            nouvelle_icone = st.text_input(
-                "Icône", value=icone, max_chars=2, key=f"icone_{agent['id']}"
+        # Hors du st.form (comme dans creer_agent.py) : nouveau_nom et
+        # nouvelle_icone doivent être connus à jour pour générer le bon
+        # nombre de color pickers du titre multicolore juste en dessous,
+        # et bulle_assistant_visible doit pouvoir cacher/afficher
+        # instantanément le color picker de bulle assistant plus bas dans
+        # le form -> tout ce qui conditionne l'affichage d'autre chose
+        # doit rester hors du form, un widget dedans ne redéclenche rien
+        # tant que le formulaire n'est pas soumis.
+        nouveau_nom = st.text_input("Nom", value=agent["nom"], key=f"nom_{agent['id']}")
+        nouvelle_icone = st.text_input(
+            "Icône", value=icone, max_chars=2, key=f"icone_{agent['id']}"
+        )
+
+        bulle_assistant_visible = st.checkbox(
+            "Afficher les réponses dans une bulle visible",
+            value=ui_config.get("bulle_assistant_visible", True),
+            key=f"bulle_visible_{agent['id']}",
+            help="Décoche pour un style texte libre, sans encadré autour des réponses (comme ChatGPT/Claude).",
+        )
+
+        _titre_complet_apercu = f"{nouvelle_icone.strip()} {nouveau_nom.strip()}".strip()
+        _couleurs_lettres_actuelles = ui_config.get("titre_couleurs_lettres")
+        _etait_multicolore = bool(
+            _couleurs_lettres_actuelles
+            and len(_couleurs_lettres_actuelles) == len(ui_config.get("titre_accueil", ""))
+        )
+
+        st.markdown("**Style du titre d'accueil**")
+        style_titre = st.radio(
+            "Style du titre d'accueil",
+            ["Couleur unique", "Multicolore (chaque lettre)"],
+            index=1 if _etait_multicolore else 0,
+            horizontal=True,
+            label_visibility="collapsed",
+            key=f"style_titre_{agent['id']}",
+        )
+
+        if style_titre == "Multicolore (chaque lettre)":
+            if not _titre_complet_apercu:
+                st.caption("Remplis le nom ci-dessus pour choisir une couleur par lettre.")
+                nouveau_titre_couleurs_lettres = None
+            else:
+                st.caption(f"Une couleur par caractère de \"{_titre_complet_apercu}\" :")
+                palette_defaut = [
+                    "#E63946", "#F1A208", "#2A9D8F", "#264653", "#8338EC",
+                    "#FF006E", "#3A86FF", "#06D6A0", "#EF476F", "#FFD166",
+                ]
+                colonnes_lettres = st.columns(min(len(_titre_complet_apercu), 10))
+                nouveau_titre_couleurs_lettres = []
+                for i, caractere in enumerate(_titre_complet_apercu):
+                    # Réutilise la couleur déjà enregistrée pour cette
+                    # position si elle existe (agent déjà en mode
+                    # multicolore, juste réouvert), sinon retombe sur la
+                    # palette par défaut -> évite de tout réinitialiser au
+                    # hasard à chaque ouverture du formulaire d'édition.
+                    defaut_position = (
+                        _couleurs_lettres_actuelles[i]
+                        if _etait_multicolore and i < len(_couleurs_lettres_actuelles)
+                        else palette_defaut[i % len(palette_defaut)]
+                    )
+                    with colonnes_lettres[i % len(colonnes_lettres)]:
+                        couleur_lettre = st.color_picker(
+                            caractere if caractere.strip() else "␣",
+                            defaut_position,
+                            key=f"titre_lettre_{agent['id']}_{i}",
+                        )
+                    nouveau_titre_couleurs_lettres.append(couleur_lettre)
+        else:
+            nouveau_titre_couleur_unique = st.color_picker(
+                "Couleur du titre",
+                _hex_sur(ui_config.get("titre_couleur_unique"), "#000000"),
+                key=f"titre_couleur_unique_{agent['id']}",
+                help="\"#000000\" = pas de couleur personnalisée (rendu par défaut).",
             )
+            nouveau_titre_couleurs_lettres = None
+
+        with st.form(f"formulaire_edition_{agent['id']}"):
             nouveau_sous_titre = st.text_area(
                 "Phrase d'accueil",
                 value=ui_config.get("sous_titre_accueil", ""),
@@ -218,11 +290,15 @@ for agent in mes_agents:
                     key=f"couleur_fond_{agent['id']}",
                 )
             with col_fond_assistant:
-                nouvelle_couleur_bulle_assistant = st.color_picker(
-                    "Fond — bulle assistant",
-                    value=_hex_sur(ui_config.get("couleur_bulle_assistant"), "#FFFFFF"),
-                    key=f"couleur_bulle_assistant_{agent['id']}",
-                )
+                if bulle_assistant_visible:
+                    nouvelle_couleur_bulle_assistant = st.color_picker(
+                        "Fond — bulle assistant",
+                        value=_hex_sur(ui_config.get("couleur_bulle_assistant"), "#FFFFFF"),
+                        key=f"couleur_bulle_assistant_{agent['id']}",
+                    )
+                else:
+                    nouvelle_couleur_bulle_assistant = "transparent"
+                    st.caption("🫥 Bulle masquée (style texte libre)")
 
             st.markdown("*Texte*")
             col_texte_user, col_texte_assistant, col_texte_bouton = st.columns(3)
@@ -437,6 +513,11 @@ for agent in mes_agents:
                     "couleur_fond": nouvelle_couleur_fond,
                     "couleur_accent": nouvelle_couleur_accent,
                     "couleur_bulle_assistant": nouvelle_couleur_bulle_assistant,
+                    "bulle_assistant_visible": bulle_assistant_visible,
+                    "titre_couleur_unique": (
+                        nouveau_titre_couleur_unique if style_titre == "Couleur unique" else "#000000"
+                    ),
+                    "titre_couleurs_lettres": nouveau_titre_couleurs_lettres,
                     "couleur_bordure": nouvelle_couleur_bordure,
                     "couleur_fond_page": nouvelle_couleur_fond_page,
                     "couleur_texte_utilisateur": nouvelle_couleur_texte_utilisateur,
