@@ -700,6 +700,16 @@ if "compteur" not in st.session_state:
 if "confirmation_en_attente" not in st.session_state:
     st.session_state.confirmation_en_attente = None
 
+# --- Limite visiteur non connecté (Étape B.3, pivot social) -------------
+# Quelqu'un qui reçoit un lien vers cet agent et discute sans compte peut
+# poser un nombre limité de questions avant d'être invité à s'inscrire.
+# Décision de Bourama (2026-07-11) : entre 3 et 5, valeur volontairement
+# isolée dans une constante pour rester facile à ajuster.
+SEUIL_VISITEUR_NON_CONNECTE = 4
+
+if "compteur_visiteur" not in st.session_state:
+    st.session_state.compteur_visiteur = 0
+
 
 def _rendre_titre_accueil(ui_config):
     """
@@ -809,8 +819,38 @@ if st.session_state.confirmation_en_attente is not None:
     st.stop()
 
 
-if prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
+user_id_courant = (
+    st.session_state.session_utilisateur.user.id
+    if st.session_state.session_utilisateur else None
+)
+
+_visiteur_bloque = (
+    user_id_courant is None
+    and st.session_state.compteur_visiteur >= SEUIL_VISITEUR_NON_CONNECTE
+)
+
+if _visiteur_bloque:
+    _url_retour_inscription = get_secret("URL_RETOUR_APP")
+    # "/inscription" est l'URL cible une fois le frontend Next.js de la
+    # plateforme en place (voir PIVOT_SOCIAL.md) ; en attendant, si le
+    # secret est absent, on n'affiche simplement pas de bouton plutôt que
+    # de pointer vers un lien cassé.
+    _lien_inscription = (
+        f"{_url_retour_inscription.rstrip('/')}/inscription"
+        if _url_retour_inscription else None
+    )
+    st.info(
+        "Tu as atteint la limite de messages en tant que visiteur non "
+        "connecté. Crée un compte gratuitement pour continuer à discuter "
+        "avec cet agent."
+    )
+    if _lien_inscription:
+        st.link_button("Créer mon compte", _lien_inscription)
+    st.chat_input(UI_CONFIG["placeholder_saisie"], disabled=True)
+elif prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
     st.session_state.compteur += 1
+    if user_id_courant is None:
+        st.session_state.compteur_visiteur += 1
     st.session_state.messages.append({"role": "user", "content": prompt})
     st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
@@ -821,11 +861,6 @@ if prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
 
     placeholder_statut = st.empty()
     placeholder = st.empty()
-
-    user_id_courant = (
-        st.session_state.session_utilisateur.user.id
-        if st.session_state.session_utilisateur else None
-    )
 
     try:
         generateur = chat(prompt, historique, user_id_courant, agent_id=AGENT_ID)
