@@ -410,7 +410,16 @@ le repo.**
       testé avec une vraie base Supabase ni un vrai agent
       actif/désactivé. **À uploader (token GitHub toujours invalide, voir
       Changelog) puis tester en conditions réelles avant de cocher.**
-- [ ] `PATCH /api/agents/{id}/vitrine` : mise à jour image + description
+- [ ] `PATCH /api/agents/{id}/vitrine` : **code écrit le 2026-07-11 dans
+      `api/agents.py`, PAS ENCORE POUSSÉ sur `main`** — mise à jour
+      partielle (`image_vitrine_url` et/ou `description`, champ omis =
+      pas touché). Auth requise ; vérifie que `owner_id` correspond au
+      token (403 sinon, même exigence que celle notée pour l'Étape 2 de
+      `api/PLAN.md`). Testé en local avec `TestClient` : sans token → 401
+      (dépendance d'auth déclenchée avant toute logique métier) — pas
+      testé avec un vrai token ni une vraie écriture en base (mêmes
+      limites que les endpoints précédents). **À uploader puis tester en
+      conditions réelles avant de cocher.**
 - [ ] `POST /api/agents/{id}/rating`, `GET /api/agents/{id}/rating`
 - [ ] `POST /api/agents/{id}/comments`, `GET /api/agents/{id}/comments`
 - [ ] `POST /api/creators/{id}/follow`, `DELETE .../follow`
@@ -560,3 +569,9 @@ le repo.**
   fichier à uploader manuellement par Bourama. Prochaine étape une fois
   uploadé et testé en conditions réelles : `PATCH /api/agents/{id}/vitrine`
   ou un nouveau token GitHub pour débloquer les commits directs.
+- 2026-07-11 — Suite de session : `PATCH /api/agents/{agent_id}/vitrine`
+  écrit dans `api/agents.py` (mise à jour partielle image/description,
+  vérification `owner_id`, 403 sinon). Testé en local : sans token → 401.
+  Toujours pas d'accès en écriture au dépôt. Prochaine étape une fois
+  uploadé et testé : `POST/GET /api/agents/{id}/rating` ou
+  `POST/GET /api/agents/{id}/comments`.
