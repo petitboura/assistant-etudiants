@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from api.auth import utilisateur_courant, supabase
 from api.agents import router as agents_router
 from api.creators import router as creators_router
+from api.profiles import router as profiles_router
+from api.search import router as search_router
 
 logging.basicConfig(level=logging.INFO)
 
@@ -39,6 +41,8 @@ app.add_middleware(
 
 app.include_router(agents_router)
 app.include_router(creators_router)
+app.include_router(profiles_router)
+app.include_router(search_router)
 
 
 @app.get("/health")
