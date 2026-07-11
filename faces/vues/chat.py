@@ -627,15 +627,12 @@ with st.sidebar:
             st.info(st.session_state.pop("notion_message"))
 
         st.markdown("---")
-        if est_connecte(user_id_connecte, AGENT_ID):
-            st.caption("📓 Notion connecté (pour cet agent)")
+        if est_connecte(user_id_connecte):
+            st.caption("📓 Notion connecté (compte, valable pour tous les agents)")
         else:
-            # Option A (scoping strict) : même si cet étudiant a déjà
-            # connecté Notion pour un AUTRE agent, ça ne compte pas ici —
-            # message volontairement explicite pour ne pas laisser croire
-            # à un bug si l'étudiant se souvient s'être déjà connecté
-            # ailleurs sur la plateforme.
-            st.caption("📓 Notion non connecté pour cet agent")
+            # Compte unifié : la connexion Notion, une fois établie
+            # depuis n'importe quel agent, vaut pour tous les autres.
+            st.caption("📓 Notion non connecté")
             if st.button("Connecter mon Notion"):
                 url = demarrer_connexion_notion(user_id_connecte, AGENT_ID)
                 if url:
