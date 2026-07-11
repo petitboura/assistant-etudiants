@@ -228,19 +228,35 @@ st.markdown(f"""
     }}
 
     /* En-tête natif Streamlit (barre "Share / étoile / crayon / GitHub / ⋮")
-       et pied de page ("Made with Streamlit") : complètement supprimés, pas
-       juste recolorés -> display:none (pas seulement visibility:hidden) pour
-       qu'ils ne réservent plus aucun espace du tout, ni en haut ni en bas. */
+       et pied de page ("Made with Streamlit") : supprimés visuellement et
+       sans espace réservé.
+       ATTENTION (bug du dernier essai, symptôme : "la sidebar n'y est plus
+       du tout") : header et [data-testid="stHeader"] contiennent AUSSI le
+       bouton d'ouverture de la sidebar quand elle est repliée -> les mettre
+       en display:none (comme avant) supprime ce bouton avec le reste, sans
+       recours possible pour un enfant (display:none n'est jamais réversible
+       par un descendant). On utilise donc visibility:hidden sur header lui
+       même (efface tout son contenu par défaut), qui elle EST réversible :
+       juste après, on force visibility:visible sur le bouton toggle
+       précisément -> il redevient seul visible dans un header par ailleurs
+       invisible et sans hauteur. #MainMenu/toolbar/decoration/status n'ont
+       pas ce problème (rien d'utile ne vit dedans) -> display:none reste
+       approprié pour eux. */
     #MainMenu,
     footer,
-    header,
-    [data-testid="stHeader"],
     [data-testid="stToolbar"],
     [data-testid="stDecoration"],
     [data-testid="stStatusWidget"] {{
         display: none !important;
         visibility: hidden !important;
         height: 0 !important;
+    }}
+    header,
+    [data-testid="stHeader"] {{
+        visibility: hidden !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        background: transparent !important;
     }}
     /* Sans en-tête, block-container reprend tout l'espace du haut : on
        enlève le padding réservé pour lui, sinon un vide persiste en haut
@@ -271,6 +287,10 @@ st.markdown(f"""
        sombre/noir, l'icône devient invisible (noir sur noir). On lui donne
        un badge de fond neutre semi-opaque + une icône blanche forcée, qui
        restent lisibles quel que soit couleur_fond_page (clair ou sombre).
+       visibility:visible + position:fixed forcés : ce bouton peut vivre
+       dans le header qu'on vient de rendre invisible/sans hauteur juste
+       au-dessus -> sans ça, il resterait cascadé invisible avec son parent
+       (cas du bug "sidebar disparue") ou écrasé par la hauteur 0 du header.
        Volontairement PAS de display:none ici : cacher ce conteneur casserait
        le bouton lui-même (plus moyen de rouvrir la sidebar une fois repliée),
        ce n'est qu'un habillage visuel. */
@@ -279,12 +299,18 @@ st.markdown(f"""
     [data-testid="stExpandSidebarButton"],
     [data-testid="stSidebarCollapsedControl"] button,
     [data-testid="stSidebarCollapseButton"] button {{
+        visibility: visible !important;
+        position: fixed !important;
+        top: 0.6rem !important;
+        left: 0.6rem !important;
+        z-index: 999999 !important;
         background-color: rgba(120, 120, 120, 0.35) !important;
         border-radius: 6px !important;
     }}
     [data-testid="stSidebarCollapsedControl"] svg,
     [data-testid="stSidebarCollapseButton"] svg,
     [data-testid="stExpandSidebarButton"] svg {{
+        visibility: visible !important;
         fill: #FFFFFF !important;
         color: #FFFFFF !important;
     }}
@@ -325,8 +351,20 @@ st.markdown(f"""
        couleur, l'input devient invisible ("null" à l'écran, signalé la
        dernière fois). C'est le seul endroit où le fond de page sert de
        couleur de remplissage plutôt que de camouflage. */
+    /* La pilule de saisie elle-même : le créateur a dit explicitement
+       "proche du fond, pas identique" -> une teinte calculée automatiquement
+       à partir de couleur_fond_page (pas une valeur fixe), qui reste
+       distincte du fond que ce dernier soit clair ou sombre. color-mix()
+       pousse la couleur vers un gris neutre à 20% : sur un fond noir ça
+       donne un charbon un peu plus clair, sur un fond blanc un gris clair
+       un peu plus foncé -> toujours "proche" dans les deux cas, sans
+       réglage manuel. Repli : la couleur unie de couleur_fond_page est
+       déclarée AVANT color-mix() -> si le navigateur ne comprend pas
+       color-mix (rare), il ignore cette ligne et garde la couleur unie
+       (fond identique, pas de rupture visuelle) plutôt qu'une erreur. */
     [data-testid="stChatInput"] {{
         background-color: {UI_CONFIG["couleur_fond_page"]} !important;
+        background-color: color-mix(in srgb, {UI_CONFIG["couleur_fond_page"]} 80%, gray 20%) !important;
         border: 1px solid {UI_CONFIG["couleur_bordure"]} !important;
         border-radius: 999px !important;
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28) !important;
