@@ -8,6 +8,7 @@ Lancement local : uvicorn api.main:app --reload --port 8000
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from api.auth import utilisateur_courant
+from api.agents import router as agents_router
 
 app = FastAPI(title="Djiguigne API", version="0.1.0")
 
@@ -27,6 +28,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(agents_router)
 
 
 @app.get("/health")
