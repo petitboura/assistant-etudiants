@@ -55,10 +55,23 @@ if not URL_RETOUR:
 supabase = create_client(SUPABASE_URL, SUPABASE_SECRET)
 
 
-def inscription(email, mot_de_passe):
+def inscription(email, mot_de_passe, redirection=None):
     """
     Cree un compte etudiant par email/mot de passe.
     Retourne (succes: bool, resultat).
+
+    `redirection` (optionnel) : URL vers laquelle Supabase renverra la
+    personne APRES qu'elle ait clique sur le lien de confirmation recu par
+    email (paypal-like "email_redirect_to"). Sans ce parametre, Supabase
+    utilise la "Site URL" par defaut configuree dans le projet (Authentication
+    > URL Configuration), qui est UNIQUE pour tout le projet -> impossible de
+    distinguer un createur (doit revenir sur la plateforme) d'un etudiant
+    utilisant un agent precis (doit revenir sur CET agent, ?agent=xxx).
+    D'ou l'interet de le preciser explicitement a chaque appel :
+    - depuis faces/vues/creer_agent.py / mes_agents.py (createur) :
+      l'URL de base de la plateforme.
+    - depuis faces/vues/chat.py (etudiant) : l'URL de base + "?agent=<id de
+      cet agent>", pour qu'il retombe directement sur le bon chat.
 
     `resultat` est soit :
     - une session Supabase valide (objet avec .user, .access_token...) si
@@ -71,7 +84,10 @@ def inscription(email, mot_de_passe):
       le message tel quel.
     """
     try:
-        resultat = supabase.auth.sign_up({"email": email, "password": mot_de_passe})
+        payload = {"email": email, "password": mot_de_passe}
+        if redirection:
+            payload["options"] = {"email_redirect_to": redirection}
+        resultat = supabase.auth.sign_up(payload)
         if resultat.session:
             return True, resultat.session
         return True, "Compte cree. Verifie ta boite mail si une confirmation est demandee."
@@ -174,3 +190,58 @@ def deconnexion():
         supabase.auth.sign_out()
     except Exception as e:
         logging.warning(f"ERREUR DECONNEXION (pas bloquant) : {e}")
+
+
+# --- Mot de passe oublie ---------------------------------------------------
+# Trois etapes, comme le flux Google plus haut mais plus simple (pas besoin
+# de table oauth_temp : Supabase gere lui-meme le lien a usage unique) :
+#   1. demarrer_reinitialisation_mot_de_passe() : envoie l'email.
+#   2. La personne clique le lien -> Supabase la renvoie vers `redirection`
+#      avec les identifiants dans le FRAGMENT de l'URL (#access_token=...),
+#      jamais dans la query string -> invisible cote serveur. C'est le role
+#      du bridge JS (faces/vues/recuperation_mdp.py) de les faire apparaitre
+#      dans l'URL normale (?access_token=...) avant qu'on arrive ici.
+#   3. etablir_session_depuis_tokens() + mettre_a_jour_mot_de_passe().
+
+def demarrer_reinitialisation_mot_de_passe(email, redirection=None):
+    """
+    Envoie l'email de reinitialisation. Retourne TOUJOURS (True, message),
+    meme si l'email n'existe pas en base : ne jamais reveler cote UI si un
+    email est inscrit ou non (evite qu'un tiers teste des adresses au
+    hasard pour decouvrir qui a un compte).
+    """
+    try:
+        options = {"redirect_to": redirection} if redirection else {}
+        supabase.auth.reset_password_for_email(email, options)
+    except Exception as e:
+        logging.error(f"ERREUR REINITIALISATION MOT DE PASSE ({email}) : {e}")
+    return True, "Si un compte existe avec cet email, un lien de réinitialisation vient d'être envoyé."
+
+
+def etablir_session_depuis_tokens(access_token, refresh_token):
+    """
+    Deuxieme etape : appelee juste apres le clic sur le lien recu par
+    email (une fois le bridge JS ayant fait apparaitre access_token /
+    refresh_token dans l'URL normale). Authentifie la session Supabase
+    avec ces tokens, prealable indispensable a mettre_a_jour_mot_de_passe()
+    (on ne peut pas changer le mot de passe de "personne").
+    """
+    try:
+        resultat = supabase.auth.set_session(access_token, refresh_token)
+        return True, resultat.session
+    except Exception as e:
+        logging.error(f"ERREUR ETABLISSEMENT SESSION (recuperation mdp) : {e}")
+        return False, "Lien de réinitialisation invalide ou expiré, redemande-en un nouveau."
+
+
+def mettre_a_jour_mot_de_passe(nouveau_mot_de_passe):
+    """
+    Derniere etape : change le mot de passe de la session actuellement
+    authentifiee (voir etablir_session_depuis_tokens juste au-dessus).
+    """
+    try:
+        supabase.auth.update_user({"password": nouveau_mot_de_passe})
+        return True, "Mot de passe mis à jour avec succès."
+    except Exception as e:
+        logging.error(f"ERREUR MISE A JOUR MOT DE PASSE : {e}")
+        return False, "Impossible de mettre à jour le mot de passe (trop court, ou lien expiré)."
