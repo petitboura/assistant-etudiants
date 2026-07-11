@@ -348,13 +348,35 @@ retiré partout (option "propre"), pas gardé en paramètre ignoré.
       aucune requête ne référence une colonne `agent_id` inexistante sur
       `connexions_notion`/`conversation_summaries`.
 
-**Étape B.2 terminée.** Prochaine étape : Étape B.3 (limite visiteur non
-connecté) ou Étape C (backend API), au choix de Bourama.
+**Étape B.2 terminée.**
 
 ### Étape B.3 — Limite visiteur non connecté
-- [ ] `faces/vues/chat.py` : compteur de messages en `st.session_state`
-      quand `user_id` absent, seuil à 4 (ajustable), blocage de l'input +
-      lien d'inscription passé le seuil
+**Code écrit et vérifié syntaxiquement le 2026-07-11, PAS ENCORE POUSSÉ
+sur `main`** — le token GitHub fourni pour committer directement a cessé
+de fonctionner (401 Bad credentials, probablement révoqué par Bourama
+entre-temps) avant ce commit précis. Le fichier modifié a été remis à
+Bourama en téléchargement à la place. **Vérifier au prochain accès au
+repo si `faces/vues/chat.py` contient bien ce qui suit avant de repartir
+dessus — sinon l'appliquer manuellement.**
+- [x] Constante `SEUIL_VISITEUR_NON_CONNECTE = 4` ajoutée (facilement
+      ajustable entre 3 et 5), avec `st.session_state.compteur_visiteur`
+      initialisé à côté des autres compteurs de session
+- [x] `user_id_courant` déplacé plus haut dans le fichier (calculé avant
+      le rendu du chat input, plutôt qu'à l'intérieur du bloc de
+      traitement) pour pouvoir décider de bloquer AVANT d'afficher
+      l'input
+- [x] Passé le seuil (et uniquement si `user_id_courant is None`) :
+      message d'invitation à s'inscrire + `st.link_button` vers
+      `URL_RETOUR_APP/inscription` (affiché seulement si ce secret est
+      configuré, pas de lien cassé sinon) + `st.chat_input(...,
+      disabled=True)` pour garder la barre visible mais inutilisable
+- [x] Le compteur existant `st.session_state.compteur` (déclenche le
+      formulaire de feedback à 3 messages, mécanisme différent et non
+      lié à Étape B.3) laissé inchangé
+- [ ] **Reste à faire** : pousser ce fichier sur `main` (nouveau token ou
+      upload manuel par Bourama), puis tester en conditions réelles
+      (notamment : vérifier que `st.chat_input(disabled=True)` est bien
+      supporté par la version de Streamlit déployée sur Railway)
 
 ### Étape C — Backend API (dans `assistant-etudiants/api/`)
 - [ ] `POST /api/agents` : adapter au nouveau payload (retirer les champs
@@ -478,4 +500,13 @@ connecté) ou Étape C (backend API), au choix de Bourama.
   (`agent_id` reste une métadonnée de traçabilité dans `conversations`).
   Code non testé en conditions réelles (pas de déploiement Railway depuis
   cette session) — à valider par Bourama au prochain déploiement.
-
+- 2026-07-11 — Étape B.3 (limite visiteur non connecté) : code écrit dans
+  `faces/vues/chat.py` — seuil `SEUIL_VISITEUR_NON_CONNECTE = 4`,
+  compteur `st.session_state.compteur_visiteur`, blocage de l'input +
+  lien d'inscription. **PAS COMMITÉ** : le token GitHub fourni par
+  Bourama a cessé de fonctionner (401, probablement révoqué juste après
+  son usage pour l'Étape B.2 — bon réflexe côté sécurité) avant ce
+  commit. Fichier remis en téléchargement à Bourama à la place. Prochaine
+  étape : appliquer ce fichier sur le repo (nouveau token ou upload
+  manuel), le tester, puis reprendre soit l'Étape C (backend API) soit
+  une nouvelle vérification en conditions réelles de l'Étape B.2.
