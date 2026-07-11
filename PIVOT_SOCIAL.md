@@ -351,13 +351,9 @@ retiré partout (option "propre"), pas gardé en paramètre ignoré.
 **Étape B.2 terminée.**
 
 ### Étape B.3 — Limite visiteur non connecté
-**Code écrit et vérifié syntaxiquement le 2026-07-11, PAS ENCORE POUSSÉ
-sur `main`** — le token GitHub fourni pour committer directement a cessé
-de fonctionner (401 Bad credentials, probablement révoqué par Bourama
-entre-temps) avant ce commit précis. Le fichier modifié a été remis à
-Bourama en téléchargement à la place. **Vérifier au prochain accès au
-repo si `faces/vues/chat.py` contient bien ce qui suit avant de repartir
-dessus — sinon l'appliquer manuellement.**
+**Code écrit le 2026-07-11, poussé sur `main` par Bourama (upload manuel,
+le token GitHub fourni avait cessé de fonctionner) — confirmé présent sur
+le repo.**
 - [x] Constante `SEUIL_VISITEUR_NON_CONNECTE = 4` ajoutée (facilement
       ajustable entre 3 et 5), avec `st.session_state.compteur_visiteur`
       initialisé à côté des autres compteurs de session
@@ -373,10 +369,13 @@ dessus — sinon l'appliquer manuellement.**
 - [x] Le compteur existant `st.session_state.compteur` (déclenche le
       formulaire de feedback à 3 messages, mécanisme différent et non
       lié à Étape B.3) laissé inchangé
-- [ ] **Reste à faire** : pousser ce fichier sur `main` (nouveau token ou
-      upload manuel par Bourama), puis tester en conditions réelles
-      (notamment : vérifier que `st.chat_input(disabled=True)` est bien
-      supporté par la version de Streamlit déployée sur Railway)
+- [ ] **Reste à faire** : tester en conditions réelles sur le déploiement
+      Railway (notamment vérifier que `st.chat_input(disabled=True)` est
+      bien supporté par la version de Streamlit déployée — pas testable
+      depuis cette session)
+
+**Étape B.3 terminée (code).** Prochaine étape au choix de Bourama :
+Étape C (backend API) ou test en conditions réelles des Étapes B.2/B.3.
 
 ### Étape C — Backend API (dans `assistant-etudiants/api/`)
 - [ ] `POST /api/agents` : adapter au nouveau payload (retirer les champs
@@ -510,3 +509,7 @@ dessus — sinon l'appliquer manuellement.**
   étape : appliquer ce fichier sur le repo (nouveau token ou upload
   manuel), le tester, puis reprendre soit l'Étape C (backend API) soit
   une nouvelle vérification en conditions réelles de l'Étape B.2.
+- 2026-07-11 — Confirmé : Bourama a uploadé manuellement `chat.py` (Étape
+  B.3) et `PIVOT_SOCIAL.md` sur `main`, vérifié par lecture directe du
+  repo (contenu identique à celui préparé). Étape B.3 marquée terminée
+  (code) ; reste le test en conditions réelles sur Railway.
