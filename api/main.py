@@ -5,10 +5,17 @@ Voir api/PLAN.md pour la séquence complète et l'état d'avancement.
 Lancement local : uvicorn api.main:app --reload --port 8000
 """
 
-from fastapi import FastAPI, Depends
+import logging
+from typing import List, Optional
+
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from api.auth import utilisateur_courant
+from pydantic import BaseModel
+
+from api.auth import utilisateur_courant, supabase
 from api.agents import router as agents_router
+
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="Djiguigne API", version="0.1.0")
 
@@ -48,3 +55,59 @@ def health_me(utilisateur=Depends(utilisateur_courant)):
     (utile pour deboguer un token en prod).
     """
     return {"id": utilisateur.id, "email": utilisateur.email}
+
+
+class AgentFeedItem(BaseModel):
+    id: str
+    nom: str
+    icone_page: str = "🤖"
+    image_vitrine_url: Optional[str] = None
+    description: str = ""
+
+
+class FeedReponse(BaseModel):
+    agents: List[AgentFeedItem]
+    page: int
+    limite: int
+    total: int
+
+
+@app.get("/api/feed", response_model=FeedReponse)
+def feed(page: int = Query(1, ge=1), limite: int = Query(20, ge=1, le=50)):
+    """
+    Liste paginée des agents publiés, pour le feed de découverte de la
+    page `/` (voir PIVOT_SOCIAL.md). Public, aucune auth requise.
+
+    Un agent est considéré publié si `actif` est True OU absent/NULL
+    (même convention de "True par défaut" que
+    faces/vues/chat.py:_agent_est_actif, pour ne pas faire disparaître du
+    feed des agents créés avant l'ajout de cette colonne).
+    """
+    debut = (page - 1) * limite
+    fin = debut + limite - 1
+
+    try:
+        res = (
+            supabase.table("agents")
+            .select("id, nom, ui_config, image_vitrine_url, description", count="exact")
+            .or_("actif.is.null,actif.eq.true")
+            .order("id")
+            .range(debut, fin)
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture feed, page={page}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger le feed pour le moment.")
+
+    agents = [
+        AgentFeedItem(
+            id=ligne["id"],
+            nom=ligne["nom"],
+            icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
+            image_vitrine_url=ligne.get("image_vitrine_url"),
+            description=ligne.get("description") or "",
+        )
+        for ligne in (res.data or [])
+    ]
+
+    return FeedReponse(agents=agents, page=page, limite=limite, total=res.count or 0)
