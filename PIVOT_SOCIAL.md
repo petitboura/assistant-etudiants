@@ -310,14 +310,41 @@ connexions_notion GROUP BY user_id HAVING count(*) > 1` (et l'équivalent
 sur `conversation_summaries`) avant de toucher au schéma.
 
 ### Étape B.2 — Déscoper les connexions et la mémoire par agent
-- [ ] `connexions_notion` : retirer `agent_id` de la clé primaire, revenir
-      à `user_id` seul (migration Supabase + mise à jour de
-      `connexions/notion.py`)
-- [ ] `core/main.py` (`_charger_resume_memoire` et sauvegarde) : lire/
-      écrire la mémoire par `user_id` seul, plus par `(user_id, agent_id)`
-- [ ] Vérifier tous les autres appelants de ces fonctions (`api/`,
-      `faces/vues/chat.py`) pour ne pas casser un appel qui passe encore
-      `agent_id` en attendant un scoping par agent
+**Volet Supabase FAIT le 2026-07-11** (migration
+`pivot_social_etape_b2_descope_user_id`, projet `rwcyeppxfonvqbvztxyg`),
+vérifié avant et après coup — aucune ligne en conflit trouvée
+(`connexions_notion` avait 1 ligne, `conversation_summaries` 0 ligne au
+moment de la migration, donc aucune perte de données possible).
+- [x] `connexions_notion` : colonne `agent_id` supprimée, clé primaire
+      redevenue `user_id` seul
+- [x] `conversation_summaries` : colonne `agent_id` supprimée, clé
+      primaire redevenue `user_id` seul
+- [x] `conversations` (le log brut des messages) volontairement PAS
+      touché : sa PK est déjà `id` seul, `agent_id` y reste comme simple
+      métadonnée de traçabilité, ne pilote pas le comportement mémoire
+
+**Volet code Python PAS ENCORE FAIT — c'est la suite immédiate à
+reprendre :**
+- [ ] `connexions/notion.py` : toutes les requêtes/inserts qui référencent
+      encore `agent_id` sur `connexions_notion` vont probablement échouer
+      ou ignorer silencieusement la colonne — à corriger pour ne lire/
+      écrire que par `user_id`
+- [ ] `core/main.py` (`_charger_resume_memoire`, ligne ~99, et la
+      sauvegarde symétrique plus bas dans le fichier) : même chose, la
+      requête doit passer à `user_id` seul. **Attention** : la signature
+      de `_charger_resume_memoire(user_id, agent_id)` prend encore
+      `agent_id` en paramètre — décider si on garde le paramètre (ignoré)
+      pour ne pas casser tous les appelants d'un coup, ou si on le retire
+      partout d'un seul coup (plus propre mais plus de fichiers à
+      toucher : vérifier `api/`, `faces/vues/chat.py` en plus de
+      `core/main.py`)
+- [ ] Tester en conditions réelles : le schéma a été changé AVANT le
+      code Python (contrairement à l'ordre "code puis schéma" plus
+      prudent), donc tant que ce volet n'est pas fait, toute tentative de
+      connecter Notion ou de sauvegarder une mémoire via le code actuel
+      va probablement lever une erreur SQL (colonne `agent_id`
+      inexistante). **Ne pas déployer/tester en prod tant que ce point
+      n'est pas réglé.**
 
 ### Étape B.3 — Limite visiteur non connecté
 - [ ] `faces/vues/chat.py` : compteur de messages en `st.session_state`
@@ -419,3 +446,14 @@ sur `conversation_summaries`) avant de toucher au schéma.
   Étape B.2, en vérifiant d'abord s'il existe des lignes en conflit
   (plusieurs `agent_id` par `user_id`) dans `connexions_notion` et
   `conversation_summaries` avant de changer la clé primaire.
+- 2026-07-11 — Session de reprise : relu le fichier depuis GitHub (pas
+  depuis la mémoire de conversation) pour valider que le handoff
+  fonctionne — identique à la copie locale. Étape B.2 commencée : vérifié
+  l'absence de lignes en conflit, puis migration Supabase appliquée
+  (`pivot_social_etape_b2_descope_user_id`) — `agent_id` supprimé de
+  `connexions_notion` et `conversation_summaries`, clé primaire = `user_id`
+  seul sur les deux. **Le code Python (`connexions/notion.py`,
+  `core/main.py`) n'est PAS encore à jour** — le schéma a changé avant le
+  code, donc ces fonctionnalités sont cassées jusqu'à la prochaine
+  session. Prochaine étape : corriger le code Python avant de toucher à
+  autre chose.
