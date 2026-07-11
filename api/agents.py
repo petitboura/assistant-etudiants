@@ -174,3 +174,61 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
         logging.error("URL_RETOUR_APP absent : impossible de construire le lien complet de l'agent.")
 
     return AgentCree(id=agent_id, nom=payload.nom.strip(), lien=lien)
+
+
+class AgentDetailPublic(BaseModel):
+    id: str
+    nom: str
+    icone_page: str = "🤖"
+    image_vitrine_url: Optional[str] = None
+    description: str = ""
+    owner_id: str
+
+
+@router.get("/{agent_id}", response_model=AgentDetailPublic)
+def obtenir_agent_public(agent_id: str):
+    """
+    Détail public d'un agent, pour la page `/agent/[slug]` (voir
+    PIVOT_SOCIAL.md, Étape C, Étape E). Public, aucune auth requise, comme
+    `/api/feed`. `agent_id` sert de slug : pas de colonne `slug` dédiée
+    sur `agents` (voir PIVOT_SOCIAL.md, changelog "Étape B terminée").
+
+    `owner_id` est renvoyé pour permettre au frontend de lier vers le
+    portfolio créateur (`/u/[slug]`, Étape E) une fois `GET
+    /api/profiles/{slug}` construit ; pas encore de résolution
+    profil <-> agent ici, volontairement, pour ne pas dupliquer une
+    logique qui appartient à l'endpoint profils.
+
+    404 si l'agent n'existe pas OU s'il est désactivé (`actif` is
+    False) : une page publique ne doit pas exister pour un agent
+    désactivé, même en connaissant son id directement. Convention "True
+    par défaut" si `actif` est absent/NULL, identique à
+    `faces/vues/chat.py:_agent_est_actif` et à `/api/feed`.
+    """
+    try:
+        res = (
+            supabase.table("agents")
+            .select("id, nom, ui_config, image_vitrine_url, description, owner_id, actif")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent public {agent_id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger cet agent pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+
+    ligne = res.data
+    if ligne.get("actif") is False:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+
+    return AgentDetailPublic(
+        id=ligne["id"],
+        nom=ligne["nom"],
+        icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
+        image_vitrine_url=ligne.get("image_vitrine_url"),
+        description=ligne.get("description") or "",
+        owner_id=ligne["owner_id"],
+    )
