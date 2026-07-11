@@ -420,11 +420,59 @@ le repo.**
       testé avec un vrai token ni une vraie écriture en base (mêmes
       limites que les endpoints précédents). **À uploader puis tester en
       conditions réelles avant de cocher.**
-- [ ] `POST /api/agents/{id}/rating`, `GET /api/agents/{id}/rating`
-- [ ] `POST /api/agents/{id}/comments`, `GET /api/agents/{id}/comments`
-- [ ] `POST /api/creators/{id}/follow`, `DELETE .../follow`
-- [ ] `GET /api/profiles/{slug}`, `PATCH /api/profiles/me`
-- [ ] `GET /api/search?q=...` : recherche agents + créateurs
+- [ ] `POST /api/agents/{id}/rating`, `GET /api/agents/{id}/rating` :
+      **code écrit le 2026-07-11 dans `api/agents.py`, PAS ENCORE POUSSÉ
+      sur `main`** — `POST` fait un upsert sur `agent_ratings`
+      (`agent_id`, `user_id`, `note`), respecte la contrainte unique
+      `(agent_id, user_id)` de la table (voir section "Modèle de
+      données") : un utilisateur peut modifier sa note, pas la cumuler.
+      Valide `note` entre 1 et 5 (422 sinon), pas de vérification
+      d'existence de l'agent (repose sur la contrainte FK). `GET` public,
+      renvoie `moyenne` (None si aucune note) et `total`. Testé en local :
+      sans token → 401 sur `POST` (avant même la validation de `note`,
+      l'auth passe en premier) ; `GET` atteint la DB et gère l'erreur
+      proprement (500 propre sur Supabase factice). Pas testé avec une
+      vraie base.
+- [ ] `POST /api/agents/{id}/comments`, `GET /api/agents/{id}/comments` :
+      **code écrit le 2026-07-11 dans `api/agents.py`, PAS ENCORE POUSSÉ
+      sur `main`** — `POST` insère dans `agent_comments`, 422 si contenu
+      vide, aucune limite de fréquence/modération pour l'instant. `GET`
+      public, paginé (mêmes bornes que `/api/feed`, limite plafonnée à
+      50/page), triés par `created_at` décroissant. Testé en local :
+      `POST` sans token → 401 ; `GET` atteint la DB (500 propre sur
+      Supabase factice) ; validation de pagination (`page=0` → 422)
+      vérifiée. Pas testé avec une vraie base.
+- [ ] `POST /api/creators/{id}/follow`, `DELETE .../follow` : **code
+      écrit le 2026-07-11, dans un nouveau fichier `api/creators.py`
+      (pas `api/agents.py` — ces routes portent sur un créateur, pas un
+      agent), PAS ENCORE POUSSÉ sur `main`**. Les deux sont idempotents :
+      `POST` fait un upsert sur `follows` (contrainte unique
+      `(follower_id, creator_id)`, suivre deux fois ne renvoie pas de
+      409) ; `DELETE` ne renvoie pas d'erreur si le follow n'existait pas.
+      422 si `creator_id` == l'utilisateur courant (impossible de se
+      suivre soi-même). Nouveau routeur enregistré dans `api/main.py`
+      (`creators_router`, prefix `/api/creators`). Testé en local : sans
+      token → 401 sur les deux routes. Pas testé avec un vrai token ni
+      une vraie écriture en base.
+- [ ] `GET /api/profiles/{slug}`, `PATCH /api/profiles/me` : **PAS
+      COMMENCÉ — bloqué sur une décision non tranchée**, déjà notée plus
+      haut (section "Étape B") : `profiles.slug` existe en base mais rien
+      ne le remplit encore, pas de code de génération à l'inscription.
+      Écrire `GET /api/profiles/{slug}` maintenant obligerait à choisir
+      seul un mécanisme de génération de slug (ex. dérivé de
+      `nom_affiche`, ou repli sur `user_id` comme fait pour
+      `agents.id` — voir Étape B) sans validation de Bourama, alors que
+      cette même note dit explicitement "à faire à l'Étape D ou en
+      trigger Supabase, pas décidé encore". Différent du cas
+      `agents.id` : là, l'id existait déjà et servait déjà de facto de
+      slug lisible (vérifié en base) ; ici, rien n'existe encore à
+      réutiliser. À trancher avec Bourama avant de continuer sur ce
+      point précis.
+- [ ] `GET /api/search?q=...` : **PAS COMMENCÉ**, dépend indirectement de
+      la même décision que ci-dessus si la recherche doit renvoyer des
+      liens de profils (`/u/[slug]`) — la recherche d'agents seule
+      (`agents.nom`/`agents.id`) n'a pas ce blocage et peut être faite
+      indépendamment si utile avant la décision sur les profils.
 - [ ] Reprend l'Étape 2 (upload documents) de `api/PLAN.md`, inchangée
       par le pivot. L'Étape 4 (chat SSE) de `api/PLAN.md` est abandonnée
       (voir "Ce qui ne change pas" — le chat reste en Streamlit)
@@ -575,3 +623,20 @@ le repo.**
   Toujours pas d'accès en écriture au dépôt. Prochaine étape une fois
   uploadé et testé : `POST/GET /api/agents/{id}/rating` ou
   `POST/GET /api/agents/{id}/comments`.
+- 2026-07-11 — Suite de session : `POST/GET /api/agents/{id}/rating`
+  (upsert note 1-5, contrainte unique respectée) et
+  `POST/GET /api/agents/{id}/comments` (insertion + liste paginée)
+  écrits dans `api/agents.py`. Testés en local (auth 401 sans token sur
+  les deux `POST`, validation pagination sur `GET comments`, erreurs
+  Supabase gérées proprement). Toujours pas d'accès en écriture au
+  dépôt. Reste dans l'Étape C : `POST/DELETE /api/creators/{id}/follow`,
+  `GET /api/profiles/{slug}`, `PATCH /api/profiles/me`,
+  `GET /api/search`.
+- 2026-07-11 — Suite de session : `POST/DELETE /api/creators/{id}/follow`
+  écrits dans un nouveau fichier `api/creators.py` (upsert/delete
+  idempotents sur `follows`), routeur enregistré dans `api/main.py`.
+  Testé en local : 401 sans token sur les deux routes. Arrêt volontaire
+  avant `GET /api/profiles/{slug}` : bloqué sur la génération de
+  `profiles.slug`, non tranchée (voir note Étape B) — décision à prendre
+  avec Bourama avant de continuer sur ce point, pas de choix fait seul.
+  Toujours pas d'accès en écriture au dépôt.
