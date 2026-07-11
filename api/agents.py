@@ -232,3 +232,78 @@ def obtenir_agent_public(agent_id: str):
         description=ligne.get("description") or "",
         owner_id=ligne["owner_id"],
     )
+
+
+class MettreAJourVitrinePayload(BaseModel):
+    # Optional (pas absent = pas de valeur) volontairement, pour un PATCH
+    # partiel : un champ omis (None) n'est pas touché, contrairement à une
+    # chaîne vide envoyée explicitement, qui efface la valeur existante.
+    image_vitrine_url: Optional[str] = None
+    description: Optional[str] = None
+
+
+@router.patch("/{agent_id}/vitrine", response_model=AgentDetailPublic)
+def mettre_a_jour_vitrine(
+    agent_id: str,
+    payload: MettreAJourVitrinePayload,
+    utilisateur=Depends(utilisateur_courant),
+):
+    """
+    Mise à jour de la vitrine publique d'un agent (image + description),
+    depuis le dashboard "Mes agents" (voir PIVOT_SOCIAL.md, Étape F).
+
+    Vérifie que `owner_id` du token correspond au propriétaire de l'agent
+    (403 sinon) — même exigence que celle notée pour l'upload de
+    documents à l'Étape 2 de `api/PLAN.md`, appliquée ici en premier
+    puisque c'est le premier endpoint de modification (hors création) du
+    pivot social.
+    """
+    try:
+        res = (
+            supabase.table("agents")
+            .select("id, nom, ui_config, image_vitrine_url, description, owner_id")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant mise à jour vitrine) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de mettre à jour la vitrine pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+
+    ligne = res.data
+    if ligne["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    mise_a_jour = {}
+    if payload.image_vitrine_url is not None:
+        mise_a_jour["image_vitrine_url"] = payload.image_vitrine_url
+    if payload.description is not None:
+        mise_a_jour["description"] = payload.description.strip()
+
+    if not mise_a_jour:
+        raise HTTPException(
+            status_code=422,
+            detail="Rien à mettre à jour (image_vitrine_url et description sont absents).",
+        )
+
+    try:
+        supabase.table("agents").update(mise_a_jour).eq("id", agent_id).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (mise à jour vitrine agent {agent_id}) : {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Impossible de mettre à jour la vitrine (erreur technique). Réessaie dans un instant.",
+        )
+
+    ligne.update(mise_a_jour)
+    return AgentDetailPublic(
+        id=ligne["id"],
+        nom=ligne["nom"],
+        icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
+        image_vitrine_url=ligne.get("image_vitrine_url"),
+        description=ligne.get("description") or "",
+        owner_id=ligne["owner_id"],
+    )
