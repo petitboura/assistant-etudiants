@@ -38,31 +38,18 @@ class LigneComportement(BaseModel):
 
 
 class UiConfig(BaseModel):
-    """Miroir des champs 'Interface'/'Thème visuel' de creer_agent.py."""
+    """
+    Depuis le pivot social (2026-07-11, voir PIVOT_SOCIAL.md, section
+    "Ce qui change") : le thème visuel par agent est supprimé, un seul
+    thème fixe s'applique à toute la plateforme. Seul icone_page reste
+    personnalisable ici — tous les anciens champs (couleurs, police,
+    rayon des bulles, CSS avancé, style de titre multicolore...) sont
+    retirés, pas juste ignorés, pour ne pas garder de code mort côté API.
+    Cible finale de `agents.ui_config` en base (le nettoyage de la
+    colonne elle-même, avec les agents déjà créés, reste une étape à
+    part, voir PIVOT_SOCIAL.md Étape B).
+    """
     icone_page: str = "🤖"
-    sous_titre_accueil: str = ""
-    placeholder_saisie: str = "Pose ta question..."
-    style_titre: str = "unique"  # "unique" | "multicolore"
-    titre_couleur_unique: str = "#000000"
-    titre_couleurs_lettres: Optional[List[str]] = None
-    bulle_assistant_visible: bool = True
-    raisonnement_visible: bool = False
-    rendu_visuel: bool = False
-    memoire_visible: bool = True
-    couleur_fond_page: str = "#FFFFFF"
-    couleur_fond: str = "#646464"
-    couleur_bulle_assistant: str = "#FFFFFF"
-    couleur_texte_utilisateur: str = "#FFFFFF"
-    couleur_texte_assistant: str = "#000000"
-    couleur_texte_bouton: str = "#FFFFFF"
-    couleur_accent: str = "#8B5E3C"
-    couleur_lien: str = ""
-    couleur_bouton_fond: str = ""
-    couleur_bordure: str = "#808080"
-    rayon_bulles: str = "Moyen"
-    taille_texte: str = "Moyen"
-    police: str = "Police système"
-    css_avance: str = ""
 
 
 class CreerAgentPayload(BaseModel):
@@ -77,6 +64,11 @@ class CreerAgentPayload(BaseModel):
     lien_notion: Optional[str] = None
     texte_libre: str = ""
     ui_config: UiConfig = Field(default_factory=UiConfig)
+    # Nouveau flow de création (pivot social) : image de vitrine et
+    # description publique de la page agent, distinctes de
+    # description_connaissance qui reste un usage interne au RAG.
+    image_vitrine_url: Optional[str] = None
+    description: str = ""
 
 
 class AgentCree(BaseModel):
@@ -121,34 +113,17 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
     )
     notion_page_id = extraire_id_notion(payload.lien_notion)
 
+    # Depuis le pivot social : plus de personnalisation de thème par agent,
+    # seuls titre/icône/emoji dérivés du nom et de l'icône restent écrits
+    # dans ui_config. faces/vues/chat.py retombe sur UI_CONFIG_PAR_DEFAUT
+    # pour tout le reste (couleurs, police, rendu_visuel, etc.), ce qui
+    # est le comportement voulu : un seul thème fixe pour la plateforme.
     ui = payload.ui_config
     ui_config_dict = {
         "titre_page": payload.nom.strip(),
         "icone_page": ui.icone_page.strip() or "🤖",
         "titre_accueil": f"{ui.icone_page.strip()} {payload.nom.strip()}",
-        "sous_titre_accueil": ui.sous_titre_accueil.strip(),
-        "titre_couleur_unique": ui.titre_couleur_unique if ui.style_titre == "unique" else "#000000",
-        "titre_couleurs_lettres": ui.titre_couleurs_lettres if ui.style_titre == "multicolore" else None,
         "emoji_reponse": ui.icone_page.strip(),
-        "placeholder_saisie": ui.placeholder_saisie.strip() or "Pose ta question...",
-        "raisonnement_visible": ui.raisonnement_visible,
-        "rendu_visuel": ui.rendu_visuel,
-        "memoire_visible": ui.memoire_visible,
-        "couleur_fond": ui.couleur_fond,
-        "couleur_accent": ui.couleur_accent,
-        "couleur_bulle_assistant": ui.couleur_bulle_assistant if ui.bulle_assistant_visible else "transparent",
-        "bulle_assistant_visible": ui.bulle_assistant_visible,
-        "couleur_bordure": ui.couleur_bordure,
-        "couleur_fond_page": ui.couleur_fond_page,
-        "couleur_texte_utilisateur": ui.couleur_texte_utilisateur,
-        "couleur_texte_assistant": ui.couleur_texte_assistant,
-        "couleur_texte_bouton": ui.couleur_texte_bouton,
-        "couleur_lien": ui.couleur_lien,
-        "couleur_bouton_fond": ui.couleur_bouton_fond,
-        "rayon_bulles": ui.rayon_bulles,
-        "taille_texte": ui.taille_texte,
-        "police": ui.police,
-        "css_avance": ui.css_avance.strip(),
     }
 
     knowledge_source = {
@@ -167,6 +142,11 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
         "knowledge_source": knowledge_source,
         "tools_enabled": payload.outils_choisis,
         "owner_id": utilisateur.id,
+        # Colonnes ajoutées par la migration pivot_social_etape_b_tables
+        # (voir PIVOT_SOCIAL.md, Étape B) : vitrine publique de l'agent,
+        # distincte de knowledge_source.description (usage RAG interne).
+        "image_vitrine_url": payload.image_vitrine_url,
+        "description": payload.description.strip(),
     }
     if notion_page_id:
         nouvelle_ligne["notion_page_id"] = notion_page_id
