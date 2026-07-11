@@ -31,10 +31,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'indexers'))
 # ModuleNotFoundError.
 sys.path.append(os.path.dirname(__file__))
 
-from auth import inscription, connexion, deconnexion  # noqa: E402
+from auth import inscription, connexion, deconnexion, demarrer_reinitialisation_mot_de_passe  # noqa: E402
 from index_documents import indexer_document, indexer_texte, supprimer_chunks_existants  # noqa: E402
 from storage import upload_document, list_documents, delete_document, get_document_url  # noqa: E402
 from themes import POLICES_AFFICHEES, POLICE_PAR_DEFAUT, RAYONS, RAYON_PAR_DEFAUT, TAILLES, TAILLE_PAR_DEFAUT  # noqa: E402
+from recuperation_mdp import gerer_recuperation_mot_de_passe  # noqa: E402
 
 # Identité visuelle Djiguignè AI (voir vues/theme_djiguigne.py) : restyle
 # uniquement l'habillage, aucune logique métier ci-dessous n'est modifiée.
@@ -82,6 +83,9 @@ if "session_utilisateur" not in st.session_state:
     st.session_state.session_utilisateur = None
 
 if not st.session_state.session_utilisateur:
+    if gerer_recuperation_mot_de_passe():
+        st.stop()
+
     afficher_entete()
     st.markdown(
         """
@@ -109,11 +113,21 @@ if not st.session_state.session_utilisateur:
             else:
                 st.error(resultat)
 
+        with st.expander("Mot de passe oublié ?"):
+            email_oublie = st.text_input("Ton email", key="email_mdp_oublie")
+            if st.button("Envoyer le lien de réinitialisation", key="btn_mdp_oublie"):
+                _, message = demarrer_reinitialisation_mot_de_passe(
+                    email_oublie, redirection=get_secret("URL_RETOUR_APP")
+                )
+                st.info(message)
+
     with onglet_inscription:
         email_new = st.text_input("Email", key="email_inscription")
         mdp_new = st.text_input("Mot de passe", type="password", key="mdp_inscription")
         if st.button("Créer mon compte", key="btn_inscription", use_container_width=True):
-            succes, resultat = inscription(email_new, mdp_new)
+            # Même logique que creer_agent.py : le créateur doit revenir sur
+            # la plateforme après confirmation, pas sur un agent précis.
+            succes, resultat = inscription(email_new, mdp_new, redirection=get_secret("URL_RETOUR_APP"))
             if succes:
                 if hasattr(resultat, "user"):
                     # Session directement valide (confirmation email

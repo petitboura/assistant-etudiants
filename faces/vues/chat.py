@@ -7,14 +7,20 @@ import os
 import re
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'core'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+# Le dossier vues/ lui-même : st.navigation() exécute cette page via exec(),
+# ce qui n'ajoute PAS automatiquement son propre dossier à sys.path -> sans
+# cette ligne, l'import de recuperation_mdp.py juste à côté échoue avec
+# ModuleNotFoundError (même cause que pour theme_djiguigne.py ailleurs).
+sys.path.append(os.path.dirname(__file__))
 
 import logging
 import streamlit as st
 from supabase import create_client
 from main import chat
-from auth import inscription, connexion, deconnexion
+from auth import inscription, connexion, deconnexion, demarrer_reinitialisation_mot_de_passe
 from connexions.notion import demarrer_connexion_notion, finaliser_connexion_notion, etat_notion_en_attente, est_connecte
 from themes import police_vers_css, RAYONS, RAYON_PAR_DEFAUT, TAILLES, TAILLE_PAR_DEFAUT
+from recuperation_mdp import gerer_recuperation_mot_de_passe
 
 logging.basicConfig(level=logging.INFO)
 
@@ -221,6 +227,60 @@ st.markdown(f"""
         background-color: {UI_CONFIG["couleur_fond_page"]};
     }}
 
+    /* En-tête natif Streamlit (barre "Share / étoile / crayon / GitHub / ⋮")
+       et pied de page ("Made with Streamlit") : complètement supprimés, pas
+       juste recolorés -> display:none (pas seulement visibility:hidden) pour
+       qu'ils ne réservent plus aucun espace du tout, ni en haut ni en bas. */
+    #MainMenu,
+    footer,
+    header,
+    [data-testid="stHeader"],
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"] {{
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+    }}
+    /* Sans en-tête, block-container reprend tout l'espace du haut : on
+       enlève le padding réservé pour lui, sinon un vide persiste en haut
+       de page même une fois l'en-tête retiré. */
+    .block-container {{
+        padding-top: 2rem !important;
+    }}
+
+    /* Barre de saisie (st.chat_input) : par défaut, Streamlit la loge dans
+       une bande pleine largeur avec SON PROPRE fond clair, indépendant de
+       couleur_fond_page -> c'est ce bandeau clair qui jurait avec le fond
+       sombre choisi. On fait disparaître cette bande (même couleur que la
+       page -> invisible) et on donne à l'input lui-même une allure de
+       pilule flottante, centrée, qui reprend automatiquement la couleur de
+       fond choisie -> plus aucun réglage manuel si le créateur change sa
+       couleur de fond, ça suit tout seul.
+       Note : le nom exact de ce conteneur a changé entre versions de
+       Streamlit (stBottomBlockContainer / stChatFloatingInputContainer) ->
+       les deux sélecteurs sont ciblés pour rester robuste aux deux. */
+    [data-testid="stBottomBlockContainer"],
+    .stChatFloatingInputContainer,
+    [data-testid="stBottom"] {{
+        background: transparent !important;
+        background-color: {UI_CONFIG["couleur_fond_page"]} !important;
+        box-shadow: none !important;
+        border-top: none !important;
+    }}
+    [data-testid="stChatInput"] {{
+        background-color: {UI_CONFIG["couleur_fond_page"]} !important;
+        border: 1px solid {UI_CONFIG["couleur_bordure"]} !important;
+        border-radius: 999px !important;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28) !important;
+        max-width: 720px;
+        margin: 0 auto 1.1rem auto !important;
+    }}
+    [data-testid="stChatInput"] textarea {{
+        background-color: transparent !important;
+        color: {UI_CONFIG["couleur_texte_utilisateur"]} !important;
+    }}
+
     .message-user {{
         background-color: {UI_CONFIG["couleur_fond"]};
         color: {UI_CONFIG["couleur_texte_utilisateur"]};
@@ -356,6 +416,14 @@ def _typeset_mathjax():
 if "session_utilisateur" not in st.session_state:
     st.session_state.session_utilisateur = None
 
+# Doit passer avant tout le reste (y compris le retour OAuth Notion
+# juste en dessous) : si l'URL contient les tokens d'un lien "mot de passe
+# oublié", on affiche uniquement le formulaire de nouveau mot de passe et
+# on s'arrête là, plutôt que de rendre le chat en même temps dans le
+# corps de la page pendant que la sidebar affiche ce formulaire.
+if gerer_recuperation_mot_de_passe():
+    st.stop()
+
 # --- Retour de redirection OAuth (Notion) -------------------------------
 # Meme URL de callback que Google (URL_RETOUR_APP) : on distingue les deux
 # en verifiant si le `state` recu correspond a une tentative Notion en
@@ -392,11 +460,30 @@ with st.sidebar:
                 else:
                     st.error(resultat)
 
+            with st.expander("Mot de passe oublié ?"):
+                email_oublie = st.text_input("Ton email", key="email_mdp_oublie")
+                if st.button("Envoyer le lien de réinitialisation", key="btn_mdp_oublie"):
+                    _url_base_retour_oubli = get_secret("URL_RETOUR_APP")
+                    _redirection_oubli = (
+                        f"{_url_base_retour_oubli.rstrip('/')}/?agent={AGENT_ID}"
+                        if _url_base_retour_oubli else None
+                    )
+                    _, message = demarrer_reinitialisation_mot_de_passe(email_oublie, redirection=_redirection_oubli)
+                    st.info(message)
+
         with onglet_inscription:
             email_inscription = st.text_input("Email", key="email_inscription")
             mdp_inscription = st.text_input("Mot de passe", type="password", key="mdp_inscription")
             if st.button("Créer mon compte", key="bouton_inscription"):
-                succes, resultat = inscription(email_inscription, mdp_inscription)
+                # Redirection après clic sur le lien de confirmation reçu par
+                # email : CET agent précis (pas la plateforme), sinon
+                # l'étudiant confirmerait son compte et se retrouverait sur
+                # le tableau de bord créateur au lieu de son chat.
+                _url_base_retour = get_secret("URL_RETOUR_APP")
+                _redirection_inscription = (
+                    f"{_url_base_retour.rstrip('/')}/?agent={AGENT_ID}" if _url_base_retour else None
+                )
+                succes, resultat = inscription(email_inscription, mdp_inscription, redirection=_redirection_inscription)
                 if succes:
                     if hasattr(resultat, "user"):
                         # Session directement valide (confirmation email

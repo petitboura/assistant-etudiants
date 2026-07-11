@@ -141,6 +141,28 @@ hr { border-color: var(--dj-bordure) !important; }
     border-color: var(--dj-accent-1) !important;
     box-shadow: 0 0 0 1px var(--dj-accent-1) !important;
 }
+/* Le conteneur BaseWeb qui ENVELOPPE l'input (ex: type="password") garde
+   son fond blanc par défaut si on ne le cible pas explicitement -> même
+   bug que les blocs st.code() plus haut (contraste clair-sur-clair), sauf
+   qu'ici ça rend carrément invisible le bouton "afficher/masquer le mot
+   de passe" (l'icône œil), rendu par Streamlit À L'INTÉRIEUR de ce même
+   conteneur, pas dans <input> lui-même -> d'où la nécessité de cibler le
+   wrapper en plus de l'input, et l'icône du bouton séparément. */
+div[data-baseweb="input"], div[data-baseweb="base-input"] {
+    background: var(--dj-surface) !important;
+    border-color: var(--dj-bordure) !important;
+}
+div[data-baseweb="input"] button, div[data-baseweb="base-input"] button {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+div[data-baseweb="input"] button svg, div[data-baseweb="base-input"] button svg {
+    fill: var(--dj-texte-muet) !important;
+}
+div[data-baseweb="input"] button:hover svg, div[data-baseweb="base-input"] button:hover svg {
+    fill: var(--dj-accent-1) !important;
+}
 div[data-baseweb="select"] > div {
     background: var(--dj-surface) !important;
     border-color: var(--dj-bordure) !important;
