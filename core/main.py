@@ -219,7 +219,7 @@ def _mettre_a_jour_resume_si_besoin(user_id, agent_id):
         completion = client_groq.chat.completions.create(
             model=MODELE_RESUME,
             messages=[{"role": "user", "content": prompt_resume}],
-            max_completion_tokens=400,
+            max_completion_tokens=None,
             timeout=DELAI_MAX_PAR_APPEL,
         )
         nouveau_resume = completion.choices[0].message.content.strip()
