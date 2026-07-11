@@ -216,6 +216,15 @@ else:
     _PADDING_BULLE_ASSISTANT = "10px 0"
     _RAYON_BULLE_ASSISTANT = "0px"
 
+# Couleur de fond commune à TOUS les champs de saisie de l'app (barre de
+# chat + champs email/mot de passe de la sidebar) : une seule variable
+# calculée ici et réutilisée telle quelle aux deux endroits plus bas ->
+# garantit une couleur strictement identique (demande explicite du
+# créateur), pas deux formules qui se ressemblent sans l'être. Repli en
+# couleur unie déclaré séparément à chaque utilisation (voir plus bas),
+# color-mix() n'étant pas interpolable dans une simple variable Python.
+_COULEUR_CHAMP_SAISIE = f'color-mix(in srgb, {UI_CONFIG["couleur_fond_page"]} 80%, gray 20%)'
+
 st.markdown(f"""
     <style>
     {_IMPORT_POLICE}
@@ -230,21 +239,22 @@ st.markdown(f"""
     /* En-tête natif Streamlit (barre "Share / étoile / crayon / GitHub / ⋮")
        et pied de page ("Made with Streamlit") : supprimés visuellement et
        sans espace réservé.
-       ATTENTION (bug du dernier essai, symptôme : "la sidebar n'y est plus
-       du tout") : header et [data-testid="stHeader"] contiennent AUSSI le
-       bouton d'ouverture de la sidebar quand elle est repliée -> les mettre
-       en display:none (comme avant) supprime ce bouton avec le reste, sans
-       recours possible pour un enfant (display:none n'est jamais réversible
-       par un descendant). On utilise donc visibility:hidden sur header lui
-       même (efface tout son contenu par défaut), qui elle EST réversible :
-       juste après, on force visibility:visible sur le bouton toggle
-       précisément -> il redevient seul visible dans un header par ailleurs
-       invisible et sans hauteur. #MainMenu/toolbar/decoration/status n'ont
-       pas ce problème (rien d'utile ne vit dedans) -> display:none reste
-       approprié pour eux. */
+       ATTENTION (bug identifié en inspectant le bundle JS de Streamlit
+       installé, pas une supposition) : le bouton de RÉOUVERTURE de la
+       sidebar une fois repliée (icône flèche vers la droite) a pour
+       data-testid "stExpandSidebarButton" et vit À L'INTÉRIEUR de
+       [data-testid="stToolbar"] -> le display:none qu'on appliquait sur
+       stToolbar (comme sur header) supprimait ce bouton avec le reste,
+       sans recours (display:none n'est jamais réversible pour un enfant).
+       header/stHeader/stToolbar passent donc en visibility:hidden (efface
+       tout par défaut, mais réversible), et stExpandSidebarButton +
+       stSidebarCollapseButton (le bouton "fermer" quand la sidebar est
+       ouverte, vérifié aussi dans le bundle, vit dans stSidebarHeader,
+       lui non affecté) sont forcés en visibility:visible juste après.
+       #MainMenu/decoration/status n'ont pas ce problème (rien d'utile ne
+       vit dedans) -> display:none reste approprié pour eux. */
     #MainMenu,
     footer,
-    [data-testid="stToolbar"],
     [data-testid="stDecoration"],
     [data-testid="stStatusWidget"] {{
         display: none !important;
@@ -252,7 +262,8 @@ st.markdown(f"""
         height: 0 !important;
     }}
     header,
-    [data-testid="stHeader"] {{
+    [data-testid="stHeader"],
+    [data-testid="stToolbar"] {{
         visibility: hidden !important;
         height: 0 !important;
         min-height: 0 !important;
@@ -281,24 +292,24 @@ st.markdown(f"""
         box-shadow: none !important;
     }}
 
-    /* Bouton d'affichage/masquage de la sidebar (icône "<<"/">>") : Streamlit
-       lui donne une couleur d'icône fixe pensée pour son thème par défaut,
-       PAS pour couleur_fond_page choisie par le créateur -> sur un fond
-       sombre/noir, l'icône devient invisible (noir sur noir). On lui donne
-       un badge de fond neutre semi-opaque + une icône blanche forcée, qui
-       restent lisibles quel que soit couleur_fond_page (clair ou sombre).
-       visibility:visible + position:fixed forcés : ce bouton peut vivre
-       dans le header qu'on vient de rendre invisible/sans hauteur juste
-       au-dessus -> sans ça, il resterait cascadé invisible avec son parent
-       (cas du bug "sidebar disparue") ou écrasé par la hauteur 0 du header.
-       Volontairement PAS de display:none ici : cacher ce conteneur casserait
-       le bouton lui-même (plus moyen de rouvrir la sidebar une fois repliée),
-       ce n'est qu'un habillage visuel. */
-    [data-testid="stSidebarCollapsedControl"],
+    /* Boutons d'affichage/masquage de la sidebar : stSidebarCollapseButton
+       (fermer, visible sidebar ouverte) et stExpandSidebarButton (rouvrir,
+       visible sidebar repliée) sont les deux VRAIS data-testid (confirmés
+       dans le bundle JS de Streamlit -> stSidebarCollapsedControl n'existe
+       pas, c'est un nom que j'avais deviné à tort au tour précédent).
+       Streamlit leur donne une couleur d'icône fixe pensée pour son thème
+       par défaut, PAS pour couleur_fond_page choisie par le créateur -> sur
+       un fond sombre/noir, l'icône devient invisible (noir sur noir). On
+       leur donne un badge de fond neutre semi-opaque + une icône blanche
+       forcée, lisibles quel que soit couleur_fond_page (clair ou sombre).
+       visibility:visible + position:fixed forcés : ces boutons peuvent
+       vivre dans header/stToolbar qu'on vient de rendre invisible/sans
+       hauteur juste au-dessus -> sans ça, ils resteraient cascadés
+       invisibles avec leur parent. Volontairement PAS de display:none :
+       cacher ces conteneurs casserait les boutons eux-mêmes (plus moyen de
+       (re)plier/déplier la sidebar), ce n'est qu'un habillage visuel. */
     [data-testid="stSidebarCollapseButton"],
-    [data-testid="stExpandSidebarButton"],
-    [data-testid="stSidebarCollapsedControl"] button,
-    [data-testid="stSidebarCollapseButton"] button {{
+    [data-testid="stExpandSidebarButton"] {{
         visibility: visible !important;
         position: fixed !important;
         top: 0.6rem !important;
@@ -307,7 +318,6 @@ st.markdown(f"""
         background-color: rgba(120, 120, 120, 0.35) !important;
         border-radius: 6px !important;
     }}
-    [data-testid="stSidebarCollapsedControl"] svg,
     [data-testid="stSidebarCollapseButton"] svg,
     [data-testid="stExpandSidebarButton"] svg {{
         visibility: visible !important;
@@ -348,23 +358,16 @@ st.markdown(f"""
     /* La pilule de saisie elle-même : contrairement à la bande qui l'entoure
        (transparente/fondue), elle DOIT rester visiblement délimitée (bordure
        + ombre) pour qu'on voie où écrire -> sans ça, sur un fond uni de même
-       couleur, l'input devient invisible ("null" à l'écran, signalé la
-       dernière fois). C'est le seul endroit où le fond de page sert de
-       couleur de remplissage plutôt que de camouflage. */
-    /* La pilule de saisie elle-même : le créateur a dit explicitement
-       "proche du fond, pas identique" -> une teinte calculée automatiquement
-       à partir de couleur_fond_page (pas une valeur fixe), qui reste
-       distincte du fond que ce dernier soit clair ou sombre. color-mix()
-       pousse la couleur vers un gris neutre à 20% : sur un fond noir ça
-       donne un charbon un peu plus clair, sur un fond blanc un gris clair
-       un peu plus foncé -> toujours "proche" dans les deux cas, sans
-       réglage manuel. Repli : la couleur unie de couleur_fond_page est
-       déclarée AVANT color-mix() -> si le navigateur ne comprend pas
-       color-mix (rare), il ignore cette ligne et garde la couleur unie
-       (fond identique, pas de rupture visuelle) plutôt qu'une erreur. */
+       couleur, l'input devient invisible ("null" à l'écran, signalé un tour
+       précédent). couleur_fond_page est déclarée avant _COULEUR_CHAMP_SAISIE
+       (repli si color-mix() n'est pas supporté par le navigateur -> garde
+       une couleur unie plutôt qu'une déclaration invalide ignorée). Cette
+       même variable _COULEUR_CHAMP_SAISIE est réutilisée plus bas pour les
+       champs texte (email/mot de passe) -> couleur strictement identique
+       entre les deux, comme demandé, pas juste une formule ressemblante. */
     [data-testid="stChatInput"] {{
         background-color: {UI_CONFIG["couleur_fond_page"]} !important;
-        background-color: color-mix(in srgb, {UI_CONFIG["couleur_fond_page"]} 80%, gray 20%) !important;
+        background-color: {_COULEUR_CHAMP_SAISIE} !important;
         border: 1px solid {UI_CONFIG["couleur_bordure"]} !important;
         border-radius: 999px !important;
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28) !important;
@@ -374,6 +377,30 @@ st.markdown(f"""
     [data-testid="stChatInput"] textarea {{
         background-color: transparent !important;
         color: {UI_CONFIG["couleur_texte_utilisateur"]} !important;
+    }}
+
+    /* Champs texte classiques (st.text_input : email/mot de passe dans la
+       sidebar, et tout futur champ ailleurs dans l'app) : jamais stylés
+       jusqu'ici -> ils restaient blancs par défaut, quelle que soit
+       couleur_fond_page (visible sur la capture : champs Email/Mot de passe
+       blancs, alors que le reste de la sidebar est sombre). On leur applique
+       EXACTEMENT la même variable _COULEUR_CHAMP_SAISIE que la barre de
+       chat, pas une formule séparée qui ne ferait que ressembler.
+       stTextInputRootElement est la boîte visible (bordure/fond) ; le
+       <input> à l'intérieur reste transparent pour ne pas empiler un second
+       calque de couleur par-dessus. -webkit-text-fill-color en plus de
+       color : Chrome ignore parfois color seul sur un input already-styled
+       par son autofill/thème natif -> les deux déclarations couvrent les
+       deux mécanismes. */
+    [data-testid="stTextInputRootElement"] {{
+        background-color: {UI_CONFIG["couleur_fond_page"]} !important;
+        background-color: {_COULEUR_CHAMP_SAISIE} !important;
+        border: 1px solid {UI_CONFIG["couleur_bordure"]} !important;
+    }}
+    [data-testid="stTextInputRootElement"] input {{
+        background-color: transparent !important;
+        color: {UI_CONFIG["couleur_texte_utilisateur"]} !important;
+        -webkit-text-fill-color: {UI_CONFIG["couleur_texte_utilisateur"]} !important;
     }}
 
     .message-user {{
