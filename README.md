@@ -1,1 +1,106 @@
+# assistant-etudiants — Djiguignè AI
 
+Plateforme multi-agents : n'importe qui peut créer son propre assistant IA
+sans coder (documents PDF, prompt Notion, outils externes) et obtenir un
+lien de chat prêt à partager.
+
+Le projet est en cours de **pivot vers une plateforme sociale** (feed de
+découverte, pages agent publiques, profils créateurs, notes, commentaires,
+follow). Voir `PIVOT_SOCIAL.md` pour le détail complet et l'avancement
+exact de ce chantier, et `api/PLAN.md` pour la migration Streamlit → API
+qui le sous-tend.
+
+**Ce README décrit l'état réel du code.** En cas de doute, le code et ces
+deux fichiers de suivi (`PIVOT_SOCIAL.md`, `api/PLAN.md`) font foi — pas
+d'anciennes conversations ou de documentation externe.
+
+---
+
+## Structure du dépôt
+
+```
+core/
+  auth.py              authentification étudiant (email/mdp + Google via Supabase Auth), connexion optionnelle
+  configuration.py     system prompt central chargé depuis Notion par agent, cache 5 min
+  creation_agent.py    logique pure de création d'agent (génération d'id, prompt) — partagée Streamlit/API
+  diagnostic.py        script de diagnostic, teste chaque maillon de la chaîne indépendamment
+  embeddings.py        vectorisation partagée (gemini-embedding-001)
+  main.py              chat() — cascade Groq → Gemini → Groq de secours, assemblage du prompt, outils
+  mcp_tools.py         moteur MCP générique (appel d'outils externes)
+  registre_outils.py   liste des outils MCP actifs (seul fichier à modifier pour en ajouter un)
+  retriever.py         recherche vectorielle parallèle, scopée par agent (prompts, documents)
+  themes.py            constantes de thème partagées entre formulaires et rendu
+
+connexions/
+  notion.py            connexion Notion par étudiant (OAuth 2.1 + PKCE + Dynamic Client Registration)
+
+faces/
+  app_etudiant.py       point d'entrée Streamlit, routage entre les vues ci-dessous
+  vues/
+    chat.py             interface de chat (étudiant), limite de messages pour visiteur non connecté
+    creer_agent.py      formulaire de création d'agent (côté créateur)
+    mes_agents.py       liste/édition/désactivation des agents d'un créateur
+    recuperation_mdp.py récupération de mot de passe, partagée entre les 3 vues créateur/étudiant
+    theme_djiguigne.py  identité visuelle partagée (couleurs, polices, logo)
+    vitrine.py          page d'accueil publique côté créateur, aucune logique métier
+
+indexers/
+  index_notion.py       indexation récursive Notion → Supabase
+  index_documents.py    indexation PDF → Supabase (RAG documentaire)
+  reembed_gemini.py     ré-indexation vers l'embedding Gemini
+  storage.py            upload/liste/suppression de documents dans Supabase Storage
+
+api/
+  main.py               app FastAPI (backend en construction, voir api/PLAN.md)
+  auth.py               vérification du JWT Supabase envoyé par le frontend
+  agents.py             endpoints agents (création, feed, détail, vitrine, notes, commentaires)
+  creators.py            endpoints follow/unfollow créateur
+  profiles.py            endpoints portfolio créateur
+  search.py              endpoint de recherche (agents + créateurs)
+  PLAN.md                suivi détaillé de la migration Streamlit → API
+```
+
+## Ce qui tourne en production aujourd'hui
+
+- **L'app Streamlit (`faces/`) est l'unique interface utilisateur actuellement déployée**, hébergée sur Railway.
+- **Le chat restera en Streamlit indéfiniment**, même après le pivot social — voir `PIVOT_SOCIAL.md`. Seules les autres vues créateur (`creer_agent.py`, `mes_agents.py`, `vitrine.py`) seront progressivement remplacées par un frontend Next.js séparé.
+- **`api/` existe dans le dépôt mais n'est pas encore déployé** : Railway fait toujours tourner Streamlit, pas ce backend FastAPI (bascule prévue à l'Étape 6 de `api/PLAN.md`, pas avant que tout soit validé en conditions réelles).
+
+## Variables d'environnement / secrets nécessaires
+
+| Variable | Utilisée par |
+|---|---|
+| `SUPABASE_URL` | tout le projet |
+| `SUPABASE_SECRET` | tout le projet |
+| `GROQ_API_KEY` | `core/main.py` (LLM principal + secours) |
+| `GOOGLE_API_KEY` | `core/embeddings.py`, `core/main.py` (secours Gemini) |
+| `NOTION_TOKEN` | `indexers/index_notion.py`, `connexions/notion.py` |
+| `TAVILY_API_KEY` | `core/registre_outils.py` (outil de recherche web) |
+| `URL_RETOUR_APP` | URL publique du déploiement, utilisée pour le retour OAuth Notion — à recalculer à chaque changement de domaine, pas à copier telle quelle d'un environnement à l'autre |
+
+Variables **obsolètes**, ignorées par le code actuel : `OPENROUTER_API_KEY`
+(remplacée par `GOOGLE_API_KEY`), `NOTION_PAGE_ID` (remplacée par la colonne
+`agents.notion_page_id`, multi-agent). Détail complet et checklist Railway :
+voir `RAILWAY_DEPLOY.md`.
+
+## Lancer l'app
+
+```
+streamlit run faces/app_etudiant.py
+```
+
+Un agent précis se sélectionne via `?agent=<id>` dans l'URL.
+
+## Indexer un nouveau document PDF
+
+```
+python indexers/index_documents.py mon_document.pdf
+```
+
+(le fichier doit déjà être présent dans le bucket Supabase Storage configuré)
+
+## Pour aller plus loin
+
+- **`PIVOT_SOCIAL.md`** — plan et avancement du pivot vers une plateforme sociale (profils, feed, notes, commentaires, follow)
+- **`api/PLAN.md`** — plan et avancement de la migration Streamlit → API FastAPI
+- **`RAILWAY_DEPLOY.md`** — checklist des secrets à configurer sur Railway
