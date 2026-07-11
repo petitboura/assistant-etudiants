@@ -249,6 +249,46 @@ st.markdown(f"""
         padding-top: 2rem !important;
     }}
 
+    /* Barre latérale (st.sidebar) : jusqu'ici jamais stylée -> elle gardait
+       le gris clair par défaut de Streamlit, qui jurait avec couleur_fond_page
+       sur les agents à thème sombre. On l'aligne explicitement, sur les deux
+       niveaux (conteneur + zone de contenu) pour parer aux versions de
+       Streamlit où le fond est peint par l'un ou l'autre. */
+    [data-testid="stSidebar"],
+    [data-testid="stSidebarContent"],
+    [data-testid="stSidebarUserContent"] {{
+        background: {UI_CONFIG["couleur_fond_page"]} !important;
+        background-color: {UI_CONFIG["couleur_fond_page"]} !important;
+    }}
+    [data-testid="stSidebar"] {{
+        border-right: none !important;
+        box-shadow: none !important;
+    }}
+
+    /* Bouton d'affichage/masquage de la sidebar (icône "<<"/">>") : Streamlit
+       lui donne une couleur d'icône fixe pensée pour son thème par défaut,
+       PAS pour couleur_fond_page choisie par le créateur -> sur un fond
+       sombre/noir, l'icône devient invisible (noir sur noir). On lui donne
+       un badge de fond neutre semi-opaque + une icône blanche forcée, qui
+       restent lisibles quel que soit couleur_fond_page (clair ou sombre).
+       Volontairement PAS de display:none ici : cacher ce conteneur casserait
+       le bouton lui-même (plus moyen de rouvrir la sidebar une fois repliée),
+       ce n'est qu'un habillage visuel. */
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapseButton"],
+    [data-testid="stExpandSidebarButton"],
+    [data-testid="stSidebarCollapsedControl"] button,
+    [data-testid="stSidebarCollapseButton"] button {{
+        background-color: rgba(120, 120, 120, 0.35) !important;
+        border-radius: 6px !important;
+    }}
+    [data-testid="stSidebarCollapsedControl"] svg,
+    [data-testid="stSidebarCollapseButton"] svg,
+    [data-testid="stExpandSidebarButton"] svg {{
+        fill: #FFFFFF !important;
+        color: #FFFFFF !important;
+    }}
+
     /* Barre de saisie (st.chat_input) : par défaut, Streamlit la loge dans
        une bande pleine largeur avec SON PROPRE fond clair, indépendant de
        couleur_fond_page -> c'est ce bandeau clair qui jurait avec le fond
@@ -259,15 +299,32 @@ st.markdown(f"""
        couleur de fond, ça suit tout seul.
        Note : le nom exact de ce conteneur a changé entre versions de
        Streamlit (stBottomBlockContainer / stChatFloatingInputContainer) ->
-       les deux sélecteurs sont ciblés pour rester robuste aux deux. */
+       tous les niveaux connus sont ciblés pour rester robuste. Piège du
+       dernier essai : [data-testid="stBottomBlockContainer"] seul ne colore
+       QUE la colonne centrale (largeur du contenu, pas de la page) -> les
+       deux bandes latérales, peintes par le conteneur PARENT plein largeur
+       ([data-testid="stBottom"] et son wrapper direct), restaient visibles.
+       On colore donc explicitement chaque niveau, du plus englobant (plein
+       largeur) au plus interne, avec la même couleur -> plus aucune bande,
+       ni au centre ni sur les côtés. Volontairement PAS de display:none ici :
+       ça avait fait disparaître le champ de saisie lui-même la dernière fois
+       (il n'est pas juste décoratif, il contient l'input fonctionnel). */
+    [data-testid="stBottom"],
+    [data-testid="stBottom"] > div,
     [data-testid="stBottomBlockContainer"],
     .stChatFloatingInputContainer,
-    [data-testid="stBottom"] {{
-        background: transparent !important;
+    .stChatInputContainer {{
+        background: {UI_CONFIG["couleur_fond_page"]} !important;
         background-color: {UI_CONFIG["couleur_fond_page"]} !important;
         box-shadow: none !important;
         border-top: none !important;
     }}
+    /* La pilule de saisie elle-même : contrairement à la bande qui l'entoure
+       (transparente/fondue), elle DOIT rester visiblement délimitée (bordure
+       + ombre) pour qu'on voie où écrire -> sans ça, sur un fond uni de même
+       couleur, l'input devient invisible ("null" à l'écran, signalé la
+       dernière fois). C'est le seul endroit où le fond de page sert de
+       couleur de remplissage plutôt que de camouflage. */
     [data-testid="stChatInput"] {{
         background-color: {UI_CONFIG["couleur_fond_page"]} !important;
         border: 1px solid {UI_CONFIG["couleur_bordure"]} !important;
