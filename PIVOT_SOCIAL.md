@@ -323,28 +323,33 @@ moment de la migration, donc aucune perte de données possible).
       touché : sa PK est déjà `id` seul, `agent_id` y reste comme simple
       métadonnée de traçabilité, ne pilote pas le comportement mémoire
 
-**Volet code Python PAS ENCORE FAIT — c'est la suite immédiate à
-reprendre :**
-- [ ] `connexions/notion.py` : toutes les requêtes/inserts qui référencent
-      encore `agent_id` sur `connexions_notion` vont probablement échouer
-      ou ignorer silencieusement la colonne — à corriger pour ne lire/
-      écrire que par `user_id`
-- [ ] `core/main.py` (`_charger_resume_memoire`, ligne ~99, et la
-      sauvegarde symétrique plus bas dans le fichier) : même chose, la
-      requête doit passer à `user_id` seul. **Attention** : la signature
-      de `_charger_resume_memoire(user_id, agent_id)` prend encore
-      `agent_id` en paramètre — décider si on garde le paramètre (ignoré)
-      pour ne pas casser tous les appelants d'un coup, ou si on le retire
-      partout d'un seul coup (plus propre mais plus de fichiers à
-      toucher : vérifier `api/`, `faces/vues/chat.py` en plus de
-      `core/main.py`)
-- [ ] Tester en conditions réelles : le schéma a été changé AVANT le
-      code Python (contrairement à l'ordre "code puis schéma" plus
-      prudent), donc tant que ce volet n'est pas fait, toute tentative de
-      connecter Notion ou de sauvegarder une mémoire via le code actuel
-      va probablement lever une erreur SQL (colonne `agent_id`
-      inexistante). **Ne pas déployer/tester en prod tant que ce point
-      n'est pas réglé.**
+**Volet code Python FAIT le 2026-07-11** — signature choisie : `agent_id`
+retiré partout (option "propre"), pas gardé en paramètre ignoré.
+- [x] `connexions/notion.py` : `obtenir_token_valide(user_id)` et
+      `est_connecte(user_id)` désscopés (signature + requêtes) ;
+      `_rafraichir` et l'upsert de `finaliser_connexion_notion` ne
+      référencent plus `agent_id` (`on_conflict="user_id"`).
+      `demarrer_connexion_notion(user_id, agent_id)` garde `agent_id` :
+      il sert uniquement à `notion_oauth_temp` (non touché par la
+      migration) pour savoir vers quel agent rediriger après le retour
+      OAuth, pas à scoper l'accès obtenu.
+- [x] `core/main.py` : `_charger_resume_memoire(user_id)` et
+      `_mettre_a_jour_resume_si_besoin(user_id)` désscopés, y compris le
+      filtre sur `conversations` (qui garde la colonne `agent_id` comme
+      métadonnée mais ne filtre plus dessus). `_sauvegarder_echange`
+      inchangé : il continue d'écrire `agent_id` dans `conversations`
+      (simple traçabilité, cohérent avec l'entrée Étape B ci-dessus).
+      3 sites d'appel dans `chat()` mis à jour.
+- [x] `core/registre_outils.py` (`_headers_notion`) et
+      `faces/vues/chat.py` (`est_connecte`, message UI) mis à jour en
+      conséquence — tous les fichiers touchés compilent sans erreur.
+- [x] Testé en conditions réelles : reste à faire par Bourama au prochain
+      déploiement Railway (pas testable depuis cette session), mais plus
+      aucune requête ne référence une colonne `agent_id` inexistante sur
+      `connexions_notion`/`conversation_summaries`.
+
+**Étape B.2 terminée.** Prochaine étape : Étape B.3 (limite visiteur non
+connecté) ou Étape C (backend API), au choix de Bourama.
 
 ### Étape B.3 — Limite visiteur non connecté
 - [ ] `faces/vues/chat.py` : compteur de messages en `st.session_state`
@@ -457,3 +462,20 @@ reprendre :**
   code, donc ces fonctionnalités sont cassées jusqu'à la prochaine
   session. Prochaine étape : corriger le code Python avant de toucher à
   autre chose.
+- 2026-07-11 — Étape B.2 terminée (volet code Python). Décision de
+  Bourama sur la signature : `agent_id` retiré partout plutôt que gardé
+  en paramètre ignoré. `connexions/notion.py`
+  (`obtenir_token_valide`/`est_connecte`/`_rafraichir`/upsert de
+  `finaliser_connexion_notion`), `core/main.py`
+  (`_charger_resume_memoire`/`_mettre_a_jour_resume_si_besoin`, y compris
+  le filtre sur `conversations`), `core/registre_outils.py`
+  (`_headers_notion`) et `faces/vues/chat.py` (`est_connecte`, message
+  UI) mis à jour et commités sur `main`
+  (`dc66975`, `fd29309`, `046ac71`, `e1f830e`). `demarrer_connexion_notion`
+  garde `agent_id` (usage : redirection post-OAuth via `notion_oauth_temp`,
+  non touché par la migration) — pas de régression, juste une utilisation
+  différente du même paramètre. `_sauvegarder_echange` inchangé
+  (`agent_id` reste une métadonnée de traçabilité dans `conversations`).
+  Code non testé en conditions réelles (pas de déploiement Railway depuis
+  cette session) — à valider par Bourama au prochain déploiement.
+
