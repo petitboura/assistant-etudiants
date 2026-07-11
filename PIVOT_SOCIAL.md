@@ -378,10 +378,24 @@ le repo.**
 Étape C (backend API) ou test en conditions réelles des Étapes B.2/B.3.
 
 ### Étape C — Backend API (dans `assistant-etudiants/api/`)
-- [ ] `POST /api/agents` : adapter au nouveau payload (retirer les champs
-      de thème, ajouter image vitrine + description) — s'appuie sur
-      l'Étape 1 déjà faite dans `api/PLAN.md`, ne repart pas de zéro
-- [ ] `GET /api/feed` : liste paginée des agents publiés
+- [x] `POST /api/agents` : adapté au nouveau payload le 2026-07-11 —
+      `UiConfig` réduit à `icone_page` seul (tous les champs de thème
+      retirés, pas juste ignorés), `image_vitrine_url` et `description`
+      ajoutés au payload et écrits en base. `ui_config_dict` ne calcule
+      plus que `titre_page`/`icone_page`/`titre_accueil`/`emoji_reponse` ;
+      tout le reste retombe sur `UI_CONFIG_PAR_DEFAUT` côté
+      `faces/vues/chat.py` (aucune modif nécessaire là-bas). **Poussé sur
+      `main` par Bourama (upload manuel), vérifié identique sur le repo.**
+- [ ] `GET /api/feed` : **code écrit le 2026-07-11 dans `api/main.py`,
+      PAS ENCORE CONFIRMÉ POUSSÉ sur `main`** — route publique
+      (`GET /api/feed?page=1&limite=20`, pagination offset plafonnée à
+      50/page), liste les agents où `actif` est `True` OU absent/NULL
+      (même convention que `_agent_est_actif` dans `chat.py`, pour ne pas
+      faire disparaître les agents créés avant l'ajout de la colonne
+      `actif`). Retourne `id`, `nom`, `icone_page`, `image_vitrine_url`,
+      `description`. Non exécuté (pas d'environnement FastAPI/Supabase
+      disponible pour tester) — seulement vérifié syntaxiquement. **À
+      uploader puis tester avant de cocher.**
 - [ ] `GET /api/agents/{slug}` : détail public d'un agent
 - [ ] `PATCH /api/agents/{id}/vitrine` : mise à jour image + description
 - [ ] `POST /api/agents/{id}/rating`, `GET /api/agents/{id}/rating`
@@ -513,3 +527,13 @@ le repo.**
   B.3) et `PIVOT_SOCIAL.md` sur `main`, vérifié par lecture directe du
   repo (contenu identique à celui préparé). Étape B.3 marquée terminée
   (code) ; reste le test en conditions réelles sur Railway.
+- 2026-07-11 — Début Étape C. `POST /api/agents` adapté (`api/agents.py`)
+  et poussé sur `main` par upload manuel de Bourama, vérifié identique
+  sur le repo. `GET /api/feed` écrit dans `api/main.py` (route publique,
+  pagination, agents `actif` True/NULL) mais **pas encore confirmé
+  poussé** — Bourama a demandé de mettre à jour ce fichier plan avant de
+  finaliser l'upload, donc l'état "poussé" de `GET /api/feed` reste à
+  vérifier à la prochaine session avant de le cocher. Nouvelle tentative
+  du token GitHub fourni précédemment : toujours 401 Bad credentials,
+  invalide/révoqué, pas un problème de rate limit — un nouveau token
+  serait nécessaire pour que l'IA commite directement à l'avenir.
