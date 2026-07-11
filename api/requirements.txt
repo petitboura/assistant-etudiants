@@ -2,3 +2,5 @@ fastapi
 uvicorn[standard]
 python-multipart
 supabase
+PyPDF2
+google-genai
