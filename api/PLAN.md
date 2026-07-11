@@ -59,13 +59,27 @@ pour l'instant (voir décision #2 : la bascule réelle du service Railway
 vers cette API se fait à l'Étape 6, pas avant).
 
 ### Étape 1 — Création d'agent (`POST /api/agents`)
-- [ ] Reprend la logique de `faces/vues/creer_agent.py` (construction de
+- [x] Reprend la logique de `faces/vues/creer_agent.py` (construction de
       `system_prompt`, `ui_config`, `tools_enabled`, insertion avec
-      `owner_id`), mais en payload JSON au lieu d'un formulaire Streamlit
-- [ ] Validation : `agent_id` déjà pris → 409, pas 500
-- [ ] Retourne l'agent créé + le lien (`URL_RETOUR_APP` + `?agent=...`)
+      `owner_id`), en payload JSON au lieu d'un formulaire Streamlit
+- [x] Validation : `agent_id` déjà pris → 409, pas 500
+- [x] Retourne l'agent créé + le lien (`URL_RETOUR_APP` + `?agent=...`)
+- [x] Logique extraite dans `core/creation_agent.py` (partagée avec
+      `creer_agent.py`, zéro duplication — décision #3)
 
-**État exact : PAS COMMENCÉ.**
+**État exact : FAIT et testé.** Testé en local : `/health` OK, sans
+token → 401, faux token → 401 (vrai appel à Supabase Auth, rejeté
+proprement). Logique de construction testée directement (contournant
+l'auth, faute d'un vrai token disponible ici) avec un faux client
+Supabase : génère bien `agent_id`, `system_prompt`, `owner_id`, le lien.
+**PAS testé avec un vrai token Supabase ni une vraie insertion en base**
+— à faire dès qu'un frontend ou un script dispose d'une vraie session.
+`payload.texte_libre` (indexation) pas testé non plus (mocké).
+
+Bug indépendant repéré en cours de route, PAS corrigé (hors scope de
+cette étape, à traiter à part) : `indexers/storage.py` a encore
+`BUCKET = "IA pour etudiants"`, l'ancien bucket, jamais mis à jour vers
+`documents-agents` depuis la migration Supabase.
 
 ### Étape 2 — Upload de documents (`POST /api/agents/{id}/documents`, `POST /api/agents/{id}/texte`)
 - [ ] Vérifie que `owner_id` du token correspond au propriétaire de l'agent
@@ -107,7 +121,11 @@ dépendances Streamlit de `requirements.txt`.
 
 ## Changelog
 
-- 2026-07-11 — Étape 0 terminée : squelette FastAPI créé (`api/main.py`,
-  `api/auth.py`, `api/requirements.txt`, `api/__init__.py`). Testé en
-  local : serveur démarre, `/health` → 200, `/health/me` sans token →
-  401. Prochaine étape à faire : Étape 1 (`POST /api/agents`).
+- 2026-07-11 — Étape 1 terminée : `POST /api/agents` créé (`api/agents.py`),
+  logique partagée extraite dans `core/creation_agent.py` (aussi utilisée
+  par `faces/vues/creer_agent.py`, qui a été mis à jour en conséquence).
+  Testé : routes HTTP (401 sans token / faux token), et logique de
+  construction en direct (mock Supabase). Pas testé avec un vrai token ni
+  une vraie écriture en base. Bug indépendant repéré (BUCKET obsolète
+  dans storage.py), non corrigé. Prochaine étape : Étape 2 (upload de
+  documents).
