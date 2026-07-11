@@ -193,15 +193,26 @@ def deconnexion():
 
 
 # --- Mot de passe oublie ---------------------------------------------------
-# Trois etapes, comme le flux Google plus haut mais plus simple (pas besoin
-# de table oauth_temp : Supabase gere lui-meme le lien a usage unique) :
+# Trois etapes :
 #   1. demarrer_reinitialisation_mot_de_passe() : envoie l'email.
-#   2. La personne clique le lien -> Supabase la renvoie vers `redirection`
-#      avec les identifiants dans le FRAGMENT de l'URL (#access_token=...),
-#      jamais dans la query string -> invisible cote serveur. C'est le role
-#      du bridge JS (faces/vues/recuperation_mdp.py) de les faire apparaitre
-#      dans l'URL normale (?access_token=...) avant qu'on arrive ici.
-#   3. etablir_session_depuis_tokens() + mettre_a_jour_mot_de_passe().
+#   2. La personne clique le lien -> atterrit sur notre page avec
+#      ?token_hash=xxx&type=recovery en query string NORMALE (pas un
+#      fragment #... comme avant). Voir faces/vues/recuperation_mdp.py :
+#      le token n'est PAS consomme a la simple ouverture de la page, ce
+#      qui est le point important. Avant, on utilisait le lien tout fait
+#      de Supabase ({{ .ConfirmationURL }}), qui valide -et donc consomme-
+#      le token des qu'une requete HTTP l'atteint. Or beaucoup de clients
+#      email (Gmail en tete) "pre-visitent" automatiquement les liens d'un
+#      email pour verifier qu'ils ne sont pas malveillants -> ce
+#      pre-chargement grillait le token avant meme que la personne ne
+#      clique elle-meme, d'ou l'erreur "otp_expired" systematique.
+#      Le nouveau lien (template Supabase modifie, voir la personne pour
+#      la config) ne fait QUE transporter le token jusqu'a notre page ;
+#      c'est etablir_session_depuis_token_hash(), appelee seulement quand
+#      la personne clique sur NOTRE bouton "Confirmer", qui le consomme
+#      reellement -> un simple pre-chargement automatique par un client
+#      email n'a plus aucun effet.
+#   3. etablir_session_depuis_token_hash() + mettre_a_jour_mot_de_passe().
 
 def demarrer_reinitialisation_mot_de_passe(email, redirection=None):
     """
@@ -209,6 +220,12 @@ def demarrer_reinitialisation_mot_de_passe(email, redirection=None):
     meme si l'email n'existe pas en base : ne jamais reveler cote UI si un
     email est inscrit ou non (evite qu'un tiers teste des adresses au
     hasard pour decouvrir qui a un compte).
+
+    `redirection` DOIT contenir au moins un parametre de query existant
+    (donc deja un "?" dans l'URL, ex: ".../?agent=xxx" ou ".../?ctx=..."),
+    pour que le template email puisse lui accoler "&token_hash=..." sans
+    produire une URL invalide (deux "?"). Voir les appelants
+    (faces/vues/creer_agent.py, mes_agents.py, chat.py).
     """
     try:
         options = {"redirect_to": redirection} if redirection else {}
@@ -218,26 +235,27 @@ def demarrer_reinitialisation_mot_de_passe(email, redirection=None):
     return True, "Si un compte existe avec cet email, un lien de réinitialisation vient d'être envoyé."
 
 
-def etablir_session_depuis_tokens(access_token, refresh_token):
+def etablir_session_depuis_token_hash(token_hash, type_otp="recovery"):
     """
-    Deuxieme etape : appelee juste apres le clic sur le lien recu par
-    email (une fois le bridge JS ayant fait apparaitre access_token /
-    refresh_token dans l'URL normale). Authentifie la session Supabase
-    avec ces tokens, prealable indispensable a mettre_a_jour_mot_de_passe()
-    (on ne peut pas changer le mot de passe de "personne").
+    Deuxieme etape : appelee uniquement quand la personne clique sur le
+    bouton "Confirmer" (voir faces/vues/recuperation_mdp.py) -> c'est ce
+    clic explicite, et rien avant, qui consomme le token. Authentifie la
+    session Supabase correspondante, prealable indispensable a
+    mettre_a_jour_mot_de_passe() (on ne peut pas changer le mot de passe
+    de "personne").
     """
     try:
-        resultat = supabase.auth.set_session(access_token, refresh_token)
+        resultat = supabase.auth.verify_otp({"token_hash": token_hash, "type": type_otp})
         return True, resultat.session
     except Exception as e:
-        logging.error(f"ERREUR ETABLISSEMENT SESSION (recuperation mdp) : {e}")
-        return False, "Lien de réinitialisation invalide ou expiré, redemande-en un nouveau."
+        logging.error(f"ERREUR VERIFICATION TOKEN (recuperation mdp) : {e}")
+        return False, "Lien de réinitialisation invalide, expiré, ou déjà utilisé. Redemande-en un nouveau."
 
 
 def mettre_a_jour_mot_de_passe(nouveau_mot_de_passe):
     """
     Derniere etape : change le mot de passe de la session actuellement
-    authentifiee (voir etablir_session_depuis_tokens juste au-dessus).
+    authentifiee (voir etablir_session_depuis_token_hash juste au-dessus).
     """
     try:
         supabase.auth.update_user({"password": nouveau_mot_de_passe})
