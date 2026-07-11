@@ -116,8 +116,13 @@ if not st.session_state.session_utilisateur:
         with st.expander("Mot de passe oublié ?"):
             email_oublie = st.text_input("Ton email", key="email_mdp_oublie")
             if st.button("Envoyer le lien de réinitialisation", key="btn_mdp_oublie"):
+                # "?ctx=..." garantit un paramètre existant dans l'URL, pour
+                # que le template email puisse accoler "&token_hash=..." sans
+                # produire une URL invalide (voir core/auth.py).
+                _url_base = get_secret("URL_RETOUR_APP")
                 _, message = demarrer_reinitialisation_mot_de_passe(
-                    email_oublie, redirection=get_secret("URL_RETOUR_APP")
+                    email_oublie,
+                    redirection=f"{_url_base.rstrip('/')}/?ctx=plateforme" if _url_base else None,
                 )
                 st.info(message)
 

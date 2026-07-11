@@ -1,56 +1,41 @@
 """
 Récupération de mot de passe oublié — logique PARTAGÉE entre creer_agent.py,
 mes_agents.py (côté créateur) et chat.py (côté étudiant), pour ne pas
-tripler le même bridge JS et le même formulaire.
+tripler le même formulaire.
 
-Pourquoi un bridge JS est nécessaire (et ce n'est pas une bizarrerie
-Streamlit, c'est une limite HTTP standard) : quand quelqu'un clique sur le
-lien de réinitialisation reçu par email, Supabase le renvoie vers l'URL
-demandée avec les identifiants dans le FRAGMENT de l'URL
-(...#access_token=xxx&refresh_token=yyy&type=recovery). Le fragment (tout
-ce qui suit le #) n'est JAMAIS envoyé au serveur par le navigateur -> le
-backend Python de Streamlit ne peut absolument pas le lire via
-st.query_params, quel que soit le code qu'on écrit côté Python. La seule
-solution est un petit script qui s'exécute côté NAVIGATEUR, lit le
-fragment, et redirige vers la même URL en recopiant ces valeurs dans la
-query string (?access_token=xxx), que Streamlit peut alors lire
-normalement au rechargement suivant.
+Pourquoi le token n'est PAS consommé à la simple ouverture de la page
+(point important, voir core/auth.py pour le détail) : beaucoup de clients
+email (Gmail en tête) pré-visitent automatiquement les liens contenus
+dans un email pour vérifier qu'ils ne sont pas malveillants. Si notre
+lien de récupération validait le token dès qu'une requête HTTP l'atteint
+(ce que fait le lien tout fait de Supabase, {{ .ConfirmationURL }}), ce
+pré-chargement automatique grille le token avant même que la personne ne
+clique elle-même -> erreur "otp_expired" systématique, même en cliquant
+authentiquement quelques secondes après réception.
+
+La parade (recommandée par Supabase, voir leur doc "Email prefetching") :
+le lien email pointe vers NOTRE page avec le token en simple paramètre
+d'URL (?token_hash=xxx&type=recovery), sans rien valider automatiquement.
+Le token n'est consommé QUE lorsque la personne clique sur le bouton
+"Confirmer" ci-dessous -> un pré-chargement automatique n'a plus aucun
+effet, puisqu'il n'y a plus de clic.
+
+Ça suppose d'avoir modifié le template "Reset Password" dans Supabase
+(Authentication > Emails > Templates) pour utiliser :
+    <a href="{{ .RedirectTo }}&token_hash={{ .TokenHash }}&type=recovery">
+au lieu du lien par défaut {{ .ConfirmationURL }}. Nécessite un SMTP
+personnalisé activé sur le projet Supabase (l'éditeur de template est
+verrouillé sans ça).
 """
 
 import os
 import sys
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'core'))
 
-from auth import etablir_session_depuis_tokens, mettre_a_jour_mot_de_passe  # noqa: E402
-
-
-# window.parent.location (pas window.location) : ce script tourne dans
-# l'iframe isolée que Streamlit utilise pour components.html, pas dans la
-# page elle-même -> il faut viser explicitement la fenêtre parente pour
-# lire/modifier la VRAIE barre d'adresse du navigateur.
-_BRIDGE_JS = """
-<script>
-(function() {
-    try {
-        var loc = window.parent.location;
-        if (loc.hash && loc.hash.indexOf("type=recovery") !== -1) {
-            var params = new URLSearchParams(loc.hash.substring(1));
-            var url = new URL(loc.href);
-            url.hash = "";
-            params.forEach(function(valeur, cle) { url.searchParams.set(cle, valeur); });
-            loc.replace(url.toString());
-        }
-    } catch (e) {
-        // Rien de bloquant si ça échoue (ex: restrictions navigateur) :
-        // la personne pourra toujours redemander un lien.
-    }
-})();
-</script>
-"""
+from auth import etablir_session_depuis_token_hash, mettre_a_jour_mot_de_passe  # noqa: E402
 
 
 def gerer_recuperation_mot_de_passe():
@@ -58,28 +43,32 @@ def gerer_recuperation_mot_de_passe():
     À appeler tout en haut de la page, avant l'UI de connexion normale.
 
     Retourne True si un flux de réinitialisation est en cours (l'appelant
-    doit alors faire `st.stop()` juste après, le formulaire "nouveau mot
-    de passe" a déjà été affiché ici) ; False sinon (rien à faire,
-    continuer le rendu normal de la page).
+    doit alors faire `st.stop()` juste après, le formulaire a déjà été
+    affiché ici) ; False sinon (rien à faire, continuer le rendu normal).
     """
-    components.html(_BRIDGE_JS, height=0)
-
     query = st.query_params
-    access_token = query.get("access_token")
-    refresh_token = query.get("refresh_token")
+    token_hash = query.get("token_hash")
     type_lien = query.get("type")
 
-    if type_lien != "recovery" or not access_token or not refresh_token:
+    if type_lien != "recovery" or not token_hash:
         return False
 
-    st.markdown("### 🔑 Choisis un nouveau mot de passe")
+    st.markdown("### 🔑 Réinitialisation du mot de passe")
 
-    if "session_recuperation_etablie" not in st.session_state:
-        succes, resultat = etablir_session_depuis_tokens(access_token, refresh_token)
-        if not succes:
-            st.error(resultat)
-            return True
-        st.session_state.session_recuperation_etablie = True
+    if not st.session_state.get("session_recuperation_etablie"):
+        st.write(
+            "Clique pour confirmer cette demande de réinitialisation "
+            "(cette étape protège contre les liens pré-ouverts "
+            "automatiquement par certaines messageries)."
+        )
+        if st.button("Confirmer et continuer", key="btn_confirmer_recuperation"):
+            succes, resultat = etablir_session_depuis_token_hash(token_hash)
+            if succes:
+                st.session_state.session_recuperation_etablie = True
+                st.rerun()
+            else:
+                st.error(resultat)
+        return True
 
     nouveau_mdp = st.text_input("Nouveau mot de passe", type="password", key="nouveau_mdp_recup")
     confirmation_mdp = st.text_input("Confirme le mot de passe", type="password", key="confirmation_mdp_recup")
@@ -92,7 +81,7 @@ def gerer_recuperation_mot_de_passe():
             if succes:
                 st.success(f"{message} Tu peux maintenant te connecter avec ton nouveau mot de passe ci-dessous.")
                 # Vide les tokens de l'URL : sans ça, un simple rafraîchissement
-                # de la page relancerait ce même flux de récupération en boucle.
+                # de la page relancerait ce même flux de récupération.
                 st.query_params.clear()
                 st.session_state.pop("session_recuperation_etablie", None)
             else:
