@@ -96,11 +96,12 @@ REGLE_CONTEXTE_INVISIBLE = (
 )
 
 
-def _charger_resume_memoire(user_id, agent_id):
+def _charger_resume_memoire(user_id):
     """
     Recupere le resume long-terme (table conversation_summaries) de cet
-    etudiant pour cet agent, s'il existe. Retourne "" si l'etudiant n'est
-    pas connecte (user_id=None) ou si aucun resume n'existe encore.
+    etudiant, valable pour tous les agents de la plateforme (compte
+    unifie, juillet 2026). Retourne "" si l'etudiant n'est pas connecte
+    (user_id=None) ou si aucun resume n'existe encore.
     """
     if not user_id:
         return ""
@@ -109,7 +110,6 @@ def _charger_resume_memoire(user_id, agent_id):
             supabase.table("conversation_summaries")
             .select("summary")
             .eq("user_id", user_id)
-            .eq("agent_id", agent_id)
             .maybe_single()
             .execute()
         )
@@ -122,7 +122,7 @@ def _charger_resume_memoire(user_id, agent_id):
 def _construire_system_prompt(message_utilisateur, agent_id, user_id=None):
     system_prompt = get_system_prompt(agent_id)
     candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
-    resume_memoire = _charger_resume_memoire(user_id, agent_id)
+    resume_memoire = _charger_resume_memoire(user_id)
 
     instructions = "".join(f"\n{c['contenu']}\n" for c in candidats.get("prompts", []))
     contexte_docs = "".join(f"\n{c['contenu']}\n" for c in candidats.get("documents", []))
@@ -174,13 +174,19 @@ def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale)
         logging.error(f"ERREUR SUPABASE (sauvegarde conversations) : {e}")
 
 
-def _mettre_a_jour_resume_si_besoin(user_id, agent_id):
+def _mettre_a_jour_resume_si_besoin(user_id):
     """
     Si assez de nouveaux messages bruts se sont accumules (>= SEUIL_RESUME_MESSAGES)
     depuis le dernier resume, en regenere un condense (ancien resume + messages
     recents) via un modele Groq rapide, l'ecrit dans conversation_summaries, puis
     purge les messages bruts desormais condenses. Ne bloque jamais la reponse a
     l'etudiant : toute erreur est juste loguee, jamais remontee a l'appelant.
+
+    Compte unifie (juillet 2026) : scope par user_id seul, tous agents
+    confondus. `agent_id` reste present dans `conversations` en tant que
+    simple metadonnee de tracabilite (colonne non retiree par la
+    migration), mais ne filtre plus rien ici -> les messages de tous les
+    agents de la plateforme alimentent le meme resume.
     """
     if not user_id:
         return
@@ -189,7 +195,6 @@ def _mettre_a_jour_resume_si_besoin(user_id, agent_id):
             supabase.table("conversations")
             .select("id, role, content, created_at")
             .eq("user_id", user_id)
-            .eq("agent_id", agent_id)
             .order("created_at", desc=True)
             .limit(SEUIL_RESUME_MESSAGES)
             .execute()
@@ -198,7 +203,7 @@ def _mettre_a_jour_resume_si_besoin(user_id, agent_id):
         if len(messages) < SEUIL_RESUME_MESSAGES:
             return  # pas encore assez de matiere pour justifier un resume
 
-        ancien_resume = _charger_resume_memoire(user_id, agent_id)
+        ancien_resume = _charger_resume_memoire(user_id)
         messages_recents = "\n".join(
             f"{'Étudiant' if m['role'] == 'user' else 'Assistant'} : {m['content']}"
             for m in reversed(messages)
@@ -226,7 +231,6 @@ def _mettre_a_jour_resume_si_besoin(user_id, agent_id):
 
         supabase.table("conversation_summaries").upsert({
             "user_id": user_id,
-            "agent_id": agent_id,
             "summary": nouveau_resume,
         }).execute()
 
@@ -236,7 +240,7 @@ def _mettre_a_jour_resume_si_besoin(user_id, agent_id):
         if ids_a_purger:
             supabase.table("conversations").delete().in_("id", ids_a_purger).execute()
 
-        logging.info(f"Résumé mémoire mis à jour pour user={user_id}, agent={agent_id}.")
+        logging.info(f"Résumé mémoire mis à jour pour user={user_id}.")
     except Exception as e:
         logging.error(f"ERREUR mise à jour résumé mémoire : {e}")
 
@@ -476,8 +480,10 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     `user_id` (session.user.id de Supabase Auth, ou None si l'etudiant n'est
     pas connecte) est transmis au registre d'outils pour que les outils "par
     utilisateur" (ex: Notion) sachent pour qui aller chercher un token. Il sert
-    aussi a scoper la memoire long-terme (conversations/conversation_summaries) :
-    sans user_id (etudiant non connecte), rien n'est lu ni ecrit en memoire.
+    aussi a scoper la memoire long-terme (conversation_summaries, scope par
+    user_id seul depuis le compte unifie de juillet 2026 -> le resume suit
+    l'etudiant d'un agent a l'autre, pas cloisonne par agent) : sans user_id
+    (etudiant non connecte), rien n'est lu ni ecrit en memoire.
 
     `agent_id` (optionnel) determine quel prompt systeme et quelles donnees
     RAG utiliser (voir configuration.py / retriever.py). Si non fourni, on
@@ -578,7 +584,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 reponse_accumulee,
             )
             _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee))
-            _mettre_a_jour_resume_si_besoin(user_id, agent_id)
+            _mettre_a_jour_resume_si_besoin(user_id)
             return
         except Exception as e:
             if not _est_timeout(e):
@@ -607,7 +613,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     reponse_accumulee,
                 )
                 _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee))
-                _mettre_a_jour_resume_si_besoin(user_id, agent_id)
+                _mettre_a_jour_resume_si_besoin(user_id)
                 return
             except Exception as e:
                 if not _est_timeout(e):
@@ -639,7 +645,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     yield {"type": "reponse", "texte": chunk.text}
             logging.info("Réponse via GEMINI")
             _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee))
-            _mettre_a_jour_resume_si_besoin(user_id, agent_id)
+            _mettre_a_jour_resume_si_besoin(user_id)
             return
         except Exception as e:
             if not _est_timeout(e):
