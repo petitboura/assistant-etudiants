@@ -386,17 +386,30 @@ le repo.**
       tout le reste retombe sur `UI_CONFIG_PAR_DEFAUT` côté
       `faces/vues/chat.py` (aucune modif nécessaire là-bas). **Poussé sur
       `main` par Bourama (upload manuel), vérifié identique sur le repo.**
-- [ ] `GET /api/feed` : **code écrit le 2026-07-11 dans `api/main.py`,
-      PAS ENCORE CONFIRMÉ POUSSÉ sur `main`** — route publique
+- [x] `GET /api/feed` : **confirmé présent et identique sur `main`**
+      (relu depuis un clone frais du repo le 2026-07-11) — route publique
       (`GET /api/feed?page=1&limite=20`, pagination offset plafonnée à
       50/page), liste les agents où `actif` est `True` OU absent/NULL
       (même convention que `_agent_est_actif` dans `chat.py`, pour ne pas
       faire disparaître les agents créés avant l'ajout de la colonne
       `actif`). Retourne `id`, `nom`, `icone_page`, `image_vitrine_url`,
-      `description`. Non exécuté (pas d'environnement FastAPI/Supabase
-      disponible pour tester) — seulement vérifié syntaxiquement. **À
-      uploader puis tester avant de cocher.**
-- [ ] `GET /api/agents/{slug}` : détail public d'un agent
+      `description`. Testé en local avec `TestClient` (Supabase factice) :
+      démarre sans erreur d'import, route atteinte, gère l'erreur Supabase
+      proprement (500 propre, pas de crash) — pas testé avec une vraie
+      base Supabase.
+- [ ] `GET /api/agents/{slug}` : **code écrit le 2026-07-11 dans
+      `api/agents.py` (`GET /api/agents/{agent_id}`), PAS ENCORE POUSSÉ
+      sur `main`** — public, aucune auth. Retourne `id`, `nom`,
+      `icone_page`, `image_vitrine_url`, `description`, `owner_id` (ce
+      dernier pour préparer le lien vers le portfolio créateur à l'Étape
+      E, sans résoudre le profil ici). 404 si agent introuvable OU
+      `actif` est `False` explicitement (même convention "True par
+      défaut" que `/api/feed` et `_agent_est_actif`). Testé en local avec
+      `TestClient` (Supabase factice) : démarre sans erreur d'import,
+      route atteinte, 500 propre sur erreur Supabase (pas de crash) — pas
+      testé avec une vraie base Supabase ni un vrai agent
+      actif/désactivé. **À uploader (token GitHub toujours invalide, voir
+      Changelog) puis tester en conditions réelles avant de cocher.**
 - [ ] `PATCH /api/agents/{id}/vitrine` : mise à jour image + description
 - [ ] `POST /api/agents/{id}/rating`, `GET /api/agents/{id}/rating`
 - [ ] `POST /api/agents/{id}/comments`, `GET /api/agents/{id}/comments`
@@ -537,3 +550,13 @@ le repo.**
   du token GitHub fourni précédemment : toujours 401 Bad credentials,
   invalide/révoqué, pas un problème de rate limit — un nouveau token
   serait nécessaire pour que l'IA commite directement à l'avenir.
+- 2026-07-11 — Reprise de session : clone frais du repo, confirmation que
+  `GET /api/feed` est bien présent et identique sur `main` (coché).
+  `GET /api/agents/{agent_id}` (détail public d'un agent) écrit dans
+  `api/agents.py`, testé en local (`TestClient`, Supabase factice) :
+  import et routing OK, erreurs gérées proprement. Toujours pas
+  d'accès en écriture au dépôt (token GitHub invalide, confirmé à
+  nouveau : `git push` échoue faute d'identifiants configurés) —
+  fichier à uploader manuellement par Bourama. Prochaine étape une fois
+  uploadé et testé en conditions réelles : `PATCH /api/agents/{id}/vitrine`
+  ou un nouveau token GitHub pour débloquer les commits directs.
