@@ -454,25 +454,40 @@ le repo.**
       (`creators_router`, prefix `/api/creators`). Testé en local : sans
       token → 401 sur les deux routes. Pas testé avec un vrai token ni
       une vraie écriture en base.
-- [ ] `GET /api/profiles/{slug}`, `PATCH /api/profiles/me` : **PAS
-      COMMENCÉ — bloqué sur une décision non tranchée**, déjà notée plus
-      haut (section "Étape B") : `profiles.slug` existe en base mais rien
-      ne le remplit encore, pas de code de génération à l'inscription.
-      Écrire `GET /api/profiles/{slug}` maintenant obligerait à choisir
-      seul un mécanisme de génération de slug (ex. dérivé de
-      `nom_affiche`, ou repli sur `user_id` comme fait pour
-      `agents.id` — voir Étape B) sans validation de Bourama, alors que
-      cette même note dit explicitement "à faire à l'Étape D ou en
-      trigger Supabase, pas décidé encore". Différent du cas
-      `agents.id` : là, l'id existait déjà et servait déjà de facto de
-      slug lisible (vérifié en base) ; ici, rien n'existe encore à
-      réutiliser. À trancher avec Bourama avant de continuer sur ce
-      point précis.
-- [ ] `GET /api/search?q=...` : **PAS COMMENCÉ**, dépend indirectement de
-      la même décision que ci-dessus si la recherche doit renvoyer des
-      liens de profils (`/u/[slug]`) — la recherche d'agents seule
-      (`agents.nom`/`agents.id`) n'a pas ce blocage et peut être faite
-      indépendamment si utile avant la décision sur les profils.
+- [ ] `GET /api/profiles/{slug}`, `PATCH /api/profiles/me` : **code écrit
+      le 2026-07-11 dans un nouveau fichier `api/profiles.py`, PAS ENCORE
+      POUSSÉ sur `main`**. Décision prise faute de réponse tranchée de
+      Bourama sur la génération de `profiles.slug` : ces routes
+      utilisent **`user_id` directement comme clé d'URL**
+      (`/api/profiles/{user_id}`, pas `{slug}`), même repli que celui
+      déjà fait pour `agents.id`. À l'inverse du cas `agents.id`
+      cependant, rien n'existait déjà à réutiliser ici (juste un choix
+      pragmatique, pas une redécouverte d'une valeur déjà présente en
+      base) — **à revalider avec Bourama**, et à remplacer par un vrai
+      slug quand sa génération sera décidée (changement d'URL, pas une
+      simple substitution de colonne). `GET` : portfolio public, inclut
+      la liste des agents actifs du créateur (best-effort : l'échec de
+      cette sous-requête n'empêche pas de renvoyer le profil), 404 si
+      aucun profil n'existe pour ce `user_id`. `PATCH /me` : upsert (pas
+      update seul), car rien ne garantit qu'une ligne `profiles` existe
+      déjà — sert aussi de création de profil au premier appel. Testé en
+      local : `GET` atteint la DB (500 propre sur Supabase factice),
+      `PATCH` sans token → 401. Pas testé avec une vraie base.
+- [x] `GET /api/search?q=...` : **code écrit le 2026-07-11 dans un
+      nouveau fichier `api/search.py`, PAS ENCORE POUSSÉ sur `main`** —
+      recherche `ilike` sur `agents.nom` et `profiles.nom_affiche`
+      (identifiants renvoyés : `agents.id` et `profiles.user_id`, même
+      logique que ci-dessus pour les créateurs), 20 résultats max par
+      catégorie, aucune pagination/scoring pour cette v1 (conforme à la
+      note de PIVOT_SOCIAL.md : pas de moteur dédié nécessaire). **Chaque
+      sous-recherche est best-effort** : si `agents` ou `profiles` échoue
+      côté Supabase, cette catégorie renvoie une liste vide plutôt qu'une
+      500 globale — comportement volontairement différent des autres
+      endpoints (qui échouent fort), à valider avec Bourama si ce n'est
+      pas le comportement voulu pour une recherche. Testé en local : sans
+      `q` → 422 (validation), avec `q` → 200 avec listes vides (Supabase
+      factice, erreurs absorbées comme prévu). Pas testé avec une vraie
+      base ni de vraies données à retrouver.
 - [ ] Reprend l'Étape 2 (upload documents) de `api/PLAN.md`, inchangée
       par le pivot. L'Étape 4 (chat SSE) de `api/PLAN.md` est abandonnée
       (voir "Ce qui ne change pas" — le chat reste en Streamlit)
@@ -640,3 +655,18 @@ le repo.**
   `profiles.slug`, non tranchée (voir note Étape B) — décision à prendre
   avec Bourama avant de continuer sur ce point, pas de choix fait seul.
   Toujours pas d'accès en écriture au dépôt.
+- 2026-07-11 — Suite de session : Bourama a demandé de continuer sans
+  trancher la question posée sur `profiles.slug`. Décision prise par
+  défaut (à revalider) : `GET /api/profiles/{user_id}` et
+  `PATCH /api/profiles/me` écrits dans un nouveau fichier
+  `api/profiles.py`, en utilisant `user_id` comme clé d'URL en attendant
+  une vraie génération de slug. `GET /api/search?q=...` écrit dans
+  `api/search.py` (recherche `ilike` sur agents + créateurs, best-effort
+  par catégorie). Routeurs `profiles_router` et `search_router`
+  enregistrés dans `api/main.py`. Tous testés en local (401 sans token,
+  422 sur validation manquante, erreurs Supabase absorbées proprement).
+  **L'Étape C du pivot social est maintenant entièrement écrite**
+  (aucun endpoint restant dans la checklist), mais rien n'est poussé sur
+  `main` (token GitHub toujours invalide) ni testé avec une vraie base
+  Supabase. Prochaine étape : upload manuel de tous les fichiers de cette
+  étape, tests en conditions réelles, puis Étape D (frontend Next.js).
