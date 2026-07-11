@@ -49,6 +49,7 @@ from auth import inscription, connexion, deconnexion  # noqa: E402
 from index_documents import indexer_document, indexer_texte  # noqa: E402
 from storage import upload_document  # noqa: E402
 from themes import POLICES_AFFICHEES, POLICE_PAR_DEFAUT, RAYONS, RAYON_PAR_DEFAUT, TAILLES, TAILLE_PAR_DEFAUT  # noqa: E402
+from creation_agent import generer_id_depuis_nom, extraire_id_notion, composer_system_prompt  # noqa: E402
 
 # Identité visuelle Djiguignè AI (voir vues/theme_djiguigne.py) : ce module
 # ne restyle QUE l'habillage (couleurs, polices, header) et ne touche à
@@ -630,73 +631,6 @@ with st.form("formulaire_creation_agent"):
     bouton_soumission = st.form_submit_button("🚀 Créer mon agent", use_container_width=True)
 
 
-def _generer_id_depuis_nom(nom):
-    """
-    Transforme "Coach fitness" en "coach-fitness". Doit rester unique dans
-    la table `agents` (clé primaire texte) -> voir vérification plus bas.
-    """
-    slug = nom.strip().lower()
-    slug = re.sub(r"[^a-z0-9]+", "-", slug)
-    return slug.strip("-")
-
-
-def _extraire_id_notion(lien_ou_id):
-    """
-    Accepte soit un lien Notion complet (https://www.notion.so/Titre-xxxxx),
-    soit l'ID brut (avec ou sans tirets), et retourne toujours l'ID au
-    format UUID standard attendu par indexers/index_notion.py (déjà
-    multi-agent, lit agents.notion_page_id pour chaque agent).
-    Retourne None si rien d'exploitable n'est trouvé (champ optionnel).
-    """
-    if not lien_ou_id or not lien_ou_id.strip():
-        return None
-    hex_seul = re.sub(r"[^a-f0-9]", "", lien_ou_id.strip().lower())
-    if len(hex_seul) < 32:
-        return None
-    brut = hex_seul[-32:]
-    return f"{brut[0:8]}-{brut[8:12]}-{brut[12:16]}-{brut[16:20]}-{brut[20:32]}"
-
-
-def _composer_system_prompt(
-    ton, posture_generale, limites_globales, lignes_comportement,
-    type_connaissance, description_connaissance,
-):
-    """
-    Assemble les champs structurés des points 1, 2 et 4 du cadre de
-    conception en UN SEUL texte brut (jamais de JSON) : c'est ce texte,
-    et rien d'autre, qui est envoyé au LLM comme system prompt (voir
-    core/configuration.py, colonne agents.system_prompt).
-
-    Reste modifiable tel quel ensuite par le créateur depuis "Mes
-    agents" (faces/mes_agents.py) — composition automatique à la
-    création, texte libre éditable après coup.
-    """
-    parties = []
-
-    bloc_identite = [f"Ton : {ton}."]
-    if posture_generale.strip():
-        bloc_identite.append(f"Posture générale : {posture_generale.strip()}.")
-    if limites_globales.strip():
-        bloc_identite.append(
-            f"Limites globales, à ne jamais franchir : {limites_globales.strip()}"
-        )
-    parties.append("## Identité\n" + "\n".join(bloc_identite))
-
-    lignes_utiles = [
-        (t.strip(), c.strip()) for t, c in lignes_comportement if t.strip() and c.strip()
-    ]
-    if lignes_utiles:
-        bloc_comportement = "\n".join(f"- {t} : {c}" for t, c in lignes_utiles)
-        parties.append("## Comportement selon le type de requête\n" + bloc_comportement)
-
-    bloc_connaissance = [f"Nature de la connaissance : {type_connaissance}."]
-    if description_connaissance.strip():
-        bloc_connaissance.append(f"Contenu : {description_connaissance.strip()}")
-    parties.append("## Base de connaissance\n" + "\n".join(bloc_connaissance))
-
-    return "\n\n".join(parties)
-
-
 if bouton_soumission:
     erreurs = []
     if not nom_agent.strip():
@@ -713,7 +647,7 @@ if bouton_soumission:
         for e in erreurs:
             st.error(e)
     else:
-        agent_id = _generer_id_depuis_nom(nom_agent)
+        agent_id = generer_id_depuis_nom(nom_agent)
 
         # Vérifie l'unicité de l'id avant d'insérer, pour donner un message
         # clair plutôt que de laisser Supabase renvoyer une erreur de clé
@@ -736,12 +670,12 @@ if bouton_soumission:
                 "Choisis un nom légèrement différent."
             )
         else:
-            system_prompt = _composer_system_prompt(
+            system_prompt = composer_system_prompt(
                 ton, posture_generale, limites_globales, lignes_comportement,
                 type_connaissance, description_connaissance,
             )
 
-            notion_page_id = _extraire_id_notion(lien_notion)
+            notion_page_id = extraire_id_notion(lien_notion)
 
             ui_config = {
                 "titre_page": nom_agent.strip(),
