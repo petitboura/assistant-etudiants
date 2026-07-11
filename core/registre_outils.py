@@ -18,10 +18,10 @@ parametres user_id/agent_id sont ignores par la plupart des outils (cle
 API globale, comme Tavily/Wolfram) ; ils ne sont utiles que pour un outil
 "par utilisateur" (cle "necessite_utilisateur": True), ou chaque etudiant
 connecte son propre compte plutot que d'utiliser une cle partagee par
-toute l'app. Pour Notion specifiquement, la connexion est EN PLUS scopee
-par agent_id (Option A, juillet 2026) : un etudiant connecte a Notion
-pour l'agent X n'est PAS automatiquement connecte pour l'agent Y, meme
-s'il s'agit du meme etudiant -> voir connexions/notion.py.
+toute l'app. Pour Notion specifiquement, la connexion est scopee par
+user_id seul (compte unifie, juillet 2026) : un etudiant connecte a
+Notion depuis n'importe quel agent l'est automatiquement pour tous les
+autres agents de la plateforme -> voir connexions/notion.py.
 
 POUR UN OUTIL "PAR UTILISATEUR" (ex: Notion) :
 Ajoute "necessite_utilisateur": True dans son entree. Le dispatcher
@@ -50,7 +50,10 @@ def _url_notion(get_secret, user_id, agent_id):
 
 
 def _headers_notion(get_secret, user_id, agent_id):
-    token = obtenir_token_valide(user_id, agent_id)
+    # agent_id fait partie de la signature commune a tous les *_builder
+    # (voir docstring en tete de fichier) mais n'est plus utilise ici :
+    # la connexion Notion est scopee par user_id seul (compte unifie).
+    token = obtenir_token_valide(user_id)
     if not token:
         return None
     return {"Authorization": f"Bearer {token}"}
