@@ -17,7 +17,7 @@ import sys
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, supabase, get_secret
@@ -307,3 +307,145 @@ def mettre_a_jour_vitrine(
         description=ligne.get("description") or "",
         owner_id=ligne["owner_id"],
     )
+
+
+class NoterAgentPayload(BaseModel):
+    note: int
+
+
+@router.post("/{agent_id}/rating", status_code=204)
+def noter_agent(agent_id: str, payload: NoterAgentPayload, utilisateur=Depends(utilisateur_courant)):
+    """
+    Note un agent de 1 à 5 (table `agent_ratings`, voir PIVOT_SOCIAL.md :
+    contrainte unique `(agent_id, user_id)` — un utilisateur note un agent
+    une seule fois mais peut modifier sa note). Upsert plutôt qu'insert
+    pour porter ce comportement directement, sans 409 + endpoint PATCH
+    séparé pour le même geste côté frontend (contrairement à `/vitrine`,
+    qui est une vraie modification d'un objet déjà possédé).
+
+    Ne vérifie pas que l'agent existe avant d'insérer : la contrainte FK
+    `agent_id` fera déjà échouer l'upsert proprement si l'agent n'existe
+    pas, pas besoin de dupliquer cette vérification ici.
+    """
+    if not 1 <= payload.note <= 5:
+        raise HTTPException(status_code=422, detail="La note doit être comprise entre 1 et 5.")
+
+    try:
+        supabase.table("agent_ratings").upsert(
+            {"agent_id": agent_id, "user_id": utilisateur.id, "note": payload.note},
+            on_conflict="agent_id,user_id",
+        ).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (upsert note agent={agent_id}, user={utilisateur.id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer la note pour le moment.")
+
+
+class NoteAgregee(BaseModel):
+    moyenne: Optional[float] = None
+    total: int = 0
+
+
+@router.get("/{agent_id}/rating", response_model=NoteAgregee)
+def obtenir_note_agent(agent_id: str):
+    """
+    Note moyenne publique d'un agent, pour l'affichage "note 1-5" sur
+    `/agent/[slug]` (voir PIVOT_SOCIAL.md, tableau des pages du frontend).
+    Public, aucune auth. `moyenne` reste `None` (pas 0) tant qu'aucune
+    note n'existe, pour que le frontend distingue "pas encore noté" de
+    "noté 0".
+    """
+    try:
+        res = supabase.table("agent_ratings").select("note").eq("agent_id", agent_id).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture notes agent={agent_id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger la note pour le moment.")
+
+    notes = [ligne["note"] for ligne in (res.data or [])]
+    if not notes:
+        return NoteAgregee(moyenne=None, total=0)
+    return NoteAgregee(moyenne=round(sum(notes) / len(notes), 2), total=len(notes))
+
+
+class CommentaireCree(BaseModel):
+    contenu: str
+
+
+class Commentaire(BaseModel):
+    id: str
+    agent_id: str
+    user_id: str
+    contenu: str
+    created_at: Optional[str] = None
+
+
+@router.post("/{agent_id}/comments", response_model=Commentaire, status_code=201)
+def creer_commentaire(agent_id: str, payload: CommentaireCree, utilisateur=Depends(utilisateur_courant)):
+    """
+    Ajoute un commentaire sur un agent (table `agent_comments`, voir
+    PIVOT_SOCIAL.md). Un commentaire par appel ; aucune limite de nombre
+    par utilisateur pour l'instant, aucune modération demandée par
+    Bourama à ce stade — à revoir si besoin plus tard.
+    """
+    contenu = payload.contenu.strip()
+    if not contenu:
+        raise HTTPException(status_code=422, detail="Le commentaire ne peut pas être vide.")
+
+    try:
+        res = (
+            supabase.table("agent_comments")
+            .insert({"agent_id": agent_id, "user_id": utilisateur.id, "contenu": contenu})
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (insertion commentaire agent={agent_id}, user={utilisateur.id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le commentaire pour le moment.")
+
+    if not res.data:
+        raise HTTPException(status_code=500, detail="Le commentaire n'a pas pu être créé (erreur technique).")
+
+    ligne = res.data[0]
+    return Commentaire(
+        id=str(ligne["id"]),
+        agent_id=ligne["agent_id"],
+        user_id=ligne["user_id"],
+        contenu=ligne["contenu"],
+        created_at=ligne.get("created_at"),
+    )
+
+
+@router.get("/{agent_id}/comments", response_model=List[Commentaire])
+def lister_commentaires(
+    agent_id: str,
+    page: int = Query(1, ge=1),
+    limite: int = Query(20, ge=1, le=50),
+):
+    """
+    Liste paginée des commentaires d'un agent, plus récents d'abord.
+    Public, aucune auth requise. Mêmes bornes de pagination que
+    `/api/feed` (limite plafonnée à 50/page).
+    """
+    debut = (page - 1) * limite
+    fin = debut + limite - 1
+    try:
+        res = (
+            supabase.table("agent_comments")
+            .select("id, agent_id, user_id, contenu, created_at")
+            .eq("agent_id", agent_id)
+            .order("created_at", desc=True)
+            .range(debut, fin)
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture commentaires agent={agent_id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger les commentaires pour le moment.")
+
+    return [
+        Commentaire(
+            id=str(ligne["id"]),
+            agent_id=ligne["agent_id"],
+            user_id=ligne["user_id"],
+            contenu=ligne["contenu"],
+            created_at=ligne.get("created_at"),
+        )
+        for ligne in (res.data or [])
+    ]
