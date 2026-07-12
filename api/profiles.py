@@ -204,7 +204,10 @@ def mettre_a_jour_mon_profil(
         # (vérification directe de la valeur de slug, pas juste de
         # l'existence de la ligne) tient vraiment. À retirer dès
         # confirmation par Bourama.
-        raise HTTPException(status_code=500, detail=f"Impossible de mettre à jour le profil : {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"[v3-ede24df] Impossible de mettre à jour le profil : {e}",
+        )
 
     try:
         res = (
