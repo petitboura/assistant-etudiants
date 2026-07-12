@@ -247,21 +247,27 @@ st.markdown("""
         box-shadow: none !important;
         border-top: none !important;
     }
-    [data-testid="stChatInput"] {
+    [data-testid="stChatInput"],
+    [data-testid="stChatInputContainer"],
+    div[data-baseweb="textarea"] {
         background-color: var(--dj-surface) !important;
         border: 1px solid var(--dj-bordure) !important;
         border-radius: 999px !important;
+    }
+    [data-testid="stChatInput"] {
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28) !important;
         max-width: 720px;
         margin: 0 auto 1.1rem auto !important;
     }
     /* Au clic/focus, Streamlit applique sa propre bordure de focus (rouge
        #FF4B4B, sa couleur de marque par défaut) par-dessus la nôtre --
-       repéré en conditions réelles (capture d'écran), pas juste supposé.
-       On la remplace explicitement par l'accent du thème. */
-    [data-testid="stChatInput"]:focus-within {
+       repéré en conditions réelles. On change juste la couleur de la
+       bordure existante, SANS ajouter d'anneau (box-shadow) supplémentaire
+       : un ajout précédent créait une double bordure visible (une barre
+       décalée derrière la pilule), lui aussi repéré en conditions réelles. */
+    [data-testid="stChatInput"]:focus-within,
+    div[data-baseweb="textarea"]:focus-within {
         border-color: var(--dj-accent-1) !important;
-        box-shadow: 0 0 0 1px var(--dj-accent-1), 0 6px 24px rgba(0, 0, 0, 0.28) !important;
     }
     [data-testid="stChatInput"] textarea {
         background-color: transparent !important;
