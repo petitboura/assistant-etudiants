@@ -43,6 +43,7 @@ def extraire_id_notion(lien_ou_id):
 def composer_system_prompt(
     ton, posture_generale, limites_globales, lignes_comportement,
     type_connaissance, description_connaissance,
+    nom="", description_publique="",
 ):
     """
     Assemble les champs structurés des points 1, 2 et 4 du cadre de
@@ -53,13 +54,35 @@ def composer_system_prompt(
     `lignes_comportement` : liste de tuples (type_requete, comportement),
     les lignes vides (l'un des deux champs vide) sont ignorées.
 
+    `nom` et `description_publique` (2026-07-12, bug remonté par
+    Bourama : "le nom que tu donnes à ton agent doit être automatiquement
+    dans le system prompt, la description publique aussi") : injectés
+    automatiquement en tête de prompt -- l'agent doit savoir qui il est
+    censé être et comment il se présente publiquement, sans que le
+    créateur ait à ressaisir cette information une seconde fois dans un
+    champ séparé. Paramètres optionnels (chaîne vide = rien n'est ajouté)
+    pour ne pas casser les appels existants qui ne les fournissent pas
+    encore.
+
+    `type_connaissance` optionnel (2026-07-12, même remontée : le champ
+    "Nature de la connaissance" est retiré du formulaire Next.js) : la
+    ligne correspondante n'apparaît dans le prompt QUE si une valeur est
+    fournie, pour ne pas afficher une classification vide de sens à
+    l'agent. Le formulaire Streamlit (faces/vues/creer_agent.py), qui
+    garde ce champ pour l'instant, continue de fonctionner à l'identique.
+
     Reste modifiable tel quel ensuite par le créateur depuis "Mes
     agents" — composition automatique à la création, texte libre
     éditable après coup.
     """
     parties = []
 
-    bloc_identite = [f"Ton : {ton}."]
+    bloc_identite = []
+    if nom.strip():
+        bloc_identite.append(f"Tu es {nom.strip()}.")
+    if description_publique.strip():
+        bloc_identite.append(f"Description publique (vue par les visiteurs) : {description_publique.strip()}")
+    bloc_identite.append(f"Ton : {ton}.")
     if posture_generale.strip():
         bloc_identite.append(f"Posture générale : {posture_generale.strip()}.")
     if limites_globales.strip():
@@ -75,9 +98,12 @@ def composer_system_prompt(
         bloc_comportement = "\n".join(f"- {t} : {c}" for t, c in lignes_utiles)
         parties.append("## Comportement selon le type de requête\n" + bloc_comportement)
 
-    bloc_connaissance = [f"Nature de la connaissance : {type_connaissance}."]
+    bloc_connaissance = []
+    if type_connaissance.strip():
+        bloc_connaissance.append(f"Nature de la connaissance : {type_connaissance.strip()}.")
     if description_connaissance.strip():
         bloc_connaissance.append(f"Contenu : {description_connaissance.strip()}")
-    parties.append("## Base de connaissance\n" + "\n".join(bloc_connaissance))
+    if bloc_connaissance:
+        parties.append("## Base de connaissance\n" + "\n".join(bloc_connaissance))
 
     return "\n\n".join(parties)

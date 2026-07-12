@@ -61,7 +61,11 @@ class CreerAgentPayload(BaseModel):
     limites_globales: str = ""
     comportements: List[LigneComportement] = Field(default_factory=list)
     outils_choisis: List[str] = Field(default_factory=list)
-    type_connaissance: str
+    # Optionnel depuis le 2026-07-12 (Bourama : champ "Nature de la
+    # connaissance" retiré du formulaire Next.js -- voir docstring de
+    # composer_system_prompt). Le formulaire Streamlit continue d'envoyer
+    # une valeur, donc reste géré normalement quand fourni.
+    type_connaissance: str = ""
     description_connaissance: str = ""
     lien_notion: Optional[str] = None
     texte_libre: str = ""
@@ -112,6 +116,7 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
     system_prompt = composer_system_prompt(
         payload.ton, payload.posture_generale, payload.limites_globales,
         lignes_comportement, payload.type_connaissance, payload.description_connaissance,
+        nom=payload.nom, description_publique=payload.description,
     )
     notion_page_id = extraire_id_notion(payload.lien_notion)
 
@@ -125,6 +130,16 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
         "titre_page": payload.nom.strip(),
         "icone_page": ui.icone_page.strip() or "🤖",
         "titre_accueil": f"{ui.icone_page.strip()} {payload.nom.strip()}",
+        # Bug corrigé le 2026-07-12 (Bourama : "le sous-titre est
+        # identique à tous, vraiment tous") : ce champ n'était jamais
+        # écrit ici, donc faces/vues/chat.py retombait systématiquement
+        # sur UI_CONFIG_PAR_DEFAUT["sous_titre_accueil"] (le texte de
+        # l'agent maths historique) pour TOUS les agents créés via ce
+        # flow, quel que soit leur sujet réel. Le formulaire Streamlit
+        # (creer_agent.py) a un champ dédié pour ça ; ce flow-ci n'en a
+        # pas, donc on dérive directement de la description publique
+        # (déjà écrite par le créateur, pas une resaisie).
+        "sous_titre_accueil": payload.description.strip(),
         "emoji_reponse": ui.icone_page.strip(),
     }
 

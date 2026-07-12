@@ -694,6 +694,7 @@ if bouton_soumission:
             system_prompt = composer_system_prompt(
                 ton, posture_generale, limites_globales, lignes_comportement,
                 type_connaissance, description_connaissance,
+                nom=nom_agent,
             )
 
             notion_page_id = extraire_id_notion(lien_notion)
