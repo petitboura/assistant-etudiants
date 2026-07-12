@@ -31,7 +31,7 @@ app = FastAPI(title="Djiguigne API", version="0.1.0")
 ORIGINES_AUTORISEES = [
     "http://localhost:3000",
     "https://app.djiguigne.com",
-    "https://djiguign-ai.vercel.app"
+    "https://djiguign-ai.vercel.app",
 ]
 
 # En plus des domaines fixes ci-dessus : Vercel donne une URL DIFFERENTE
