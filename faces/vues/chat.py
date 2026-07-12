@@ -247,17 +247,45 @@ st.markdown("""
         box-shadow: none !important;
         border-top: none !important;
     }
-    [data-testid="stChatInput"],
-    [data-testid="stChatInputContainer"],
-    div[data-baseweb="textarea"] {
+    /* CORRECTIF (repéré en conditions réelles, capture d'écran) : la
+       version précédente posait border + background + border-radius sur
+       TROIS niveaux emboîtés à la fois (stChatInput > stChatInputContainer
+       > div[data-baseweb="textarea"]) -> chaque niveau dessinait SON PROPRE
+       cadre, donnant l'impression de trois pilules imbriquées au lieu
+       d'une seule. Un seul niveau (le plus extérieur, stChatInput) porte
+       maintenant la pilule visible ; tous les niveaux internes sont
+       explicitement rendus transparents et sans bordure pour ne plus
+       dessiner leur propre cadre. */
+    [data-testid="stChatInput"] {
         background-color: var(--dj-surface) !important;
         border: 1px solid var(--dj-bordure) !important;
         border-radius: 999px !important;
-    }
-    [data-testid="stChatInput"] {
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28) !important;
         max-width: 720px;
         margin: 0 auto 1.1rem auto !important;
+        overflow: hidden;
+    }
+    [data-testid="stChatInput"] [data-testid="stChatInputContainer"],
+    [data-testid="stChatInput"] div[data-baseweb="textarea"] {
+        background-color: transparent !important;
+        border: none !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+    /* Bouton d'envoi : gardait son propre fond/bordure par défaut, visible
+       comme un carré distinct à droite de la pilule (le "cadre derrière"
+       repéré sur la capture). Rendu transparent pour se fondre dans la
+       pilule -- seule l'icône flèche reste visible, recolorée ci-dessous. */
+    [data-testid="stChatInput"] button {
+        background-color: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+    }
+    [data-testid="stChatInput"] button svg {
+        fill: var(--dj-texte-muet) !important;
+    }
+    [data-testid="stChatInput"] button:hover svg {
+        fill: var(--dj-accent-1) !important;
     }
     /* Au clic/focus, Streamlit applique sa propre bordure de focus (rouge
        #FF4B4B, sa couleur de marque par défaut) par-dessus la nôtre --
@@ -265,8 +293,7 @@ st.markdown("""
        bordure existante, SANS ajouter d'anneau (box-shadow) supplémentaire
        : un ajout précédent créait une double bordure visible (une barre
        décalée derrière la pilule), lui aussi repéré en conditions réelles. */
-    [data-testid="stChatInput"]:focus-within,
-    div[data-baseweb="textarea"]:focus-within {
+    [data-testid="stChatInput"]:focus-within {
         border-color: var(--dj-accent-1) !important;
     }
     [data-testid="stChatInput"] textarea {
