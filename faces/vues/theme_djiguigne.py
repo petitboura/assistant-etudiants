@@ -163,6 +163,35 @@ div[data-baseweb="input"] button svg, div[data-baseweb="base-input"] button svg 
 div[data-baseweb="input"] button:hover svg, div[data-baseweb="base-input"] button:hover svg {
     fill: var(--dj-accent-1) !important;
 }
+/* stTextInputRootElement : conteneur Streamlit (PAS le même niveau que
+   div[data-baseweb="input"] ci-dessus -- deux wrappers différents selon
+   la version de Streamlit) qui enveloppe input + bouton œil (mot de
+   passe). Repéré en conditions réelles (capture d'écran) : gardait un
+   fond blanc/clair par défaut, non couvert par les règles baseweb
+   au-dessus -> rendait le bouton "afficher le mot de passe" invisible
+   (icône sombre sur fond blanc, quasi imperceptible). Même triple
+   ciblage (racine + input + bouton) que pour les blocs st.code() plus
+   haut, pour la même raison (contraste clair-sur-clair). */
+[data-testid="stTextInputRootElement"] {
+    background-color: var(--dj-surface) !important;
+    border-color: var(--dj-bordure) !important;
+}
+[data-testid="stTextInputRootElement"] input {
+    background-color: transparent !important;
+    color: var(--dj-texte) !important;
+    -webkit-text-fill-color: var(--dj-texte) !important;
+}
+[data-testid="stTextInputRootElement"] button {
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+[data-testid="stTextInputRootElement"] button svg {
+    fill: var(--dj-texte-muet) !important;
+}
+[data-testid="stTextInputRootElement"] button:hover svg {
+    fill: var(--dj-accent-1) !important;
+}
 div[data-baseweb="select"] > div {
     background: var(--dj-surface) !important;
     border-color: var(--dj-bordure) !important;
@@ -193,6 +222,14 @@ button[data-baseweb="tab"] { color: var(--dj-texte-muet) !important; font-family
 button[data-baseweb="tab"][aria-selected="true"] {
     color: var(--dj-accent-1) !important;
     border-bottom-color: var(--dj-accent-1) !important;
+}
+/* Barre de surlignage sous l'onglet actif : un élément SÉPARÉ du bouton
+   lui-même (une petite barre qui glisse d'un onglet à l'autre), gardait
+   la couleur rouge par défaut de Streamlit (primaryColor #FF4B4B) même
+   après avoir stylé le bouton actif ci-dessus -- repéré en conditions
+   réelles (capture d'écran), pas seulement supposé. */
+[data-baseweb="tab-highlight"] {
+    background-color: var(--dj-accent-1) !important;
 }
 
 /* --- Badges de statut (utilisés via st.markdown, classes dj-badge-*) ----*/
