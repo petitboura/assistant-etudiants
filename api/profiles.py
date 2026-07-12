@@ -180,7 +180,11 @@ def mettre_a_jour_mon_profil(
         supabase.table("profiles").upsert(ligne, on_conflict="user_id").execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (upsert profil {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de mettre à jour le profil pour le moment.")
+        # DEBUG TEMPORAIRE (2026-07-12) : le detail générique ne suffisait
+        # pas à diagnostiquer sans accès aux logs Railway. str(e) exposé
+        # ici le temps de trouver la vraie cause, à retirer une fois
+        # corrigé (ne pas garder ça en l'état pour de vrai en prod).
+        raise HTTPException(status_code=500, detail=f"Impossible de mettre à jour le profil : {e}")
 
     try:
         res = (
