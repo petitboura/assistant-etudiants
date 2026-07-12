@@ -182,6 +182,27 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
         # distincte de knowledge_source.description (usage RAG interne).
         "image_vitrine_url": payload.image_vitrine_url,
         "description": payload.description.strip(),
+        # Colonne ajoutée le 2026-07-12 (Bourama : le formulaire de
+        # modification doit contenir tous les champs de la création).
+        # composer_system_prompt() fusionne ces champs puis les jette —
+        # sans cette colonne, impossible de les réafficher pour édition,
+        # seul le texte composé final survivrait. Un agent créé AVANT
+        # cette migration aura `config_creation IS NULL` (voir
+        # obtenir_agent_pour_edition, qui gère ce cas en repli sur le
+        # system_prompt brut). Inclut `sous_titre` (voir CreerAgentPayload
+        # plus haut, distinct de `description`).
+        "config_creation": {
+            "ton": payload.ton,
+            "posture_generale": payload.posture_generale,
+            "limites_globales": payload.limites_globales,
+            "comportements": [
+                {"type_requete": l.type_requete, "comportement": l.comportement}
+                for l in payload.comportements
+            ],
+            "type_connaissance": payload.type_connaissance,
+            "description_connaissance": payload.description_connaissance,
+            "sous_titre": payload.sous_titre,
+        },
     }
     if notion_page_id:
         nouvelle_ligne["notion_page_id"] = notion_page_id
@@ -344,37 +365,51 @@ def mettre_a_jour_vitrine(
     )
 
 
-class NoterAgentPayload(BaseModel):
-    note: int
+class ConfigCreation(BaseModel):
+    """
+    Les champs discrets du formulaire de création (ton, posture,
+    limites, comportements, type de connaissance, sous-titre), stockés à
+    part depuis le 2026-07-12 dans `agents.config_creation` (voir
+    migration `agents_config_creation`) — avant cette date,
+    `composer_system_prompt` les fusionnait dans `system_prompt` puis les
+    jetait, aucune trace séparée ne survivait. Un agent créé avant cette
+    migration a `config_creation IS NULL` : voir
+    `obtenir_agent_pour_edition`, qui retombe sur le `system_prompt` brut
+    dans ce cas plutôt que d'inventer des valeurs vides qui écraseraient
+    un prompt déjà soigné à l'enregistrement suivant.
+    """
+
+    ton: str = "Tutoiement (tu)"
+    posture_generale: str = ""
+    limites_globales: str = ""
+    comportements: List[LigneComportement] = Field(default_factory=list)
+    type_connaissance: str = ""
+    description_connaissance: str = ""
+    sous_titre: str = ""
 
 
 class AgentEditable(BaseModel):
     """
     Vue complète d'un agent pour SON propriétaire (contrairement à
-    AgentDetailPublic, qui est ce que voit un visiteur). Expose le
-    `system_prompt` brut plutôt que de tenter de reconstruire
-    ton/posture_generale/limites_globales/comportements séparément : ces
-    champs ne sont JAMAIS persistés individuellement en base (voir
-    `creer_agent`, `composer_system_prompt` les fusionne puis les jette),
-    seul le texte final composé survit. C'est le même choix que
-    `faces/vues/mes_agents.py` fait déjà depuis longtemps côté Streamlit
-    (voir son commentaire sur `nouveau_prompt`, "agents historiques") —
-    pas une limite introduite ici, une contrainte déjà là qu'on respecte.
+    AgentDetailPublic, qui est ce que voit un visiteur).
+
+    `config_creation` est `None` pour un agent créé avant le 2026-07-12
+    (voir ConfigCreation) : dans ce cas, le frontend doit retomber sur
+    l'édition du `system_prompt` brut (toujours renvoyé, à jour) plutôt
+    que d'afficher un formulaire structuré avec des champs vides qui
+    écraseraient le prompt existant s'ils étaient enregistrés tels quels.
     """
 
     id: str
     nom: str
     icone_page: str = "🤖"
     system_prompt: str = ""
+    config_creation: Optional[ConfigCreation] = None
     tools_enabled: List[str] = Field(default_factory=list)
     notion_page_id: Optional[str] = None
     texte_libre: str = ""
     image_vitrine_url: Optional[str] = None
     description: str = ""
-    # Ajouté le 2026-07-12 (Bourama : "le dashboard de modification aussi
-    # changer" -- même correctif que la création, la page d'édition ne
-    # gérait jusqu'ici que `description`, sous_titre_accueil n'était ni
-    # lu ni modifiable ici).
     sous_titre: str = ""
     actif: bool = True
 
@@ -393,8 +428,9 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         res = (
             supabase.table("agents")
             .select(
-                "id, nom, ui_config, system_prompt, tools_enabled, notion_page_id, "
-                "knowledge_source, image_vitrine_url, description, actif, owner_id"
+                "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
+                "notion_page_id, knowledge_source, image_vitrine_url, description, "
+                "actif, owner_id"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -411,11 +447,14 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
     if ligne["owner_id"] != utilisateur.id:
         raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
 
+    config_brut = ligne.get("config_creation")
+
     return AgentEditable(
         id=ligne["id"],
         nom=ligne["nom"],
         icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
         system_prompt=ligne.get("system_prompt") or "",
+        config_creation=ConfigCreation(**config_brut) if config_brut else None,
         tools_enabled=ligne.get("tools_enabled") or [],
         notion_page_id=ligne.get("notion_page_id"),
         texte_libre=(ligne.get("knowledge_source") or {}).get("texte_libre", ""),
@@ -431,15 +470,25 @@ class ModifierAgentPayload(BaseModel):
     # touché — même convention que MettreAJourVitrinePayload.
     nom: Optional[str] = None
     icone_page: Optional[str] = None
+    # Champs discrets (formulaire structuré, voir ConfigCreation) : si
+    # AU MOINS UN est fourni, le system_prompt est RECOMPOSÉ à partir
+    # d'eux (fusionnés avec config_creation existant pour les champs
+    # omis) et system_prompt ci-dessous est alors ignoré. À utiliser
+    # quand AgentEditable.config_creation n'était pas None.
+    ton: Optional[str] = None
+    posture_generale: Optional[str] = None
+    limites_globales: Optional[str] = None
+    comportements: Optional[List[LigneComportement]] = None
+    type_connaissance: Optional[str] = None
+    description_connaissance: Optional[str] = None
+    sous_titre: Optional[str] = None
+    # Repli brut (agents pré-migration, AgentEditable.config_creation
+    # était None) : ignoré si un champ discret ci-dessus est fourni.
     system_prompt: Optional[str] = None
     lien_notion: Optional[str] = None
     texte_libre: Optional[str] = None
     image_vitrine_url: Optional[str] = None
     description: Optional[str] = None
-    # Ajouté le 2026-07-12, même correctif que sous_titre dans
-    # CreerAgentPayload : distinct de `description` (taille libre), courte
-    # phrase d'accueil affichée sous le titre au premier écran du chat.
-    sous_titre: Optional[str] = None
     actif: Optional[bool] = None
 
 
@@ -457,14 +506,15 @@ def modifier_agent(
     `agent_comments`, `follows` — le renommer casserait tous les liens
     déjà partagés et les FK existantes. Seul `nom` (colonne d'affichage)
     et les champs dérivés dans `ui_config` (titre_page, titre_accueil,
-    emoji_reponse) changent.
+    emoji_reponse, sous_titre_accueil) changent.
     """
     try:
         res = (
             supabase.table("agents")
             .select(
-                "id, nom, ui_config, system_prompt, tools_enabled, notion_page_id, "
-                "knowledge_source, image_vitrine_url, description, actif, owner_id"
+                "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
+                "notion_page_id, knowledge_source, image_vitrine_url, description, "
+                "actif, owner_id"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -506,11 +556,13 @@ def modifier_agent(
         )
         ui_config_modifie = True
 
-    # Ajouté le 2026-07-12 (Bourama : "le dashboard de modification aussi
-    # changer") : sous_titre_accueil est indépendant de nom/icône, donc
-    # géré dans sa propre condition plutôt que rattaché au bloc
-    # nom/icone_page ci-dessus -- sinon modifier UNIQUEMENT le sous-titre
-    # (sans toucher nom ni icône) n'aurait jamais été écrit en base.
+    # sous_titre_accueil est indépendant de nom/icône, donc géré dans sa
+    # propre condition plutôt que rattaché au bloc nom/icone_page
+    # ci-dessus (voir la fix d'origine de ce champ) -- sinon modifier
+    # UNIQUEMENT le sous-titre (sans toucher nom ni icône) n'aurait
+    # jamais été écrit en base. Peut aussi arriver via les champs
+    # discrets (recomposition ci-dessous) : le bloc discret prend le
+    # dessus s'il est présent, voir plus bas.
     if payload.sous_titre is not None:
         ui_config["sous_titre_accueil"] = payload.sous_titre.strip()
         ui_config_modifie = True
@@ -518,7 +570,78 @@ def modifier_agent(
     if ui_config_modifie:
         mise_a_jour["ui_config"] = ui_config
 
-    if payload.system_prompt is not None:
+    # Recomposition depuis les champs discrets si au moins un est fourni
+    # (formulaire structuré, agent avec config_creation existant) ;
+    # sinon repli sur system_prompt brut si fourni (agent pré-migration).
+    config_actuel = dict(ligne.get("config_creation") or {})
+    champs_discrets_fournis = any(
+        v is not None
+        for v in (
+            payload.ton,
+            payload.posture_generale,
+            payload.limites_globales,
+            payload.comportements,
+            payload.type_connaissance,
+            payload.description_connaissance,
+        )
+    )
+    if champs_discrets_fournis:
+        nouveau_config = {
+            "ton": payload.ton if payload.ton is not None else config_actuel.get("ton", "Tutoiement (tu)"),
+            "posture_generale": (
+                payload.posture_generale
+                if payload.posture_generale is not None
+                else config_actuel.get("posture_generale", "")
+            ),
+            "limites_globales": (
+                payload.limites_globales
+                if payload.limites_globales is not None
+                else config_actuel.get("limites_globales", "")
+            ),
+            "comportements": (
+                [{"type_requete": l.type_requete, "comportement": l.comportement} for l in payload.comportements]
+                if payload.comportements is not None
+                else config_actuel.get("comportements", [])
+            ),
+            "type_connaissance": (
+                payload.type_connaissance
+                if payload.type_connaissance is not None
+                else config_actuel.get("type_connaissance", "")
+            ),
+            "description_connaissance": (
+                payload.description_connaissance
+                if payload.description_connaissance is not None
+                else config_actuel.get("description_connaissance", "")
+            ),
+            "sous_titre": (
+                payload.sous_titre if payload.sous_titre is not None else config_actuel.get("sous_titre", "")
+            ),
+        }
+        lignes_comportement = [
+            (c["type_requete"], c["comportement"]) for c in nouveau_config["comportements"]
+        ]
+        mise_a_jour["system_prompt"] = composer_system_prompt(
+            nouveau_config["ton"],
+            nouveau_config["posture_generale"],
+            nouveau_config["limites_globales"],
+            lignes_comportement,
+            nouveau_config["type_connaissance"],
+            nouveau_config["description_connaissance"],
+            nom=nom_final,
+            description_publique=(
+                payload.description if payload.description is not None else ligne.get("description") or ""
+            ),
+        )
+        mise_a_jour["config_creation"] = nouveau_config
+        # Le sous-titre discret prend le dessus sur celui déjà posé par
+        # payload.sous_titre ci-dessus (même valeur si les deux sont
+        # fournis, ce bloc est juste la source de vérité en cas de
+        # formulaire structuré).
+        ui_config["sous_titre_accueil"] = nouveau_config["sous_titre"] or ui_config.get(
+            "sous_titre_accueil", ""
+        )
+        mise_a_jour["ui_config"] = ui_config
+    elif payload.system_prompt is not None:
         mise_a_jour["system_prompt"] = payload.system_prompt.strip()
 
     if payload.lien_notion is not None:
@@ -564,11 +687,14 @@ def modifier_agent(
         except Exception as e:
             logging.error(f"ERREUR réindexation texte libre (agent_id={agent_id}) : {e}")
 
+    config_final = mise_a_jour.get("config_creation", ligne.get("config_creation"))
+
     return AgentEditable(
         id=agent_id,
         nom=nom_final,
         icone_page=icone_finale,
         system_prompt=mise_a_jour.get("system_prompt", ligne.get("system_prompt") or ""),
+        config_creation=ConfigCreation(**config_final) if config_final else None,
         tools_enabled=ligne.get("tools_enabled") or [],
         notion_page_id=mise_a_jour.get("notion_page_id", ligne.get("notion_page_id")),
         texte_libre=knowledge_source.get("texte_libre", ""),
