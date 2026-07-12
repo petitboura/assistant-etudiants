@@ -195,7 +195,7 @@ def mettre_a_jour_mon_profil(
             supabase.table("profiles").update(ligne).eq("user_id", utilisateur.id).execute()
         except Exception as e:
             logging.error(f"ERREUR SUPABASE (update profil {utilisateur.id}) : {e}")
-            raise HTTPException(status_code=500, detail=f"[v5-update] {e}")
+            raise HTTPException(status_code=500, detail="Impossible de mettre à jour le profil pour le moment.")
     else:
         base = generer_id_depuis_nom(payload.nom_affiche or "") or utilisateur.id[:8]
         slug = base
@@ -224,7 +224,9 @@ def mettre_a_jour_mon_profil(
                 supabase.table("profiles").update(ligne).eq("user_id", utilisateur.id).execute()
             except Exception as e_update:
                 logging.error(f"ERREUR SUPABASE (update de repli profil {utilisateur.id}) : {e_update}")
-                raise HTTPException(status_code=500, detail=f"[v5-insert-puis-update] {e_update}")
+                raise HTTPException(
+                    status_code=500, detail="Impossible de mettre à jour le profil pour le moment."
+                )
 
     try:
         res = (
