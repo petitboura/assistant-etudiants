@@ -5,6 +5,7 @@ Face étudiant — interface Streamlit du coach mathématique.
 import sys
 import os
 import re
+import markdown
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'core'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 # Le dossier vues/ lui-même : st.navigation() exécute cette page via exec(),
@@ -367,6 +368,47 @@ def _normaliser_latex(texte):
     return texte
 
 
+_PREFIXE_PLACEHOLDER_MATHS = "\x00MATHBLOCK"
+
+
+def _proteger_maths_puis_markdown(texte):
+    """
+    Convertit la syntaxe Markdown standard (**gras**, *italique*, etc.) en
+    HTML, pour affichage dans les bulles <div class="message-..."> plus
+    bas (BUG identifié en conditions réelles : ces bulles sont injectées
+    comme un bloc HTML brut dans st.markdown, ce qui désactive tout
+    traitement Markdown à l'intérieur -- les ** restaient visibles tels
+    quels au lieu d'être mis en gras).
+
+    ATTENTION -- piège déjà rencontré une fois (voir historique) : NE PAS
+    appeler markdown.markdown(texte) directement sur le texte déjà passé
+    par _normaliser_latex. Le convertisseur Markdown interprète `_` et `*`
+    comme des marqueurs d'italique/gras, or ces caractères apparaissent
+    constamment DANS les formules ($x_i$, $a_{ij}$...) -> il les corrompt
+    avant même que MathJax les voie. On extrait donc chaque bloc $...$ et
+    $$...$$ AVANT de lancer le Markdown (remplacés par des placeholders
+    neutres, sans aucun caractère spécial Markdown), puis on les réinjecte
+    tels quels une fois le Markdown appliqué au reste. $$...$$ est traité
+    en premier, sinon le motif $...$ matcherait chaque $$ comme deux $
+    simples adjacents et casserait les formules en mode bloc.
+    """
+    blocs_maths = []
+
+    def _extraire(correspondance):
+        blocs_maths.append(correspondance.group(0))
+        return f"{_PREFIXE_PLACEHOLDER_MATHS}{len(blocs_maths) - 1}\x00"
+
+    texte_protege = re.sub(r'\$\$.*?\$\$', _extraire, texte, flags=re.DOTALL)
+    texte_protege = re.sub(r'\$[^$\n]+?\$', _extraire, texte_protege)
+
+    html = markdown.markdown(texte_protege)
+
+    for i, bloc in enumerate(blocs_maths):
+        html = html.replace(f"{_PREFIXE_PLACEHOLDER_MATHS}{i}\x00", bloc)
+
+    return html
+
+
 def _typeset_mathjax():
     """
     Les <script> injectés via st.markdown(unsafe_allow_html=True) ne
@@ -571,6 +613,7 @@ def _consommer_flux(generateur, placeholder_statut, placeholder, reponse_deja=""
                 placeholder_statut.empty()
             reponse_complete += texte
             contenu_affiche = _normaliser_latex(reponse_complete)
+            contenu_affiche = _proteger_maths_puis_markdown(contenu_affiche)
             placeholder.markdown(
                 f'<div class="message-assistant">{contenu_affiche}{UI_CONFIG["emoji_reponse"]}</div><div class="clearfix"></div>',
                 unsafe_allow_html=True
@@ -619,9 +662,11 @@ if len(st.session_state.messages) == 0:
 
 for message in st.session_state.messages:
     if message["role"] == "user":
-        st.markdown(f'<div class="message-user">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+        contenu_affiche_utilisateur = _proteger_maths_puis_markdown(message["content"])
+        st.markdown(f'<div class="message-user">{contenu_affiche_utilisateur}</div><div class="clearfix"></div>', unsafe_allow_html=True)
     else:
         contenu_affiche = _normaliser_latex(message["content"])
+        contenu_affiche = _proteger_maths_puis_markdown(contenu_affiche)
         st.markdown(f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
 # --- Confirmation d'un outil sensible en attente ------------------------
@@ -672,6 +717,7 @@ if st.session_state.confirmation_en_attente is not None:
 
         if nouvelle_attente is None:
             contenu_affiche = _normaliser_latex(reponse_complete)
+            contenu_affiche = _proteger_maths_puis_markdown(contenu_affiche)
             placeholder.markdown(
                 f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>',
                 unsafe_allow_html=True
@@ -716,7 +762,8 @@ elif prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
     if user_id_courant is None:
         st.session_state.compteur_visiteur += 1
     st.session_state.messages.append({"role": "user", "content": prompt})
-    st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+    contenu_affiche_utilisateur = _proteger_maths_puis_markdown(prompt)
+    st.markdown(f'<div class="message-user">{contenu_affiche_utilisateur}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
     historique = [
         {"role": m["role"], "content": m["content"]}
@@ -744,6 +791,7 @@ elif prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
         st.rerun()
 
     contenu_affiche = _normaliser_latex(reponse_complete)
+    contenu_affiche = _proteger_maths_puis_markdown(contenu_affiche)
     placeholder.markdown(
         f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>',
         unsafe_allow_html=True
