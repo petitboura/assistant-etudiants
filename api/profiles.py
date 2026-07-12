@@ -197,16 +197,20 @@ def mettre_a_jour_mon_profil(
         supabase.table("profiles").upsert(ligne, on_conflict="user_id").execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (upsert profil {utilisateur.id}) : {e}")
-        # DEBUG TEMPORAIRE toujours actif (2026-07-12) : deux fixes
-        # précédents se sont révélés insuffisants malgré une conviction
-        # raisonnable à chaque fois -- donc on garde le message réel
-        # exposé un tour de plus, le temps de confirmer que CE fix-ci
-        # (vérification directe de la valeur de slug, pas juste de
-        # l'existence de la ligne) tient vraiment. À retirer dès
-        # confirmation par Bourama.
+        # DEBUG TEMPORAIRE v4 (2026-07-12) : le fix v3 tournait bel et
+        # bien en prod (confirmé par le marqueur [v3-ede24df] vu par
+        # Bourama) mais la 500 persistait à l'identique -- donc mon
+        # raisonnement sur pourquoi slug_existant serait toujours faux
+        # est incomplet quelque part. Plutôt que de re-deviner une 5e
+        # cause dans le vide, on expose directement le contenu réel de
+        # `ligne` (ce qui est vraiment envoyé à Supabase) et de
+        # `slug_existant` (ce qui a vraiment été lu en base juste avant) :
+        # la réponse sera dans les faits, pas dans une nouvelle théorie.
         raise HTTPException(
             status_code=500,
-            detail=f"[v3-ede24df] Impossible de mettre à jour le profil : {e}",
+            detail=(
+                f"[v4] {e} | ligne envoyée={ligne} | slug_existant lu={slug_existant!r}"
+            ),
         )
 
     try:
