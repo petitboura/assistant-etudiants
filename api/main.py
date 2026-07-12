@@ -17,6 +17,7 @@ from api.agents import router as agents_router
 from api.creators import router as creators_router
 from api.profiles import router as profiles_router
 from api.search import router as search_router
+from api.uploads import router as uploads_router
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,15 +25,11 @@ app = FastAPI(title="Djiguigne API", version="0.1.0")
 
 # Domaines autorisés à appeler cette API. "http://localhost:3000" est le
 # port par defaut de `npm run dev` en Next.js, a garder tant que le
-# frontend n'est pas deploye. "djiguign-ai.vercel.app" est le domaine
-# reel du premier deploiement de test (2026-07-12) ; "app.djiguigne.com"
-# reste liste par avance pour le futur domaine personnalise (Etape 5 du
-# PLAN.md), pas encore actif tant qu'il n'est pas configure sur Vercel.
+# frontend n'est pas deploye. A completer avec le vrai domaine une fois
+# app.djiguigne.com cree (Etape 5 du PLAN.md).
 ORIGINES_AUTORISEES = [
     "http://localhost:3000",
-    "https://djiguign-ai.vercel.app",
     "https://app.djiguigne.com",
-    "https://djiguign-pgwfo47je-petitbouras-projects.vercel.app",
 ]
 
 app.add_middleware(
@@ -47,6 +44,7 @@ app.include_router(agents_router)
 app.include_router(creators_router)
 app.include_router(profiles_router)
 app.include_router(search_router)
+app.include_router(uploads_router)
 
 
 @app.get("/health")
