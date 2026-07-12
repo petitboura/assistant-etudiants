@@ -969,3 +969,113 @@ noté ici pour que ce soit visible.
   Zips finaux mis à jour (contenu cumulatif complet, mêmes noms de
   fichiers que d'habitude : `djiguigne-app-final.zip`,
   `djiguigne-backend-final.zip` — remplacent les précédents).
+- 2026-07-12 — Bug corrigé (remonté par capture d'écran, agent
+  "Mathématique" affichant du LaTeX brut au lieu de le rendre) : PAS un
+  bug du nouveau code — c'est un agent créé AVANT le pivot social, avec
+  la case "Activer le rendu LaTeX" décochée (défaut `False` dans l'ancien
+  formulaire Streamlit, `faces/vues/creer_agent.py`). Le nouveau
+  formulaire Next.js (Étape D.6) n'expose plus cette case du tout et
+  hérite du défaut `True`, mais un agent pré-pivot garde son
+  `rendu_visuel: False` explicite en base, jamais écrasé par le défaut
+  (`config.update()` fusionne, ne remplace pas). Demande de Bourama :
+  supprimer le toggle entièrement, MathJax pour TOUS les agents, sans
+  condition — fait dans `faces/vues/chat.py` (appel à `_typeset_mathjax()`
+  inconditionnel, plus de `if UI_CONFIG["rendu_visuel"]`). Vérifié par
+  `ast.parse` seulement. Fichier Streamlit, pas dans `api/` — zip séparé
+  (`djiguigne-backend-fix-latex.zip`, `faces/vues/chat.py`).
+- 2026-07-12 — Gros morceau ajouté (demande de Bourama : "on ne peut pas
+  modifier ces agents créés") : édition complète d'un agent après
+  création, jusque-là uniquement possible côté Streamlit
+  (`faces/vues/mes_agents.py`), jamais branchée au nouveau frontend.
+  - Backend (`api/agents.py`) : `GET /{agent_id}/edition` (vue complète
+    réservée au propriétaire — expose le `system_prompt` BRUT, pas de
+    reconstruction de ton/posture/comportements séparés, ces champs ne
+    sont jamais persistés individuellement, même limite déjà présente
+    dans `mes_agents.py`), `PATCH /{agent_id}` (modification partielle :
+    nom, icône, system_prompt, lien Notion, texte libre — réindexé via
+    `indexer_texte` qui remplace déjà les anciens chunks —, image
+    vitrine, description, actif/inactif ; `agents.id` n'est JAMAIS
+    modifié même si le nom change, pour ne pas casser les URLs/FK
+    existantes), `GET /{agent_id}/documents` et
+    `DELETE /{agent_id}/documents/{nom_stockage}` (liste/suppression des
+    PDF déjà indexés, avec purge des chunks vectorisés associés). Toutes
+    ces routes vérifient la propriété de l'agent (403 sinon). Vérifié par
+    `ast.parse` seulement, comme les fixes précédents.
+  - Frontend : nouvelle page `app/dashboard/agents/[id]/modifier/page.tsx`
+    (formulaire pré-rempli, gestion des PDF indexés, toggle actif/inactif)
+    + lien "Modifier →" ajouté sous chaque carte dans "Mes agents"
+    (`app/dashboard/page.tsx`). `tsc --noEmit` OK.
+  Zips finaux mis à jour, mêmes noms que d'habitude
+  (`djiguigne-app-final.zip`) — et **changement de convention** :
+  `djiguigne-backend-final.zip` contient maintenant TOUT le côté
+  `assistant-etudiants` en un seul zip (`api/` ET `faces/vues/chat.py`),
+  pour ne plus avoir à distinguer plusieurs zips backend séparés.
+- 2026-07-12 — **Découverte importante en début de session** : les deux
+  dépôts (`assistant-etudiants` et `djiguign--ai`) avaient divergé de mes
+  copies locales — du travail a été fait directement dessus entre les
+  sessions (probablement une autre session Claude Code avec accès push
+  direct à GitHub), incluant :
+  - `api/main.py` : CORS élargi à tous les sous-domaines Vercel du projet
+    (regex `djiguign[a-z0-9\-]*\.vercel\.app`) plutôt qu'une liste figée
+  - `api/profiles.py` : **meilleure correction** du bug "modification du
+    profil ne fonctionne qu'une fois" que celle que j'avais préparée —
+    debug en conditions réelles ayant montré que même en incluant
+    toujours `slug` dans l'upsert, `upsert()` tentait quand même un
+    INSERT au lieu d'un UPDATE ; remplacé par un `update()` explicite
+    (avec repli `insert()` puis `update()` si la ligne n'existe vraiment
+    pas). **Ma version locale de ce fichier a été abandonnée**, celle du
+    dépôt fait foi.
+  - `api/agents.py` : ajout d'un champ `sous_titre` distinct de
+    `description` (bug "le sous-titre est identique à tous les agents") ;
+    endpoints d'édition déjà posés (v1, `system_prompt` brut seulement)
+  - `faces/vues/chat.py` : lien "← Retour à l'agent" et bloc notes/
+    commentaires ajoutés dans la sidebar (repliée par défaut) pour que
+    quelqu'un qui ouvre le chat en plein écran garde accès à ces
+    fonctionnalités ; ancien bloc Google Forms retiré
+  - Frontend : `components/RecadreurImage.tsx` (recadrage d'image avant
+    upload, branché sur `ChampImage.tsx`), `app/actions.ts` (server
+    action `revaliderPortfolioPublic`)
+
+  **Toute la suite de cette session repart de cette base réelle**, pas de
+  mes anciennes copies locales.
+
+- 2026-07-12 — Champs discrets de création (`config_creation`) fusionnés
+  par-dessus la version réelle d'`api/agents.py` (qui avait déjà `sous_titre`
+  et les endpoints d'édition v1) : `ConfigCreation` (ton, posture,
+  limites, comportements, type de connaissance, description de
+  connaissance, sous-titre), stockée dans `agents.config_creation`
+  (colonne déjà migrée sur Supabase en tout début de cette session).
+  `GET /{id}/edition` renvoie `config_creation` (null pour un agent créé
+  avant cette date). `PATCH /{id}` recompose le `system_prompt` depuis
+  les champs discrets si au moins un est fourni, sinon retombe sur
+  `system_prompt` brut. **Le frontend (`app/dashboard/agents/[id]/modifier/page.tsx`)
+  n'a PAS été mis à jour pour exploiter ces nouveaux champs** — il édite
+  toujours uniquement le `system_prompt` brut. C'est le prochain morceau
+  à faire pour que la demande initiale de Bourama ("tous les champs du
+  formulaire de création") soit vraiment satisfaite de bout en bout.
+
+- 2026-07-12 — Bouton "Partager" ajouté (demande de Bourama : partager un
+  agent ou un profil créateur, depuis le chat, le portfolio, la page
+  agent, ou le dashboard). `components/BoutonPartager.tsx` (Web Share API
+  si disponible, sinon copie presse-papiers avec confirmation "Copié !"),
+  posé sur `/agent/[id]` (à côté d'"Utiliser"), `/u/[id]` (à côté de
+  "Suivre"), et `/dashboard` (portfolio + chaque carte de "Mes agents" —
+  remplace l'ancien bouton "Copier le lien" fait à la main). Côté
+  Streamlit (`faces/vues/chat.py`) : bloc "🔗 Partager cet agent" ajouté
+  dans la sidebar juste sous "← Retour à l'agent", `st.code()` pour son
+  icône de copie intégrée (pas d'accès à l'API native de partage du
+  navigateur depuis Streamlit). `tsc --noEmit` OK, `ast.parse` OK.
+
+  Zips livrés : `djiguigne-app-final.zip` (frontend complet, dossier
+  `frontend/`), `djiguigne-backend-final.zip` (cette fois-ci SEULEMENT
+  `api/agents.py` et `faces/vues/chat.py`, les 2 fichiers touchés — pas
+  besoin de recoller tout le reste, `api/main.py` et `api/profiles.py`
+  n'ont pas été modifiés depuis leur dernière version en ligne).
+- 2026-07-12 — Bourama a fourni un token GitHub avec accès écriture aux
+  deux dépôts. Poussé directement (plus besoin de zips à recoller à la
+  main) : `api/agents.py` + `faces/vues/chat.py` sur
+  `assistant-etudiants`, et les 33 fichiers de `frontend_travail/` sur
+  `djiguign--ai`. Vérifié en retéléchargeant les deux dépôts après coup :
+  contenu identique à ce qui était prévu. **Changement de mode de travail
+  à partir de maintenant** : livraison directe sur GitHub par défaut,
+  zips uniquement si le token n'est plus valide ou si Bourama le demande.
