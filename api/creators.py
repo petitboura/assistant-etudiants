@@ -13,11 +13,63 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from api.auth import utilisateur_courant, supabase
+from typing import Optional
+
+from pydantic import BaseModel
+
+from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
 
 logging.basicConfig(level=logging.INFO)
 
 router = APIRouter(prefix="/api/creators", tags=["creators"])
+
+
+class EtatFollow(BaseModel):
+    total: int
+    suivi_par_moi: bool = False
+
+
+@router.get("/{creator_id}/follow", response_model=EtatFollow)
+def obtenir_etat_follow(creator_id: str, utilisateur=Depends(utilisateur_optionnel)):
+    """
+    Ajouté pour l'Étape D.4 du pivot social (bouton Follow du portfolio
+    créateur) : le POST/DELETE existants ne donnaient aucun moyen de
+    savoir si l'utilisateur courant suit déjà ce créateur, ni combien de
+    followers il a. Public (compteur visible sans connexion), mais
+    `suivi_par_moi` n'est vrai que si un token valide est fourni
+    (utilisateur_optionnel, jamais de 401 ici).
+    """
+    try:
+        total_res = (
+            supabase.table("follows")
+            .select("follower_id", count="exact")
+            .eq("creator_id", creator_id)
+            .execute()
+        )
+        total = total_res.count or 0
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (comptage follows creator={creator_id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger les abonnés pour le moment.")
+
+    suivi_par_moi = False
+    if utilisateur is not None:
+        try:
+            res = (
+                supabase.table("follows")
+                .select("follower_id")
+                .eq("follower_id", utilisateur.id)
+                .eq("creator_id", creator_id)
+                .maybe_single()
+                .execute()
+            )
+            suivi_par_moi = bool(res and res.data)
+        except Exception as e:
+            logging.error(
+                f"ERREUR SUPABASE (lecture follow follower={utilisateur.id}, creator={creator_id}) : {e}"
+            )
+            # Best-effort : une erreur ici ne doit pas empêcher d'afficher le total.
+
+    return EtatFollow(total=total, suivi_par_moi=suivi_par_moi)
 
 
 @router.post("/{creator_id}/follow", status_code=204)
