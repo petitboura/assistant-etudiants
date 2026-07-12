@@ -470,6 +470,18 @@ with st.sidebar:
             f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}",
         )
 
+        # Bouton partager (2026-07-12, Bourama : "il faut un bouton
+        # partager... dans le chat"). Streamlit n'a pas d'accès direct à
+        # l'API native de partage du navigateur (contrairement à
+        # components/BoutonPartager.tsx côté Next.js) -- st.code() est le
+        # choix le plus simple qui marche partout : Streamlit affiche
+        # automatiquement une petite icône de copie dans son coin, sans
+        # dépendance externe. Repose sur le même `_url_plateforme` que le
+        # bouton "Retour à l'agent" juste au-dessus, pas de nouveau
+        # secret à ajouter.
+        with st.expander("🔗 Partager cet agent"):
+            st.code(f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}", language=None)
+
     if st.session_state.session_utilisateur is None:
         st.markdown("### Compte (optionnel)")
         st.caption(
