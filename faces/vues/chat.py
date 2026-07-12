@@ -454,6 +454,22 @@ if "code" in _params and "state" in _params and etat_notion_en_attente(_params["
     st.rerun()
 
 with st.sidebar:
+    # Lien de retour vers la page agent Next.js (2026-07-12, Bourama : "il
+    # n'y a pas de quitter plein écran qui va faire retour où tu étais" --
+    # le bouton "Plein écran" de components/BoutonUtiliser.tsx ouvre cette
+    # page Streamlit en nouvel onglet SANS aucun moyen d'y revenir ensuite).
+    # Déplacé dans la sidebar le 2026-07-12 (Bourama : ça ne doit apparaître
+    # que dans le volet de gauche, pas dans le corps principal, et rester
+    # minimaliste -- ce n'est pas un sujet principal de la page).
+    # `URL_PLATEFORME` optionnel (comme URL_RETOUR_APP) : si absent, on
+    # n'affiche simplement pas le lien plutôt que de planter.
+    _url_plateforme = get_secret("URL_PLATEFORME")
+    if _url_plateforme:
+        st.link_button(
+            "← Retour à l'agent",
+            f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}",
+        )
+
     if st.session_state.session_utilisateur is None:
         st.markdown("### Compte (optionnel)")
         st.caption(
@@ -538,6 +554,94 @@ with st.sidebar:
             st.session_state.session_utilisateur = None
             st.rerun()
 
+    # Notes + commentaires (2026-07-12, Bourama : "je veux que ce soit dans
+    # le tableau de bord du chat lui-même pour que quelqu'un qui a ouvert
+    # en plein écran puisse directement commenter ou donner des étoiles" --
+    # ces fonctionnalités existaient déjà côté Next.js
+    # (components/NoteAgent.tsx, CommentairesAgent.tsx sur /agent/[id]),
+    # mais invisibles pour quelqu'un qui ouvre le chat en "Plein écran"
+    # (nouvel onglet, uniquement cette page Streamlit, jamais la page
+    # Next.js qui les contient). Appelle les MÊMES endpoints
+    # (POST/GET /api/agents/{id}/rating et .../comments) pour que la note/
+    # les commentaires soient identiques, peu importe par où ils ont été
+    # postés.
+    # Déplacé dans la sidebar (repliée par défaut, st.expander) le
+    # 2026-07-12 : Bourama a précisé que ça doit rester minimaliste, pas un
+    # sujet principal de la page -- uniquement visible en ouvrant le volet
+    # de gauche, comme le reste du compte/Notion juste au-dessus.
+    #
+    # `URL_API` optionnel (même convention que URL_PLATEFORME plus haut) :
+    # si absent, cette section ne s'affiche simplement pas plutôt que de
+    # planter.
+    _url_api = get_secret("URL_API")
+    if _url_api:
+        _url_api = _url_api.rstrip("/")
+        with st.expander("💬 Avis sur cet agent"):
+            if st.session_state.session_utilisateur is None:
+                st.caption("Connecte-toi ci-dessus pour noter ou commenter.")
+            else:
+                _jeton = st.session_state.session_utilisateur.access_token
+                _entetes = {"Authorization": f"Bearer {_jeton}"}
+
+                # Étoiles : st.feedback("stars") renvoie un index 0-4 (5
+                # étoiles), ou None tant que rien n'est cliqué -- +1 pour
+                # matcher la note 1-5 attendue par l'API (voir
+                # NoterAgentPayload, api/agents.py). Un flag en
+                # session_state évite de renvoyer le POST à chaque rerun
+                # Streamlit tant que la note affichée n'a pas changé.
+                _cle_derniere_note = f"derniere_note_envoyee_{AGENT_ID}"
+                note_choisie = st.feedback("stars")
+                if note_choisie is not None:
+                    note_finale = note_choisie + 1
+                    if st.session_state.get(_cle_derniere_note) != note_finale:
+                        try:
+                            requests.post(
+                                f"{_url_api}/api/agents/{AGENT_ID}/rating",
+                                json={"note": note_finale},
+                                headers=_entetes,
+                                timeout=10,
+                            ).raise_for_status()
+                            st.session_state[_cle_derniere_note] = note_finale
+                            st.toast(f"Note enregistrée : {note_finale}/5")
+                        except Exception as e:
+                            logging.error(f"ERREUR API (POST rating, agent_id={AGENT_ID}) : {e}")
+                            st.warning("Impossible d'enregistrer la note pour le moment.")
+
+                nouveau_commentaire = st.text_area(
+                    "Ajouter un commentaire", key="nouveau_commentaire_chat"
+                )
+                if st.button("Publier le commentaire"):
+                    if nouveau_commentaire.strip():
+                        try:
+                            requests.post(
+                                f"{_url_api}/api/agents/{AGENT_ID}/comments",
+                                json={"contenu": nouveau_commentaire.strip()},
+                                headers=_entetes,
+                                timeout=10,
+                            ).raise_for_status()
+                            st.success("Commentaire publié.")
+                            st.rerun()
+                        except Exception as e:
+                            logging.error(f"ERREUR API (POST comments, agent_id={AGENT_ID}) : {e}")
+                            st.warning("Impossible de publier le commentaire pour le moment.")
+                    else:
+                        st.warning("Le commentaire ne peut pas être vide.")
+
+            # Liste des commentaires existants : public, pas besoin de
+            # connexion pour les lire (même endpoint que
+            # CommentairesAgent.tsx).
+            try:
+                _reponse_commentaires = requests.get(
+                    f"{_url_api}/api/agents/{AGENT_ID}/comments", timeout=10
+                )
+                _reponse_commentaires.raise_for_status()
+                for _commentaire in _reponse_commentaires.json():
+                    _auteur = _commentaire.get("nom_affiche") or "Utilisateur"
+                    st.caption(f"**{_auteur}** — {_commentaire['contenu']}")
+            except Exception as e:
+                logging.error(f"ERREUR API (GET comments, agent_id={AGENT_ID}) : {e}")
+                st.caption("Impossible de charger les commentaires pour le moment.")
+
 
 def _afficher_arguments(arguments):
     if not arguments:
@@ -617,22 +721,6 @@ def _rendre_titre_accueil(ui_config):
 if len(st.session_state.messages) == 0:
     _rendre_titre_accueil(UI_CONFIG)
     st.caption(UI_CONFIG["sous_titre_accueil"])
-
-# Lien de retour vers la page agent Next.js (2026-07-12, Bourama : "il n'y
-# a pas de quitter plein écran qui va faire retour où tu étais" -- le
-# bouton "Plein écran" de components/BoutonUtiliser.tsx ouvre cette page
-# Streamlit en nouvel onglet SANS aucun moyen d'y revenir ensuite). Affiché
-# à chaque chargement de page, pas seulement au premier message, pour
-# rester utilisable même après avoir déjà discuté. `URL_PLATEFORME`
-# optionnel (comme URL_RETOUR_APP) : si absent, on n'affiche simplement pas
-# le lien plutôt que de planter -- même convention que
-# NEXT_PUBLIC_STREAMLIT_URL côté BoutonUtiliser.tsx.
-_url_plateforme = get_secret("URL_PLATEFORME")
-if _url_plateforme:
-    st.link_button(
-        "← Retour à l'agent",
-        f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}",
-    )
 
 for message in st.session_state.messages:
     if message["role"] == "user":
@@ -789,83 +877,8 @@ _typeset_mathjax()
 
 # Bloc "Remplir le formulaire" (feedback Google Forms) retiré le 2026-07-12
 # (Bourama : résidu à enlever, plus d'usage).
-
-# Notes + commentaires directement dans chat.py (2026-07-12, Bourama :
-# "je veux que dans le tableau de bord de chat lui-même pour que quelqu'un
-# qui a ouvert en plein écran puisse directement commenter ou donner des
-# étoiles" -- ces fonctionnalités existaient déjà côté Next.js
-# (components/NoteAgent.tsx, CommentairesAgent.tsx sur /agent/[id]), mais
-# invisibles pour quelqu'un qui ouvre le chat en "Plein écran" (nouvel
-# onglet, uniquement cette page Streamlit, jamais la page Next.js qui les
-# contient). Appelle les MÊMES endpoints (POST/GET /api/agents/{id}/rating
-# et .../comments) pour que la note/les commentaires soient identiques,
-# peu importe par où ils ont été postés.
 #
-# `URL_API` optionnel (même convention que URL_PLATEFORME plus haut) : si
-# absent, cette section ne s'affiche simplement pas plutôt que de planter.
-_url_api = get_secret("URL_API")
-if _url_api:
-    _url_api = _url_api.rstrip("/")
-    st.markdown("---")
-    st.markdown("### Ton avis sur cet agent")
-
-    if st.session_state.session_utilisateur is None:
-        st.caption("Connecte-toi (menu de gauche) pour noter ou commenter.")
-    else:
-        _jeton = st.session_state.session_utilisateur.access_token
-        _entetes = {"Authorization": f"Bearer {_jeton}"}
-
-        # Étoiles : st.feedback("stars") renvoie un index 0-4 (5 étoiles),
-        # ou None tant que rien n'est cliqué -- +1 pour matcher la note
-        # 1-5 attendue par l'API (voir NoterAgentPayload, api/agents.py).
-        # Un flag en session_state évite de renvoyer le POST à chaque
-        # rerun Streamlit tant que la note affichée n'a pas changé.
-        _cle_derniere_note = f"derniere_note_envoyee_{AGENT_ID}"
-        note_choisie = st.feedback("stars")
-        if note_choisie is not None:
-            note_finale = note_choisie + 1
-            if st.session_state.get(_cle_derniere_note) != note_finale:
-                try:
-                    requests.post(
-                        f"{_url_api}/api/agents/{AGENT_ID}/rating",
-                        json={"note": note_finale},
-                        headers=_entetes,
-                        timeout=10,
-                    ).raise_for_status()
-                    st.session_state[_cle_derniere_note] = note_finale
-                    st.toast(f"Note enregistrée : {note_finale}/5")
-                except Exception as e:
-                    logging.error(f"ERREUR API (POST rating, agent_id={AGENT_ID}) : {e}")
-                    st.warning("Impossible d'enregistrer la note pour le moment.")
-
-        nouveau_commentaire = st.text_area("Ajouter un commentaire", key="nouveau_commentaire_chat")
-        if st.button("Publier le commentaire"):
-            if nouveau_commentaire.strip():
-                try:
-                    requests.post(
-                        f"{_url_api}/api/agents/{AGENT_ID}/comments",
-                        json={"contenu": nouveau_commentaire.strip()},
-                        headers=_entetes,
-                        timeout=10,
-                    ).raise_for_status()
-                    st.success("Commentaire publié.")
-                    st.rerun()
-                except Exception as e:
-                    logging.error(f"ERREUR API (POST comments, agent_id={AGENT_ID}) : {e}")
-                    st.warning("Impossible de publier le commentaire pour le moment.")
-            else:
-                st.warning("Le commentaire ne peut pas être vide.")
-
-    # Liste des commentaires existants : public, pas besoin de connexion
-    # pour les lire (même endpoint que CommentairesAgent.tsx).
-    try:
-        _reponse_commentaires = requests.get(
-            f"{_url_api}/api/agents/{AGENT_ID}/comments", timeout=10
-        )
-        _reponse_commentaires.raise_for_status()
-        for _commentaire in _reponse_commentaires.json():
-            _auteur = _commentaire.get("nom_affiche") or "Utilisateur"
-            st.markdown(f"**{_auteur}** — {_commentaire['contenu']}")
-    except Exception as e:
-        logging.error(f"ERREUR API (GET comments, agent_id={AGENT_ID}) : {e}")
-        st.caption("Impossible de charger les commentaires pour le moment.")
+# Bloc "Notes + commentaires" retiré d'ici le 2026-07-12 (déplacé dans la
+# sidebar, en version compacte -- voir with st.sidebar: plus haut, juste
+# après le bouton "Se déconnecter"). Bourama : ça ne doit apparaître que
+# dans le volet de gauche, pas comme sujet principal de la page.
