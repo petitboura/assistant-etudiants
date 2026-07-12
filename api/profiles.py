@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, supabase
+from creation_agent import generer_id_depuis_nom
 
 logging.basicConfig(level=logging.INFO)
 
@@ -130,6 +131,16 @@ def mettre_a_jour_mon_profil(
     donc aussi de création de profil.
 
     PATCH partiel : un champ omis (None) n'est pas modifié.
+
+    Bug corrigé le 2026-07-12 (500 remonté par Bourama, capture d'écran
+    /dashboard) : `profiles.slug` est NOT NULL + UNIQUE en base, mais
+    rien ne le remplissait jamais ici — le tout premier upsert pour
+    n'importe quel compte échouait systématiquement (violation de
+    contrainte NOT NULL, avalée par le except générique et renvoyée comme
+    500 opaque). Généré une seule fois, à la création de la ligne
+    (jamais régénéré sur les PATCH suivants — une fois que
+    `profiles.slug` remplacera `user_id` dans les URLs `/u/...`, un lien
+    déjà partagé ne doit pas changer sous les pieds de la personne).
     """
     ligne = {"user_id": utilisateur.id}
     if payload.nom_affiche is not None:
@@ -138,6 +149,32 @@ def mettre_a_jour_mon_profil(
         ligne["bio"] = payload.bio.strip()
     if payload.avatar_url is not None:
         ligne["avatar_url"] = payload.avatar_url
+
+    try:
+        deja_existant = (
+            supabase.table("profiles")
+            .select("user_id")
+            .eq("user_id", utilisateur.id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (vérification profil existant {utilisateur.id}) : {e}")
+        deja_existant = None
+
+    if not (deja_existant and deja_existant.data):
+        base = generer_id_depuis_nom(payload.nom_affiche or "") or utilisateur.id[:8]
+        slug = base
+        try:
+            collision = (
+                supabase.table("profiles").select("user_id").eq("slug", slug).maybe_single().execute()
+            )
+            if collision and collision.data:
+                slug = f"{base}-{utilisateur.id[:6]}"
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (vérification unicité slug={slug}) : {e}")
+            slug = f"{base}-{utilisateur.id[:6]}"
+        ligne["slug"] = slug
 
     try:
         supabase.table("profiles").upsert(ligne, on_conflict="user_id").execute()
