@@ -670,3 +670,302 @@ le repo.**
   `main` (token GitHub toujours invalide) ni testé avec une vraie base
   Supabase. Prochaine étape : upload manuel de tous les fichiers de cette
   étape, tests en conditions réelles, puis Étape D (frontend Next.js).
+- 2026-07-11 — Reprise de session : Étape C confirmée poussée sur `main`
+  (vérifié par lecture directe du repo, `api/agents.py`, `api/creators.py`,
+  `api/profiles.py`, `api/search.py`, `api/main.py` tous présents et
+  identiques à ce qui avait été préparé) — uploadée manuellement par
+  Bourama entre-temps, pas dans une session précédente documentée ici.
+  **Clarification importante de Bourama sur la réutilisation visuelle**
+  (reformule la section "Base technique réutilisable" ci-dessus, qui
+  prêtait à confusion) : l'interdiction de réutilisation ne portait PAS
+  sur le thème visuel (palette `--dj-*`, typographie Bricolage Grotesque/
+  Inter/JetBrains Mono, dégradés, animations, logo) — celui-là EST repris
+  à l'identique pour la plateforme. L'interdiction porte sur la
+  STRUCTURE : les pages de la vitrine (accueil marketing, services, blog,
+  about, contact, FAQ) et leurs composants (`Header`/`Footer`/
+  `CookieBanner`/`LanguageSwitcher`, nav, i18n par route `[locale]`) ne
+  sont PAS repris — la plateforme a sa propre structure de pages (feed,
+  page agent, portfolio, dashboard...). Prochaine IA : même thème,
+  structure différente, pas de blog/FAQ/services sur la plateforme.
+  **Découpage de l'Étape D en sous-étapes séquentielles** (décision de
+  Bourama, pour permettre une reprise par une autre IA si limite
+  atteinte) :
+  - [x] **D.1 — Fondations visuelles** : `tailwind.config.ts` (palette
+        `dj-*`, `dj-gradient`, `dj-hero-glow`, polices, keyframes/
+        animations `dj-fade-up`/`dj-fade-in`/`dj-orbit`/`dj-glow`),
+        `app/globals.css` (variables CSS, fond+glow, sélection, focus
+        visible, scrollbar, `.dj-reveal`, `prefers-reduced-motion`),
+        `app/layout.tsx` (chargement des 3 polices via `next/font/google`,
+        classes de thème sur `<html>`/`<body>`), `public/logo.png` copié
+        depuis `djiguigne-frontend`. Pages existantes du squelette
+        (`/connexion`, `/inscription`, `/`) restylées avec les tokens
+        `dj-*` pour repartir sur une base cohérente avant de construire
+        les nouvelles pages dessus. Vérifié : `tsc --noEmit` sans erreur.
+        `next build` PAS vérifiable dans l'environnement de préparation
+        (pas d'accès réseau à Google Fonts depuis ce sandbox) — à tester
+        en conditions réelles par Bourama (`npm run dev` ou build Vercel).
+        Fichier remis en téléchargement (zip du dossier `frontend/`), pas
+        poussé sur GitHub (pas d'accès en écriture, comme d'habitude).
+  - [x] **D.2 — Feed** (`/`) : `/` transformé en feed PUBLIC — changement
+        important par rapport à D.1, où `/` exigeait une session et
+        redirigeait vers `/connexion` (ce comportement était temporaire,
+        juste pour prouver que l'auth passait bien de bout en bout ; ce
+        rôle est rempli, cette page n'existe plus telle quelle). Ajouts :
+        `components/TopBar.tsx` (nav minimale de la plateforme, PAS le
+        Header vitrine — pas de services/blog/about/contact ; état auth
+        via `supabase.auth.onAuthStateChange`, lien "Mon espace" vers
+        `/dashboard` déjà posé même si la page n'existe pas encore),
+        `components/AgentCard.tsx` (carte agent réutilisable, prévue pour
+        resservir en D.4 portfolio), recherche débouncée (300ms, min 2
+        caractères, annule une requête en vol si une frappe plus récente
+        arrive) sur `GET /api/search`, grille + pagination Précédent/
+        Suivant sur `GET /api/feed`. `next.config.mjs` : `remotePatterns`
+        ajouté pour autoriser `*.supabase.co` (next/image refuse par
+        défaut tout domaine non déclaré, nécessaire pour
+        `image_vitrine_url`). Vérifié : `tsc --noEmit` sans erreur.
+        `next build` toujours pas vérifiable ici (Google Fonts hors
+        réseau autorisé du sandbox) — à tester par Bourama.
+  - [x] **D.3 — Page agent** (`/agent/[id]`) : Server Component pour le
+        SSR (règle SEO/AEO/GEO du plan), `generateMetadata` (title/
+        description/OG image depuis l'agent), `notFound()` si l'agent
+        n'existe pas ou est désactivé (même convention 404 que le
+        backend). Consomme `GET /api/agents/{id}` via un nouveau
+        `lib/api-serveur.ts` (fetch simple, PAS `appelerApi` de
+        `lib/api.ts` — celui-ci appelle `supabase.auth.getSession()`, qui
+        lit le localStorage du navigateur, indisponible côté serveur ;
+        `api-serveur.ts` est donc réservé aux endpoints publics
+        uniquement). Composants clients isolés par-dessus le rendu
+        serveur : `BoutonUtiliser` (popup iframe vers l'app Streamlit
+        `?agent=id` + bouton plein écran en nouvel onglet — nouvelle
+        variable d'env `NEXT_PUBLIC_STREAMLIT_URL` ajoutée à
+        `.env.local.example`, doit matcher `URL_RETOUR_APP` côté
+        Streamlit), `NoteAgent` (étoiles 1-5, upsert via
+        `POST .../rating`), `CommentairesAgent` (liste + formulaire,
+        `POST .../comments`). Lien vers le portfolio créateur en
+        `/u/{owner_id}` (404 attendu tant que D.4 n'existe pas — même
+        convention que `api/profiles.py`, qui utilise `user_id` en
+        attendant une vraie génération de slug).
+        **Non vérifié : le point de vigilance iframe/X-Frame-Options
+        noté plus haut dans ce fichier** (toujours pas testé contre un
+        vrai déploiement Streamlit).
+        Vérifié : `tsc --noEmit` sans erreur. `next build` échoue
+        toujours uniquement sur le fetch des Google Fonts (réseau
+        indisponible dans ce sandbox, même limite que D.1/D.2, pas un
+        bug introduit ici) — à tester par Bourama.
+  - [x] **D.4 — Portfolio créateur** (`/u/[id]`, en pratique `user_id`,
+        pas un slug — même repli que `/agent/[id]` et que le backend
+        `api/profiles.py`) : Server Component + `generateMetadata` +
+        `notFound()`, même structure que D.3. Réutilise `AgentCard` (D.2)
+        pour la grille d'agents du créateur, pas de nouveau composant
+        carte. **Ajout backend nécessaire avant de construire cette
+        page** : `GET /api/creators/{id}/follow` n'existait pas — le
+        `POST`/`DELETE` de l'Étape C ne permettaient pas de savoir si
+        l'utilisateur courant suit déjà ce créateur ni d'afficher un
+        compteur, impossible de faire un vrai bouton Follow sans ça.
+        Ajouté : `api/auth.py` (`utilisateur_optionnel`, ne lève jamais,
+        renvoie `None` si pas de token valide — pour les routes publiques
+        mais personnalisables) et `api/creators.py`
+        (`GET .../follow` → `{ total, suivi_par_moi }`). Vérifié par
+        `ast.parse` (syntaxe Python valide) seulement — **pas de test
+        `TestClient` ni de vraie base**, contrairement à ce que faisaient
+        les sessions précédentes sur les nouveaux endpoints ; à tester
+        avant de faire confiance à ce endpoint. Fichiers backend remis
+        séparément (`djiguigne-backend-d4.zip`) — PAS ENCORE APPLIQUÉS
+        sur `assistant-etudiants`, ni testés, ni poussés.
+        `components/BoutonFollow.tsx` : toggle optimiste (met à jour le
+        compteur localement après un POST/DELETE réussi, pas de
+        rechargement depuis le serveur comme le fait `NoteAgent` — choix
+        différent assumé, un follow/unfollow ne peut pas changer en
+        parallèle par quelqu'un d'autre de manière pertinente à afficher
+        immédiatement, contrairement à une moyenne de notes). Pas de
+        bouton pour se suivre soi-même.
+        Vérifié : `tsc --noEmit` sans erreur (après réinstallation des
+        dépendances). `next build` non retesté à cette étape (limite
+        Google Fonts déjà documentée à D.1/D.2/D.3, pas la peine de
+        reconfirmer à chaque fois).
+  - [x] **D.5 — Dashboard** (`/dashboard`) : Client Component (pas de
+        SSR possible — la session Supabase vit dans le localStorage du
+        navigateur, même contrainte que `/connexion`), redirige vers
+        `/connexion` si pas de session. Deux sections : édition du profil
+        (`PATCH /api/profiles/me`) et "Mes agents" — réutilise
+        `GET /api/profiles/{user_id}` (même endpoint que le portfolio
+        public D.4, appelé avec son propre `user_id`) plutôt qu'un
+        endpoint dédié, 404 tolérée (compte tout juste inscrit, pas
+        encore de ligne `profiles`) → formulaire vide, liste vide.
+        **VOLONTAIREMENT PAS FAIT ICI : connexion aux outils externes
+        (Notion) depuis le dashboard.** Le OAuth Notion
+        (`demarrer_connexion_notion`/`finaliser_connexion_notion`,
+        `connexions/notion.py`) n'existe qu'en Streamlit, rien n'est
+        exposé par l'API FastAPI. Construire ce pont (endpoints API,
+        gestion du callback OAuth, redirect URI probablement encore
+        configuré vers l'app Streamlit en prod chez Notion) est un
+        morceau à part, pas improvisé ici sans validation de Bourama. En
+        attendant, la connexion Notion reste possible via le fallback
+        déjà prévu dans le chat Streamlit (voir section "Compte unifié",
+        "Chemin de connexion à un outil externe"). Prochaine IA : ne pas
+        construire ce pont sans en discuter d'abord, un mauvais redirect
+        URI casserait le flux Notion en prod.
+        Vérifié : `tsc --noEmit` sans erreur.
+  - [x] **D.6 — Créer un agent** (`/dashboard/agents/nouveau`) : formulaire
+        construit champ par champ pour matcher EXACTEMENT
+        `CreerAgentPayload` (`api/agents.py`) — mêmes chaînes exactes pour
+        `ton` et `type_connaissance` que `faces/vues/creer_agent.py`
+        (copiées, pas réinventées : `composer_system_prompt` interprète
+        ces valeurs précises côté backend, un texte reformulé casserait
+        silencieusement le prompt généré). Ordre : vitrine (nom, icône,
+        image, description publique) → identité de base (ton, posture,
+        limites) → comportements (4 lignes optionnelles) → base de
+        connaissance (type, description, Notion, texte libre). Redirige
+        vers `/agent/{id}` après création.
+        **VOLONTAIREMENT PAS INCLUS :**
+        - Sélection d'outils (`outils_choisis`) : toujours envoyé `[]`.
+          La Streamlit lit `SERVEURS_MCP` dynamiquement
+          (`core/registre_outils.py`), rien n'est exposé par l'API pour
+          lister les outils côté frontend — nouvel endpoint
+          `GET /api/outils` à faire plus tard si on veut cette
+          fonctionnalité dans le nouveau flow.
+        - Upload de PDF : `POST /api/agents` ne le gère pas lui-même
+          (voir docstring du fichier, choix déjà fait avant le pivot
+          social) — c'est `POST /api/agents/{id}/documents` (Étape 2 de
+          `api/PLAN.md`), pas construit côté frontend ici. Un agent reste
+          créable sans PDF (Notion et texte libre suffisent).
+        Vérifié : `tsc --noEmit` sans erreur.
+  **L'Étape D (frontend) est maintenant entièrement écrite (D.1 à D.6),
+  aucune sous-étape restante dans la checklist.** Ne veut PAS dire
+  "terminée" pour autant : voir la liste des manques ci-dessous et l'état
+  de livraison plus bas. Prochaine étape possible : Étape F/G du plan
+  original (déploiement, bascule Streamlit) — mais seulement après avoir
+  comblé les manques connus, sans quoi on déploierait quelque chose de
+  jamais testé.
+
+  **Manques connus, listés pour ne rien oublier :**
+  - `djiguigne-backend-d4.zip` (`GET /api/creators/{id}/follow`) jamais
+    appliqué sur le repo ni testé
+  - Connexion Notion depuis le dashboard : pas de pont API, décision à
+    prendre avec Bourama avant de la construire (voir note D.5)
+  - Sélection d'outils à la création d'un agent : pas d'endpoint pour
+    lister les outils disponibles (voir note D.6)
+  - Upload de PDF à la création d'un agent : endpoint existe
+    (`POST /api/agents/{id}/documents`, Étape 2 de `api/PLAN.md`) mais
+    pas de formulaire frontend pour l'appeler
+  - `profiles.slug` toujours pas généré : les URLs `/u/[id]` utilisent
+    `user_id` brut, pas un slug lisible
+  - Point de vigilance iframe/X-Frame-Options (popup chat Streamlit,
+    Étape D.3) jamais testé contre un vrai déploiement
+
+**État de livraison D.1 à D.4 (important) : rien n'a été testé avec un
+vrai `npm run dev`/build, ni poussé sur GitHub, à aucune étape.** Chaque
+session a remis un zip cumulatif du dossier `frontend/` à Bourama, qui l'a
+confirmé non testé et non poussé au 2026-07-11 (pour D.1/D.2, avant D.3).
+`tsc --noEmit` passe à chaque fois, mais ça ne garantit ni un rendu
+correct dans un vrai navigateur, ni que le popup iframe Streamlit
+fonctionne, ni que les endpoints backend tout juste écrits (D.4)
+fonctionnent contre une vraie base. Bourama a choisi de continuer sans
+tester d'abord — son choix, mais ce risque s'accumule d'étape en étape,
+noté ici pour que ce soit visible.
+- 2026-07-11 — Étape D.3 (page agent `/agent/[id]`) écrite par-dessus le
+  zip D.1/D.2 fourni par Bourama (confirmé : c'est bien un zip cumulatif,
+  pas besoin d'un "zip D.1" séparé). Nouveau `lib/api-serveur.ts` pour le
+  fetch SSR public, `app/agent/[id]/page.tsx` (Server Component,
+  `generateMetadata`, `notFound()`), `components/BoutonUtiliser.tsx`
+  (popup/plein écran Streamlit), `components/NoteAgent.tsx` (étoiles 1-5),
+  `components/CommentairesAgent.tsx`. `NEXT_PUBLIC_STREAMLIT_URL` ajouté à
+  `.env.local.example`. `tsc --noEmit` OK, `next build` toujours bloqué
+  sur Google Fonts (réseau sandbox, pas un bug). **Rien de D.1/D.2/D.3
+  n'est testé en conditions réelles ni poussé sur GitHub** — confirmé
+  explicitement par Bourama pour D.1/D.2 avant de commencer D.3, noté en
+  gros dans la section Étape D pour que ça ne s'accumule pas sans être vu.
+- 2026-07-11 — Étape D.4 (portfolio créateur `/u/[id]`) : `app/u/[id]/page.tsx`
+  (Server Component, réutilise `AgentCard`), `components/BoutonFollow.tsx`.
+  Ajout backend requis et fait avant la page frontend : `GET
+  /api/creators/{id}/follow` (`api/creators.py`) + `utilisateur_optionnel`
+  (`api/auth.py`), remis dans `djiguigne-backend-d4.zip` séparé — PAS
+  appliqué sur le repo, PAS testé avec `TestClient` (juste vérifié
+  syntaxiquement avec `ast.parse`), PAS testé contre une vraie base.
+  `tsc --noEmit` OK côté frontend. Bourama a demandé de continuer sans
+  tester D.1-D.3 au préalable ; le risque d'accumulation est noté dans la
+  section Étape D plutôt que de bloquer.
+- 2026-07-11 — Étape D.5 (dashboard `/dashboard`) : édition de profil +
+  "Mes agents" (réutilise `GET /api/profiles/{user_id}`, pas de nouvel
+  endpoint). Connexion Notion depuis le dashboard volontairement PAS
+  construite (le OAuth n'existe qu'en Streamlit, aucun pont API —
+  décision à prendre avec Bourama avant de s'y attaquer, risque de casser
+  le redirect URI en prod). `tsc --noEmit` OK. Toujours en attente :
+  application de `djiguigne-backend-d4.zip` sur le repo.
+- 2026-07-11 — Étape D.6 (créer un agent) : formulaire complet dans
+  `app/dashboard/agents/nouveau/page.tsx`, payload aligné champ par champ
+  sur `CreerAgentPayload`. Sélection d'outils et upload PDF volontairement
+  hors scope (voir notes D.6). **L'Étape D du pivot social est maintenant
+  entièrement écrite (D.1 à D.6)**, mais rien n'est testé en conditions
+  réelles ni poussé sur GitHub à aucune sous-étape, et plusieurs manques
+  connus restent listés dans la section Étape D (backend D.4 non
+  appliqué, Notion dashboard, sélection d'outils, upload PDF, slug
+  profils, vigilance iframe). Prochaine session : combler ces manques ou
+  tester ce qui existe avant d'aller plus loin — au choix de Bourama.
+- 2026-07-11 — Test en conditions réelles démarré par Bourama (`npm
+  install` + `.env.local` configuré avec les secrets Streamlit Cloud).
+  D.1 à D.6 tournent, testés comme un tout fonctionnel. Bourama corrige
+  les bugs trouvés un par un au fil de l'eau plutôt que par étape —
+  prochaine session : traiter les bugs remontés, pas continuer sur une
+  nouvelle étape avant que ceux-ci soient réglés.
+- 2026-07-12 — Bug corrigé (remonté par capture d'écran, page
+  `/agent/math-matique` en prod sur Vercel — confirme au passage que D.3
+  est bien déployé) : aucun bouton retour visible en ouvrant un agent.
+  Ajout de `components/BoutonRetour.tsx` (`router.back()`, pas un lien
+  fixe vers `/` — ramène là d'où on vient), posé sur `/agent/[id]` et
+  `/u/[id]`. `tsc --noEmit` OK. Zip cumulatif complet redonné
+  (`djiguigne-app-etape-d6-fix1.zip`).
+- 2026-07-12 — Bug corrigé (remonté par 2 captures d'écran) : les champs
+  "URL image de vitrine" et "URL avatar" demandaient de coller un lien à
+  la main, pas utilisable pour du non-technique. Remplacés par un vrai
+  upload de fichier. Ajouts :
+  - Supabase : nouveau bucket public `images-publiques` (migration
+    `bucket_images_publiques`), sans policy RLS (upload UNIQUEMENT via le
+    backend avec la service role key, cohérent avec le reste du projet)
+  - Backend : `api/uploads.py` (`POST /api/uploads/image`, multipart,
+    jpeg/png/webp, 5 Mo max, chemin `{user_id}/{uuid}.{ext}`), enregistré
+    dans `api/main.py`. Vérifié par `ast.parse` seulement, pas testé
+    contre une vraie base (même limite que le fix D.4/follow)
+  - Frontend : `lib/api.ts` a maintenant `appelerApiFichier` (variante
+    multipart de `appelerApi`, pas de `Content-Type` manuel — le
+    navigateur doit fixer le boundary lui-même) ; nouveau composant
+    `components/ChampImage.tsx` (bouton + aperçu + upload immédiat au
+    choix du fichier), branché sur D.6 (image de vitrine) et D.5 (avatar
+    du dashboard), remplace les deux `<input type="text">` d'URL.
+  `tsc --noEmit` OK. Deux zips séparés remis : frontend cumulatif complet
+  (`djiguigne-app-etape-d6-fix2.zip`) et backend, seulement les 2 fichiers
+  touchés (`djiguigne-backend-fix2.zip` — `api/uploads.py` nouveau,
+  `api/main.py` modifié).
+- 2026-07-12 — Bug corrigé (500 remonté par capture d'écran, PATCH
+  /api/profiles/me) : `profiles.slug` est NOT NULL + UNIQUE en base (voir
+  Étape B) mais rien ne le remplissait — le tout premier enregistrement
+  de profil pour n'importe quel compte plantait systématiquement.
+  `api/profiles.py` : génère le slug une seule fois, à la création de la
+  ligne (jamais régénéré sur les PATCH suivants, pour ne pas casser un
+  lien déjà partagé), avec repli déterministe en cas de collision
+  (`{base}-{6 premiers caractères du user_id}`). Vérifié par `ast.parse`
+  seulement (même limite que les fix précédents). Zip séparé
+  (`djiguigne-backend-fix3.zip`, juste `api/profiles.py`).
+- 2026-07-12 — Consolidation demandée par Bourama : les 3 patchs backend
+  séparés (`djiguigne-backend-d4.zip`, `-fix2.zip`, `-fix3.zip`) fusionnés
+  en un seul `djiguigne-backend-final.zip` (5 fichiers : `main.py`,
+  `auth.py`, `uploads.py`, `profiles.py`, `creators.py`), pour un seul
+  copier-coller au lieu de trois. Contenu identique, juste regroupé.
+- 2026-07-12 — Bug corrigé (remonté par capture d'écran, formulaire de
+  création d'agent) : aucun moyen d'ajouter un PDF, `POST /api/agents`
+  ne le gère pas lui-même par choix initial (Étape 1 de `api/PLAN.md`),
+  et l'Étape 2 (`POST /api/agents/{id}/documents`) n'avait jamais été
+  construite. Fait maintenant :
+  - Backend : nouveau `POST /api/agents/{agent_id}/documents` dans
+    `api/agents.py` — réutilise `indexers/storage.py:upload_document` et
+    `indexers/index_documents.py:indexer_document` tels quels (pas de
+    duplication), vérifie la propriété de l'agent (403 sinon). Appelé
+    APRÈS `POST /api/agents` (a besoin de l'id de l'agent déjà créé).
+    Vérifié par `ast.parse` seulement.
+  - Frontend : `app/dashboard/agents/nouveau/page.tsx` — champ fichier
+    PDF ajouté, upload déclenché après la création de l'agent
+    (best-effort : un échec n'empêche pas la redirection vers la page de
+    l'agent, juste une alerte). `tsc --noEmit` OK.
+  Zips finaux mis à jour (contenu cumulatif complet, mêmes noms de
+  fichiers que d'habitude : `djiguigne-app-final.zip`,
+  `djiguigne-backend-final.zip` — remplacent les précédents).
