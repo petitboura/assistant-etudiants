@@ -63,3 +63,31 @@ def utilisateur_courant(authorization: str = Header(default=None)):
         raise HTTPException(status_code=401, detail="Token invalide ou expiré")
 
     return reponse.user
+
+
+def utilisateur_optionnel(authorization: str = Header(default=None)):
+    """
+    Variante de utilisateur_courant pour les routes PUBLIQUES mais
+    personnalisables (ex: GET .../follow, qui doit rester accessible sans
+    connexion pour afficher un compteur, mais renvoie en plus "est-ce que
+    JE suis ce créateur" si un token valide est fourni). Ne lève jamais :
+    renvoie None si le token est absent, mal forme, ou invalide/expire,
+    plutot qu'une 401. Ajoutee pour l'Etape D.4 du pivot social (portfolio
+    créateur), voir PIVOT_SOCIAL.md.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        return None
+
+    try:
+        reponse = supabase.auth.get_user(token)
+    except Exception:
+        return None
+
+    if not reponse or not reponse.user:
+        return None
+
+    return reponse.user
