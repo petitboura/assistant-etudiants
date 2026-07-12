@@ -32,6 +32,7 @@ ORIGINES_AUTORISEES = [
     "http://localhost:3000",
     "https://djiguign-ai.vercel.app",
     "https://app.djiguigne.com",
+    "https://djiguign-pgwfo47je-petitbouras-projects.vercel.app",
 ]
 
 app.add_middleware(
