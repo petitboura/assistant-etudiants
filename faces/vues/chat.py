@@ -214,12 +214,20 @@ st.markdown("""
         z-index: 999999 !important;
         background-color: rgba(120, 120, 120, 0.35) !important;
         border-radius: 6px !important;
+        color: #FFFFFF !important;
     }
     [data-testid="stSidebarCollapseButton"] svg,
     [data-testid="stExpandSidebarButton"] svg {
         visibility: visible !important;
         fill: #FFFFFF !important;
         color: #FFFFFF !important;
+    }
+    /* Ceinture + bretelles : si l'icône utilise fill="currentColor" sur le
+       <path> plutôt que sur le <svg> lui-même, la règle ci-dessus sur le
+       <svg> ne suffit pas -- on cible aussi le <path> directement. */
+    [data-testid="stSidebarCollapseButton"] svg path,
+    [data-testid="stExpandSidebarButton"] svg path {
+        fill: #FFFFFF !important;
     }
 
     /* Barre de saisie (st.chat_input) : par défaut, Streamlit la loge dans
@@ -247,9 +255,28 @@ st.markdown("""
         max-width: 720px;
         margin: 0 auto 1.1rem auto !important;
     }
+    /* Au clic/focus, Streamlit applique sa propre bordure de focus (rouge
+       #FF4B4B, sa couleur de marque par défaut) par-dessus la nôtre --
+       repéré en conditions réelles (capture d'écran), pas juste supposé.
+       On la remplace explicitement par l'accent du thème. */
+    [data-testid="stChatInput"]:focus-within {
+        border-color: var(--dj-accent-1) !important;
+        box-shadow: 0 0 0 1px var(--dj-accent-1), 0 6px 24px rgba(0, 0, 0, 0.28) !important;
+    }
     [data-testid="stChatInput"] textarea {
         background-color: transparent !important;
         color: var(--dj-texte) !important;
+    }
+    [data-testid="stChatInput"] textarea:focus {
+        outline: none !important;
+        box-shadow: none !important;
+    }
+    /* Placeholder ("Pose ta question...") : héritait d'une couleur de
+       texte par défaut trop sombre sur le fond quasi-noir de la pilule
+       -> quasiment illisible (repéré en conditions réelles). */
+    [data-testid="stChatInput"] textarea::placeholder {
+        color: var(--dj-texte-muet) !important;
+        opacity: 1 !important;
     }
 
     /* Bulles de message : thème fixe désormais (plus de personnalisation
