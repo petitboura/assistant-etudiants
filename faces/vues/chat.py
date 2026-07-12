@@ -14,6 +14,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.append(os.path.dirname(__file__))
 
 import logging
+import html as _html_module
+import markdown as _markdown_lib
 import streamlit as st
 from supabase import create_client
 from main import chat
@@ -259,7 +261,7 @@ st.markdown("""
     [data-testid="stChatInput"] {
         background-color: var(--dj-surface) !important;
         border: 1px solid var(--dj-bordure) !important;
-        border-radius: 999px !important;
+        border-radius: 20px !important;
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28) !important;
         max-width: 720px;
         margin: 0 auto 1.1rem auto !important;
@@ -275,7 +277,11 @@ st.markdown("""
     /* Bouton d'envoi : gardait son propre fond/bordure par défaut, visible
        comme un carré distinct à droite de la pilule (le "cadre derrière"
        repéré sur la capture). Rendu transparent pour se fondre dans la
-       pilule -- seule l'icône flèche reste visible, recolorée ci-dessous. */
+       pilule -- seule l'icône flèche reste visible, recolorée ci-dessous.
+       Streamlit désactive nativement ce bouton (attribut HTML disabled)
+       tant que le champ est vide -> on s'appuie sur ce vrai état, pas une
+       approximation, pour ne le colorer QUE quand il y a du texte à
+       envoyer (demande explicite : "coloré quand tu écris"). */
     [data-testid="stChatInput"] button {
         background-color: transparent !important;
         border: none !important;
@@ -283,9 +289,13 @@ st.markdown("""
     }
     [data-testid="stChatInput"] button svg {
         fill: var(--dj-texte-muet) !important;
+        transition: fill 0.15s ease;
     }
-    [data-testid="stChatInput"] button:hover svg {
+    [data-testid="stChatInput"] button:not(:disabled) svg {
         fill: var(--dj-accent-1) !important;
+    }
+    [data-testid="stChatInput"] button:hover:not(:disabled) svg {
+        fill: var(--dj-accent-2) !important;
     }
     /* Au clic/focus, Streamlit applique sa propre bordure de focus (rouge
        #FF4B4B, sa couleur de marque par défaut) par-dessus la nôtre --
@@ -341,6 +351,73 @@ st.markdown("""
 
     .clearfix { clear: both; }
 
+    /* Éléments produits par la conversion Markdown->HTML de la réponse
+       assistant (_rendre_markdown) : sans ces règles, ils gardent le style
+       brut par défaut du navigateur (marges de <p> disproportionnées,
+       tableaux sans bordures visibles, blocs de code sans fond). */
+    .message-assistant p {
+        margin: 0 0 0.6em 0;
+    }
+    .message-assistant p:last-child {
+        /* Sans ça, la marge par défaut du dernier <p> pousse le bloc
+           suivant (clearfix) vers le bas -> réintroduirait exactement
+           l'espace en trop qu'on vient de corriger juste au-dessus. */
+        margin-bottom: 0;
+    }
+    .message-assistant ul, .message-assistant ol {
+        margin: 0 0 0.6em 0;
+        padding-left: 1.4em;
+    }
+    .message-assistant table {
+        border-collapse: collapse;
+        margin: 0.6em 0;
+        width: 100%;
+        font-size: 0.95em;
+    }
+    .message-assistant th, .message-assistant td {
+        border: 1px solid var(--dj-bordure);
+        padding: 6px 10px;
+        text-align: left;
+    }
+    .message-assistant th {
+        background-color: var(--dj-surface-haute);
+    }
+    .message-assistant code {
+        background-color: var(--dj-surface-haute);
+        border-radius: 4px;
+        padding: 0.1em 0.4em;
+        font-size: 0.9em;
+    }
+    .message-assistant pre {
+        background-color: var(--dj-surface-haute);
+        border: 1px solid var(--dj-bordure);
+        border-radius: 8px;
+        padding: 10px 14px;
+        overflow-x: auto;
+        margin: 0.6em 0;
+    }
+    .message-assistant pre code {
+        background-color: transparent;
+        padding: 0;
+    }
+
+    /* Question/réponse trop espacées (signalé) : bulle utilisateur et bulle
+       assistant sont deux appels st.markdown() séparés -> Streamlit ajoute
+       SON propre espacement entre les deux, par-dessus notre margin:8px sur
+       chaque bulle, ce qui cumule. On neutralise cet espacement, mais
+       seulement sur les blocs qui contiennent une de nos bulles (:has() +
+       les classes .message-user/.message-assistant/.clearfix, propres à ce
+       fichier) -> impossible que ça touche l'espacement ailleurs dans l'app
+       (barre latérale, formulaires, boutons), qui n'utilisent aucune de ces
+       classes. Le seul espacement visible reste alors le margin:8px des
+       bulles elles-mêmes, prévisible et déjà réglé plus haut. */
+    .element-container:has(.message-user),
+    .element-container:has(.message-assistant),
+    .element-container:has(.clearfix) {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+    }
+
     .statut-outil {
         font-style: italic;
         font-size: 0.85em;
@@ -365,6 +442,63 @@ def _normaliser_latex(texte):
     texte = re.sub(r'\\\[(.*?)\\\]', r'$$\1$$', texte, flags=re.DOTALL)
     texte = re.sub(r'\\\((.*?)\\\)', r'$\1$', texte, flags=re.DOTALL)
     return texte
+
+
+# Zone d'usage privé Unicode (U+E000/U+E001) : des caractères qui
+# n'apparaissent jamais dans un texte normal ou dans une formule LaTeX,
+# donc jamais interprétés à tort par le moteur Markdown ni par MathJax.
+# Sert de jeton temporaire pour "geler" un segment pendant la conversion.
+_JETON_MATH = '\uE000MATH{}\uE001'
+_MOTIF_MATH_AFFICHAGE = re.compile(r'\$\$(.+?)\$\$', re.DOTALL)
+_MOTIF_MATH_LIGNE = re.compile(r'\$(.+?)\$', re.DOTALL)
+
+
+def _rendre_markdown(texte):
+    """
+    Convertit le Markdown de l'assistant (gras, italique, tableaux, code)
+    en HTML, PUIS ce HTML est inséré dans notre <div class="message-
+    assistant">. Nécessaire car ce <div> est lui-même passé à
+    st.markdown(unsafe_allow_html=True) : dès qu'un contenu commence par
+    une balise HTML comme <div>, les règles Markdown (CommonMark) traitent
+    tout ce qu'il contient comme du HTML BRUT, plus jamais repassé par le
+    moteur Markdown -> **gras** restait affiché tel quel, littéralement,
+    avec ses astérisques (signalé). D'où cette conversion manuelle, faite
+    nous-mêmes avant l'insertion dans le <div>.
+
+    Piège évité (vérifié par un test dédié avant d'intégrer cette fonction
+    ici, justement pour ne pas reproduire les régressions signalées sur le
+    TeX) : le Markdown utilise `_..._` pour l'italique et `*` peut aussi
+    déclencher du gras/italique -- exactement les caractères qu'utilise
+    LaTeX (indices `x_1`, multiplication `a * b`). Sans précaution, faire
+    passer une formule dans le moteur Markdown la déformerait. On extrait
+    donc D'ABORD tous les segments $...$ et $$...$$ (déjà normalisés par
+    _normaliser_latex, appelée avant celle-ci), on les remplace par des
+    jetons neutres, on convertit le Markdown restant, puis on restitue les
+    formules EXACTEMENT comme reçues, intactes, à la toute fin -- jamais
+    vues par le moteur Markdown.
+
+    extensions=["tables", "fenced_code"] : réactive les tableaux (signalés
+    cassés après une correction précédente) et les blocs de code ```.
+    """
+    segments = []
+
+    def _extraire(motif, t):
+        def _remplacer(correspondance):
+            segments.append(correspondance.group(0))
+            return _JETON_MATH.format(len(segments) - 1)
+        return motif.sub(_remplacer, t)
+
+    # $$...$$ AVANT $...$ : sinon le motif $...$ (non-greedy) découperait
+    # un bloc $$...$$ au mauvais endroit (il contient des $ simples).
+    texte = _extraire(_MOTIF_MATH_AFFICHAGE, texte)
+    texte = _extraire(_MOTIF_MATH_LIGNE, texte)
+
+    html_rendu = _markdown_lib.markdown(texte, extensions=["tables", "fenced_code"])
+
+    for i, original in enumerate(segments):
+        html_rendu = html_rendu.replace(_JETON_MATH.format(i), original)
+
+    return html_rendu
 
 
 def _typeset_mathjax():
@@ -570,7 +704,13 @@ def _consommer_flux(generateur, placeholder_statut, placeholder, reponse_deja=""
             if reponse_complete == "":
                 placeholder_statut.empty()
             reponse_complete += texte
-            contenu_affiche = _normaliser_latex(reponse_complete)
+            # Rendu Markdown appliqué aussi PENDANT le streaming (texte
+            # encore incomplet) : un cas comme un "**" pas encore refermé
+            # peut s'afficher littéralement une fraction de seconde avant
+            # de se corriger tout seul au chunk suivant -- artefact mineur
+            # et temporaire, pas un bug persistant, jugé acceptable plutôt
+            # que de complexifier pour ne rendre le Markdown qu'à la fin.
+            contenu_affiche = _rendre_markdown(_normaliser_latex(reponse_complete))
             placeholder.markdown(
                 f'<div class="message-assistant">{contenu_affiche}{UI_CONFIG["emoji_reponse"]}</div><div class="clearfix"></div>',
                 unsafe_allow_html=True
@@ -619,9 +759,18 @@ if len(st.session_state.messages) == 0:
 
 for message in st.session_state.messages:
     if message["role"] == "user":
-        st.markdown(f'<div class="message-user">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+        # Échappement HTML (bonus, sécurité) : le message tapé par
+        # l'étudiant n'était jusqu'ici jamais échappé avant d'être injecté
+        # dans ce <div> passé en unsafe_allow_html=True -- taper "<" ou "&"
+        # pouvait casser l'affichage, voire injecter du HTML arbitraire.
+        # Pas de rendu Markdown ici volontairement : contrairement à
+        # l'assistant, ce texte est humain et brut, pas censé contenir de
+        # syntaxe Markdown intentionnelle (un "*" tapé par erreur ne doit
+        # pas devenir de l'italique).
+        contenu_echappe = _html_module.escape(message["content"])
+        st.markdown(f'<div class="message-user">{contenu_echappe}</div><div class="clearfix"></div>', unsafe_allow_html=True)
     else:
-        contenu_affiche = _normaliser_latex(message["content"])
+        contenu_affiche = _rendre_markdown(_normaliser_latex(message["content"]))
         st.markdown(f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
 # --- Confirmation d'un outil sensible en attente ------------------------
@@ -671,7 +820,7 @@ if st.session_state.confirmation_en_attente is not None:
         st.session_state.confirmation_en_attente = nouvelle_attente
 
         if nouvelle_attente is None:
-            contenu_affiche = _normaliser_latex(reponse_complete)
+            contenu_affiche = _rendre_markdown(_normaliser_latex(reponse_complete))
             placeholder.markdown(
                 f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>',
                 unsafe_allow_html=True
@@ -716,7 +865,7 @@ elif prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
     if user_id_courant is None:
         st.session_state.compteur_visiteur += 1
     st.session_state.messages.append({"role": "user", "content": prompt})
-    st.markdown(f'<div class="message-user">{prompt}</div><div class="clearfix"></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="message-user">{_html_module.escape(prompt)}</div><div class="clearfix"></div>', unsafe_allow_html=True)
 
     historique = [
         {"role": m["role"], "content": m["content"]}
@@ -743,7 +892,7 @@ elif prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
         st.session_state.confirmation_en_attente = evenement_confirmation
         st.rerun()
 
-    contenu_affiche = _normaliser_latex(reponse_complete)
+    contenu_affiche = _rendre_markdown(_normaliser_latex(reponse_complete))
     placeholder.markdown(
         f'<div class="message-assistant">{contenu_affiche}</div><div class="clearfix"></div>',
         unsafe_allow_html=True
