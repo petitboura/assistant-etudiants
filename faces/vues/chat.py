@@ -617,6 +617,22 @@ if len(st.session_state.messages) == 0:
     _rendre_titre_accueil(UI_CONFIG)
     st.caption(UI_CONFIG["sous_titre_accueil"])
 
+# Lien de retour vers la page agent Next.js (2026-07-12, Bourama : "il n'y
+# a pas de quitter plein écran qui va faire retour où tu étais" -- le
+# bouton "Plein écran" de components/BoutonUtiliser.tsx ouvre cette page
+# Streamlit en nouvel onglet SANS aucun moyen d'y revenir ensuite). Affiché
+# à chaque chargement de page, pas seulement au premier message, pour
+# rester utilisable même après avoir déjà discuté. `URL_PLATEFORME`
+# optionnel (comme URL_RETOUR_APP) : si absent, on n'affiche simplement pas
+# le lien plutôt que de planter -- même convention que
+# NEXT_PUBLIC_STREAMLIT_URL côté BoutonUtiliser.tsx.
+_url_plateforme = get_secret("URL_PLATEFORME")
+if _url_plateforme:
+    st.link_button(
+        "← Retour à l'agent",
+        f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}",
+    )
+
 for message in st.session_state.messages:
     if message["role"] == "user":
         st.markdown(f'<div class="message-user">{message["content"]}</div><div class="clearfix"></div>', unsafe_allow_html=True)
@@ -770,7 +786,5 @@ elif prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
 # donnée existante en base agent par agent.
 _typeset_mathjax()
 
-if st.session_state.compteur >= 3:
-    st.markdown("---")
-    st.markdown("Ton avis compte, dis-nous ce que tu penses !")
-    st.link_button("Remplir le formulaire", "https://forms.gle/zQPQsb9cX46188oh9")
+# Bloc "Remplir le formulaire" (feedback Google Forms) retiré le 2026-07-12
+# (Bourama : résidu à enlever, plus d'usage).
