@@ -75,6 +75,21 @@ class CreerAgentPayload(BaseModel):
     # description_connaissance qui reste un usage interne au RAG.
     image_vitrine_url: Optional[str] = None
     description: str = ""
+    # Ajouté le 2026-07-12 (Bourama : "tu as mélangé deux choses, la
+    # description publique et le sous-titre. La description publique peut
+    # avoir n'importe quelle taille alors que le sous-titre n'est qu'un
+    # sous-titre"). AVANT ce correctif, sous_titre_accueil était rempli
+    # directement avec `description` (voir plus bas) faute de champ dédié
+    # -- ça marchait "par accident" pour corriger le bug du sous-titre
+    # identique à tous les agents, mais confondait deux choses de nature
+    # différente : `description` = texte public de longueur libre (fiche
+    # agent, SEO), `sous_titre` = courte phrase d'accueil affichée sous le
+    # titre au premier écran du chat (équivalent du champ "Phrase
+    # d'accueil" du formulaire Streamlit, faces/vues/creer_agent.py).
+    # Fallback sur `description` uniquement si `sous_titre` est vide, pour
+    # ne pas laisser un agent sans aucun sous-titre si le créateur ne
+    # remplit pas ce nouveau champ.
+    sous_titre: str = ""
 
 
 class AgentCree(BaseModel):
@@ -136,10 +151,13 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
         # sur UI_CONFIG_PAR_DEFAUT["sous_titre_accueil"] (le texte de
         # l'agent maths historique) pour TOUS les agents créés via ce
         # flow, quel que soit leur sujet réel. Le formulaire Streamlit
-        # (creer_agent.py) a un champ dédié pour ça ; ce flow-ci n'en a
-        # pas, donc on dérive directement de la description publique
-        # (déjà écrite par le créateur, pas une resaisie).
-        "sous_titre_accueil": payload.description.strip(),
+        # (creer_agent.py) a un champ dédié pour ça ("Phrase d'accueil") ;
+        # ce flow-ci en a maintenant un aussi (`sous_titre`), distinct de
+        # `description` (correctif du 2026-07-12 suivant : les deux
+        # avaient été confondus dans une première version de ce
+        # correctif). Fallback sur description seulement si sous_titre
+        # est vide, pour ne jamais laisser un agent sans sous-titre.
+        "sous_titre_accueil": payload.sous_titre.strip() or payload.description.strip(),
         "emoji_reponse": ui.icone_page.strip(),
     }
 
