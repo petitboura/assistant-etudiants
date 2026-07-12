@@ -371,6 +371,11 @@ class AgentEditable(BaseModel):
     texte_libre: str = ""
     image_vitrine_url: Optional[str] = None
     description: str = ""
+    # Ajouté le 2026-07-12 (Bourama : "le dashboard de modification aussi
+    # changer" -- même correctif que la création, la page d'édition ne
+    # gérait jusqu'ici que `description`, sous_titre_accueil n'était ni
+    # lu ni modifiable ici).
+    sous_titre: str = ""
     actif: bool = True
 
 
@@ -416,6 +421,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         texte_libre=(ligne.get("knowledge_source") or {}).get("texte_libre", ""),
         image_vitrine_url=ligne.get("image_vitrine_url"),
         description=ligne.get("description") or "",
+        sous_titre=(ligne.get("ui_config") or {}).get("sous_titre_accueil", ""),
         actif=ligne.get("actif", True),
     )
 
@@ -430,6 +436,10 @@ class ModifierAgentPayload(BaseModel):
     texte_libre: Optional[str] = None
     image_vitrine_url: Optional[str] = None
     description: Optional[str] = None
+    # Ajouté le 2026-07-12, même correctif que sous_titre dans
+    # CreerAgentPayload : distinct de `description` (taille libre), courte
+    # phrase d'accueil affichée sous le titre au premier écran du chat.
+    sous_titre: Optional[str] = None
     actif: Optional[bool] = None
 
 
@@ -483,6 +493,8 @@ def modifier_agent(
     if payload.icone_page is not None and payload.icone_page.strip():
         icone_finale = payload.icone_page.strip()
 
+    ui_config_modifie = False
+
     if payload.nom is not None or payload.icone_page is not None:
         ui_config.update(
             {
@@ -492,6 +504,18 @@ def modifier_agent(
                 "emoji_reponse": icone_finale,
             }
         )
+        ui_config_modifie = True
+
+    # Ajouté le 2026-07-12 (Bourama : "le dashboard de modification aussi
+    # changer") : sous_titre_accueil est indépendant de nom/icône, donc
+    # géré dans sa propre condition plutôt que rattaché au bloc
+    # nom/icone_page ci-dessus -- sinon modifier UNIQUEMENT le sous-titre
+    # (sans toucher nom ni icône) n'aurait jamais été écrit en base.
+    if payload.sous_titre is not None:
+        ui_config["sous_titre_accueil"] = payload.sous_titre.strip()
+        ui_config_modifie = True
+
+    if ui_config_modifie:
         mise_a_jour["ui_config"] = ui_config
 
     if payload.system_prompt is not None:
@@ -550,6 +574,7 @@ def modifier_agent(
         texte_libre=knowledge_source.get("texte_libre", ""),
         image_vitrine_url=mise_a_jour.get("image_vitrine_url", ligne.get("image_vitrine_url")),
         description=mise_a_jour.get("description", ligne.get("description") or ""),
+        sous_titre=ui_config.get("sous_titre_accueil", ""),
         actif=mise_a_jour.get("actif", ligne.get("actif", True)),
     )
 
