@@ -15,9 +15,10 @@ d'architecture #3 dans api/PLAN.md).
 import os
 import sys
 import logging
+import tempfile
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, supabase, get_secret
@@ -25,7 +26,8 @@ from api.auth import utilisateur_courant, supabase, get_secret
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "indexers"))
 from creation_agent import generer_id_depuis_nom, extraire_id_notion, composer_system_prompt  # noqa: E402
-from index_documents import indexer_texte  # noqa: E402
+from index_documents import indexer_texte, indexer_document  # noqa: E402
+from storage import upload_document  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
@@ -311,6 +313,79 @@ def mettre_a_jour_vitrine(
 
 class NoterAgentPayload(BaseModel):
     note: int
+
+
+@router.post("/{agent_id}/documents", status_code=201)
+async def uploader_document(
+    agent_id: str,
+    fichier: UploadFile = File(...),
+    utilisateur=Depends(utilisateur_courant),
+):
+    """
+    Étape 2 de `api/PLAN.md`, jamais construite jusqu'ici — ajoutée le
+    2026-07-12 suite à un bug remonté par Bourama : le nouveau formulaire
+    de création (D.6 du pivot social) n'avait aucun moyen d'ajouter un
+    PDF, `POST /api/agents` ne le gère pas lui-même (voir docstring en
+    tête de ce fichier). Appelé APRÈS `POST /api/agents` : l'agent doit
+    déjà exister, on a besoin de son id pour indexer le document dessus.
+
+    Réutilise telle quelle la logique déjà en place côté Streamlit
+    (`indexers/storage.py:upload_document` +
+    `indexers/index_documents.py:indexer_document`) — pas de duplication,
+    même convention que `composer_system_prompt` (décision d'architecture
+    #3 de `api/PLAN.md`).
+
+    Vérifie la propriété de l'agent (même exigence que
+    `mettre_a_jour_vitrine`, notée dès l'Étape 1 comme prérequis pour ce
+    endpoint).
+    """
+    if fichier.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés.")
+
+    try:
+        res = (
+            supabase.table("agents")
+            .select("id, owner_id")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant upload document) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible d'ajouter ce document pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+    if res.data["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    contenu = await fichier.read()
+    if len(contenu) == 0:
+        raise HTTPException(status_code=400, detail="Fichier vide.")
+
+    nom_original = fichier.filename or "document.pdf"
+    nom_stockage = f"{agent_id}__{nom_original}"
+
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(contenu)
+        chemin_temp = tmp.name
+
+    try:
+        upload_document(chemin_temp, nom_stockage)
+        indexer_document(chemin_temp, nom_stockage, agent_id)
+    except Exception as e:
+        logging.error(f"ERREUR indexation PDF (agent_id={agent_id}, fichier={nom_original}) : {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"L'agent est créé, mais « {nom_original} » n'a pas pu être indexé. Réessaie depuis « Mes agents ».",
+        )
+    finally:
+        try:
+            os.remove(chemin_temp)
+        except OSError:
+            pass
+
+    return {"nom": nom_original, "statut": "indexé"}
 
 
 @router.post("/{agent_id}/rating", status_code=204)
