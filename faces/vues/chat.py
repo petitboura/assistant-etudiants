@@ -79,13 +79,6 @@ UI_CONFIG_PAR_DEFAUT = {
     "sous_titre_accueil": "Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout.",
     "emoji_reponse": "🎓",
     "placeholder_saisie": "Pose ta question...",
-    # Point 5 (Interface) du cadre de conception. rendu_visuel=True par
-    # défaut pour ne pas casser tutorat-maths, qui dépend du rendu LaTeX
-    # mais n'a pas cette clé dans sa ligne Supabase (créé avant l'ajout
-    # de ce champ). Les nouveaux agents créés via creer_agent.py écrivent
-    # explicitement leur propre valeur, donc ce défaut ne s'applique qu'aux
-    # agents historiques.
-    "rendu_visuel": True,
 }
 
 
@@ -299,12 +292,17 @@ st.markdown("""
     }
     /* Au clic/focus, Streamlit applique sa propre bordure de focus (rouge
        #FF4B4B, sa couleur de marque par défaut) par-dessus la nôtre --
-       repéré en conditions réelles. On change juste la couleur de la
-       bordure existante, SANS ajouter d'anneau (box-shadow) supplémentaire
-       : un ajout précédent créait une double bordure visible (une barre
-       décalée derrière la pilule), lui aussi repéré en conditions réelles. */
+       repéré en conditions réelles. anneau en box-shadow plutôt que
+       border-color (signalé : l'anneau précédent semblait "dégradé"/pas
+       net au niveau du coin arrondi) -- un box-shadow suit nativement le
+       border-radius sans le petit artefact d'anticrénelage qu'un border
+       épais peut donner sur une courbe, et reste fin et net (1px). La
+       bordure de base passe transparente pour ne pas se superposer à cet
+       anneau ; l'ombre portée existante est conservée en 2e couche pour
+       garder l'effet de pilule flottante. */
     [data-testid="stChatInput"]:focus-within {
-        border-color: var(--dj-accent-1) !important;
+        border-color: transparent !important;
+        box-shadow: 0 0 0 1px var(--dj-accent-1), 0 6px 24px rgba(0, 0, 0, 0.28) !important;
     }
     [data-testid="stChatInput"] textarea {
         background-color: transparent !important;
@@ -902,10 +900,11 @@ elif prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
 
 # Toujours en dernier : (re)déclenche le rendu MathJax sur tout ce qui
 # vient d'être affiché (historique + nouvelle réponse le cas échéant).
-# Conditionné à UI_CONFIG["rendu_visuel"] (point 5, Interface) : inutile
-# de charger MathJax pour un agent qui ne manipule jamais de formules.
-if UI_CONFIG["rendu_visuel"]:
-    _typeset_mathjax()
+# Décision de Bourama (2026-07-12) : ce n'est plus un choix par agent
+# (l'ancienne case à cocher "rendu_visuel" à la création, décochée par
+# défaut, laissait des agents mathématiques sans rendu LaTeX -> supprimée
+# de creer_agent.py). Actif pour tous, systématiquement.
+_typeset_mathjax()
 
 if st.session_state.compteur >= 3:
     st.markdown("---")
