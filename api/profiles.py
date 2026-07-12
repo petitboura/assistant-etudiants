@@ -141,6 +141,17 @@ def mettre_a_jour_mon_profil(
     (jamais régénéré sur les PATCH suivants — une fois que
     `profiles.slug` remplacera `user_id` dans les URLs `/u/...`, un lien
     déjà partagé ne doit pas changer sous les pieds de la personne).
+
+    Bug bis corrigé le 2026-07-12 (même jour, la 500 persistait malgré le
+    fix ci-dessus) : la détection "ce profil existe déjà" utilisait la
+    vérité Python de `deja_existant.data` directement, qui peut être un
+    objet non-None mais "vide" (valeurs null dedans) selon le client
+    Supabase utilisé pour une recherche sans résultat — donc considéré
+    VRAI par Python alors qu'aucune ligne n'existe réellement, ce qui
+    sautait la génération du slug pour un compte qui en avait pourtant
+    besoin. Voir `profil_existe_deja` ci-dessous : vérifie maintenant la
+    présence explicite d'un `user_id` dans les données plutôt que la
+    simple vérité de l'objet.
     """
     ligne = {"user_id": utilisateur.id}
     if payload.nom_affiche is not None:
@@ -162,7 +173,22 @@ def mettre_a_jour_mon_profil(
         logging.error(f"ERREUR SUPABASE (vérification profil existant {utilisateur.id}) : {e}")
         deja_existant = None
 
-    if not (deja_existant and deja_existant.data):
+    # Bug trouvé le 2026-07-12 (Bourama a remonté le message d'erreur
+    # détaillé, capture d'écran) : `deja_existant.data` peut être un objet
+    # "vide" mais non-None (ex. dict avec des valeurs null dedans) selon
+    # le comportement de .maybe_single() côté client Supabase — ce qui le
+    # rend VRAI au sens Python (`{...} and ...` est truthy dès que le dict
+    # n'est pas vide, même s'il ne contient que des valeurs null), et donc
+    # sautait la génération du slug en pensant qu'une ligne existait déjà.
+    # Résultat : Postgres tentait quand même une VRAIE création (aucune
+    # ligne ne correspondait à l'upsert), sans slug -> violation NOT NULL.
+    # Fix : vérifier explicitement la présence d'un user_id dans data, pas
+    # juste la "vérité" Python de l'objet.
+    profil_existe_deja = bool(
+        deja_existant and deja_existant.data and deja_existant.data.get("user_id")
+    )
+
+    if not profil_existe_deja:
         base = generer_id_depuis_nom(payload.nom_affiche or "") or utilisateur.id[:8]
         slug = base
         try:
@@ -180,11 +206,7 @@ def mettre_a_jour_mon_profil(
         supabase.table("profiles").upsert(ligne, on_conflict="user_id").execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (upsert profil {utilisateur.id}) : {e}")
-        # DEBUG TEMPORAIRE (2026-07-12) : le detail générique ne suffisait
-        # pas à diagnostiquer sans accès aux logs Railway. str(e) exposé
-        # ici le temps de trouver la vraie cause, à retirer une fois
-        # corrigé (ne pas garder ça en l'état pour de vrai en prod).
-        raise HTTPException(status_code=500, detail=f"Impossible de mettre à jour le profil : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de mettre à jour le profil pour le moment.")
 
     try:
         res = (
