@@ -179,7 +179,24 @@ def mettre_a_jour_mon_profil(
         logging.error(f"ERREUR SUPABASE (vérification slug existant {utilisateur.id}) : {e}")
         slug_existant = None
 
-    if not slug_existant:
+    if slug_existant:
+        # Bug quater trouvé le 2026-07-12 (le debug v4 l'a prouvé dans les
+        # faits, pas par déduction) : `upsert(ligne, on_conflict="user_id")`
+        # tentait quand même une vraie INSERT (pas une UPDATE) même quand
+        # `slug_existant` valait bien 'moi' -- donc même quand la ligne
+        # existait déjà. Cause exacte non identifiée avec certitude (client
+        # Supabase/PostgREST ne respectant pas `on_conflict` comme attendu
+        # dans ce contexte), mais le contournement est imparable : on
+        # abandonne `upsert()` pour ce cas, remplacé par un `update()`
+        # explicite, ciblé par `.eq("user_id", ...)`. Un update() ne peut
+        # pas se retrouver à tenter une insertion -- pas d'ambiguïté
+        # possible sur le mécanisme.
+        try:
+            supabase.table("profiles").update(ligne).eq("user_id", utilisateur.id).execute()
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (update profil {utilisateur.id}) : {e}")
+            raise HTTPException(status_code=500, detail=f"[v5-update] {e}")
+    else:
         base = generer_id_depuis_nom(payload.nom_affiche or "") or utilisateur.id[:8]
         slug = base
         try:
@@ -193,25 +210,21 @@ def mettre_a_jour_mon_profil(
             slug = f"{base}-{utilisateur.id[:6]}"
         ligne["slug"] = slug
 
-    try:
-        supabase.table("profiles").upsert(ligne, on_conflict="user_id").execute()
-    except Exception as e:
-        logging.error(f"ERREUR SUPABASE (upsert profil {utilisateur.id}) : {e}")
-        # DEBUG TEMPORAIRE v4 (2026-07-12) : le fix v3 tournait bel et
-        # bien en prod (confirmé par le marqueur [v3-ede24df] vu par
-        # Bourama) mais la 500 persistait à l'identique -- donc mon
-        # raisonnement sur pourquoi slug_existant serait toujours faux
-        # est incomplet quelque part. Plutôt que de re-deviner une 5e
-        # cause dans le vide, on expose directement le contenu réel de
-        # `ligne` (ce qui est vraiment envoyé à Supabase) et de
-        # `slug_existant` (ce qui a vraiment été lu en base juste avant) :
-        # la réponse sera dans les faits, pas dans une nouvelle théorie.
-        raise HTTPException(
-            status_code=500,
-            detail=(
-                f"[v4] {e} | ligne envoyée={ligne} | slug_existant lu={slug_existant!r}"
-            ),
-        )
+        # Vraie INSERT, pas upsert : si une ligne existe malgré tout pour ce
+        # user_id (cas limite : `slug_existant` faux-négatif), l'insert
+        # échoue sur la contrainte PK -> on retente alors un update() avec
+        # le slug fraîchement généré, plutôt que de laisser planter.
+        try:
+            supabase.table("profiles").insert(ligne).execute()
+        except Exception as e_insert:
+            logging.error(
+                f"ERREUR SUPABASE (insert profil {utilisateur.id}), tentative update : {e_insert}"
+            )
+            try:
+                supabase.table("profiles").update(ligne).eq("user_id", utilisateur.id).execute()
+            except Exception as e_update:
+                logging.error(f"ERREUR SUPABASE (update de repli profil {utilisateur.id}) : {e_update}")
+                raise HTTPException(status_code=500, detail=f"[v5-insert-puis-update] {e_update}")
 
     try:
         res = (
