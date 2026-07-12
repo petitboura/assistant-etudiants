@@ -19,7 +19,7 @@ from supabase import create_client
 from main import chat
 from auth import inscription, connexion, deconnexion, demarrer_reinitialisation_mot_de_passe
 from connexions.notion import demarrer_connexion_notion, finaliser_connexion_notion, etat_notion_en_attente, est_connecte
-from themes import police_vers_css, RAYONS, RAYON_PAR_DEFAUT, TAILLES, TAILLE_PAR_DEFAUT
+from theme_djiguigne import injecter_theme
 from recuperation_mdp import gerer_recuperation_mot_de_passe
 
 logging.basicConfig(level=logging.INFO)
@@ -61,6 +61,15 @@ AGENT_ID = _resoudre_agent_id()
 
 # Valeurs affichées si `agents.ui_config` est vide ou injoignable (ex:
 # pendant le déploiement du 1er agent, avant remplissage de la colonne).
+#
+# Pivot social (voir PIVOT_SOCIAL.md, "Ce qui change") : le thème visuel
+# par agent est SUPPRIMÉ. Un seul thème fixe pour toute la plateforme
+# (voir theme_djiguigne.injecter_theme(), déjà utilisé sur les autres
+# pages de l'app — vitrine/créer_agent/mes_agents — mais jamais appliqué
+# ici jusqu'à maintenant, c'était le bug). Ce dict ne garde donc QUE le
+# contenu propre à chaque agent (texte, emoji), plus aucune couleur,
+# police, rayon, ou CSS custom — ces clés-là, même encore présentes dans
+# `agents.ui_config` pour d'anciens agents, ne sont simplement plus lues.
 UI_CONFIG_PAR_DEFAUT = {
     "titre_page": "Votre coatch mathématique",
     "icone_page": "🎓",
@@ -75,39 +84,6 @@ UI_CONFIG_PAR_DEFAUT = {
     # explicitement leur propre valeur, donc ce défaut ne s'applique qu'aux
     # agents historiques.
     "rendu_visuel": True,
-    "couleur_fond": "rgba(100, 100, 100, 0.2)",
-    "couleur_accent": "#8B5E3C",
-    # Nouveaux champs de thème (contrôle visuel complet, pas juste un
-    # accent isolé). Défauts choisis pour ne RIEN changer visuellement
-    # aux agents déjà créés qui n'ont pas ces clés dans leur ui_config :
-    # "transparent" = pas de bulle assistant (comportement historique),
-    # la bordure grise reprend exactement l'ancienne valeur codée en dur.
-    "couleur_bulle_assistant": "transparent",
-    "couleur_bordure": "rgba(128, 128, 128, 0.3)",
-    "police": "Lora (serif, actuelle)",
-    "css_avance": "",
-    # --- Contrôle visuel étendu (maximum contrôlable par formulaire) ---
-    # Défauts choisis pour être EXACTEMENT le rendu actuel quand la clé est
-    # absente : aucun agent existant ne doit changer d'apparence tant que
-    # son créateur n'a pas explicitement choisi une nouvelle valeur.
-    "couleur_fond_page": "",  # "" = pas de surcharge (comportement Streamlit normal, clair/sombre auto)
-    "couleur_texte_utilisateur": "inherit",  # s'adapte au mode clair/sombre du visiteur
-    "couleur_texte_assistant": "inherit",
-    "couleur_texte_bouton": "#FFFFFF",  # texte des boutons (à choisir contrasté avec couleur_accent)
-    "couleur_lien": "",  # "" = utilise couleur_accent (comportement actuel, un seul réglage pour les deux)
-    "couleur_bouton_fond": "",  # "" = utilise couleur_accent
-    "rayon_bulles": "18px",
-    "taille_texte": "",  # "" = taille par défaut de Streamlit, pas de surcharge
-    # Chantier thème (bulle assistant + titre logo multicolore). Défauts
-    # choisis pour NE RIEN changer visuellement aux agents existants sans
-    # ces clés : bulle_assistant_visible=True -> couleur_bulle_assistant
-    # s'applique telle quelle (déjà "transparent" par défaut plus haut,
-    # donc identique à avant). titre_couleur_unique="#000000" et
-    # titre_couleurs_lettres=None -> st.title() classique, pas de <span>
-    # custom (voir rendu plus bas).
-    "bulle_assistant_visible": True,
-    "titre_couleur_unique": "#000000",
-    "titre_couleurs_lettres": None,
 }
 
 
@@ -180,62 +156,18 @@ if not _agent_est_actif(AGENT_ID):
     st.warning("Cet agent n'est plus disponible.")
     st.stop()
 
-# Police : import Google Fonts (si besoin) + pile CSS finale, résolus via
-# le module partagé core/themes.py (voir sa docstring pour les alias de
-# compatibilité ascendante).
-_IMPORT_POLICE, _POLICE_CSS = police_vers_css(UI_CONFIG["police"])
+# Pivot social : thème visuel unique et fixe pour tous les agents (voir
+# UI_CONFIG_PAR_DEFAUT plus haut). injecter_theme() est le même appelé
+# par vitrine.py/creer_agent.py/mes_agents.py -- une seule palette/police/
+# CSS de base pour toute l'app, plus aucune personnalisation par agent.
+# Volontairement PAS afficher_entete() ici (qui affiche le logo
+# Djiguignè) : le chat reste l'espace de l'agent lui-même, pas celui de
+# la marque -- seul le thème (couleurs/police/CSS) est repris, jamais le
+# logo.
+injecter_theme()
 
-# Rayon des bulles et taille du texte : mêmes libellés que dans le
-# formulaire (creer_agent.py/mes_agents.py) -> valeur CSS réelle. Si la
-# valeur stockée ne correspond à aucun libellé connu (champ jamais
-# rempli, ou ancien format "18px" déjà en px directement), on l'utilise
-# telle quelle : ça permet aussi bien un ancien agent qu'un futur réglage
-# fin non exposé dans le formulaire.
-_RAYON_CSS = RAYONS.get(UI_CONFIG["rayon_bulles"], UI_CONFIG["rayon_bulles"] or "18px")
-_TAILLE_CSS = TAILLES.get(UI_CONFIG["taille_texte"], UI_CONFIG["taille_texte"])
-
-# couleur_lien / couleur_bouton_fond permettent de distinguer liens et
-# boutons ; "" (réglage non touché par le créateur) retombe sur
-# couleur_accent, le comportement historique (un seul réglage pour les deux).
-_COULEUR_LIEN = UI_CONFIG["couleur_lien"] or UI_CONFIG["couleur_accent"]
-_COULEUR_BOUTON_FOND = UI_CONFIG["couleur_bouton_fond"] or UI_CONFIG["couleur_accent"]
-
-# Chantier thème, point 1 (toggle bulle assistant) : si le créateur a
-# décoché "Afficher les réponses dans une bulle visible", on force
-# transparent quoi que contienne couleur_bulle_assistant en base (au cas
-# où une valeur opaque y traînerait d'un réglage précédent), et on retire
-# le padding horizontal + arrondi qui donnent un effet "boîte" même sur
-# fond transparent (visible via l'ombre/la sélection de texte sinon).
-_BULLE_VISIBLE = UI_CONFIG.get("bulle_assistant_visible", True)
-if _BULLE_VISIBLE:
-    _COULEUR_BULLE_ASSISTANT = UI_CONFIG["couleur_bulle_assistant"]
-    _PADDING_BULLE_ASSISTANT = "10px 4px"
-    _RAYON_BULLE_ASSISTANT = _RAYON_CSS
-else:
-    _COULEUR_BULLE_ASSISTANT = "transparent"
-    _PADDING_BULLE_ASSISTANT = "10px 0"
-    _RAYON_BULLE_ASSISTANT = "0px"
-
-# Couleur de fond commune à TOUS les champs de saisie de l'app (barre de
-# chat + champs email/mot de passe de la sidebar) : une seule variable
-# calculée ici et réutilisée telle quelle aux deux endroits plus bas ->
-# garantit une couleur strictement identique (demande explicite du
-# créateur), pas deux formules qui se ressemblent sans l'être. Repli en
-# couleur unie déclaré séparément à chaque utilisation (voir plus bas),
-# color-mix() n'étant pas interpolable dans une simple variable Python.
-_COULEUR_CHAMP_SAISIE = f'color-mix(in srgb, {UI_CONFIG["couleur_fond_page"]} 80%, gray 20%)'
-
-st.markdown(f"""
+st.markdown("""
     <style>
-    {_IMPORT_POLICE}
-
-    /* "" (valeur non définie) produit une déclaration CSS invalide, que
-       le navigateur ignore silencieusement -> pas de surcharge, comme
-       souhaité, sans if/else Python séparé pour chaque propriété. */
-    .stApp {{
-        background-color: {UI_CONFIG["couleur_fond_page"]};
-    }}
-
     /* En-tête natif Streamlit (barre "Share / étoile / crayon / GitHub / ⋮")
        et pied de page ("Made with Streamlit") : supprimés visuellement et
        sans espace réservé.
@@ -250,66 +182,31 @@ st.markdown(f"""
        tout par défaut, mais réversible), et stExpandSidebarButton +
        stSidebarCollapseButton (le bouton "fermer" quand la sidebar est
        ouverte, vérifié aussi dans le bundle, vit dans stSidebarHeader,
-       lui non affecté) sont forcés en visibility:visible juste après.
-       #MainMenu/decoration/status n'ont pas ce problème (rien d'utile ne
-       vit dedans) -> display:none reste approprié pour eux. */
-    #MainMenu,
-    footer,
-    [data-testid="stDecoration"],
-    [data-testid="stStatusWidget"] {{
-        display: none !important;
-        visibility: hidden !important;
-        height: 0 !important;
-    }}
+       lui non affecté) sont forcés en visibility:visible juste après. */
     header,
     [data-testid="stHeader"],
-    [data-testid="stToolbar"] {{
+    [data-testid="stToolbar"] {
         visibility: hidden !important;
         height: 0 !important;
         min-height: 0 !important;
         background: transparent !important;
-    }}
+    }
     /* Sans en-tête, block-container reprend tout l'espace du haut : on
        enlève le padding réservé pour lui, sinon un vide persiste en haut
-       de page même une fois l'en-tête retiré. */
-    .block-container {{
+       de page même une fois l'en-tête retiré. injecter_theme() met déjà
+       2.2rem : on réaligne à la valeur historique du chat (2rem). */
+    .block-container {
         padding-top: 2rem !important;
-    }}
-
-    /* Barre latérale (st.sidebar) : jusqu'ici jamais stylée -> elle gardait
-       le gris clair par défaut de Streamlit, qui jurait avec couleur_fond_page
-       sur les agents à thème sombre. On l'aligne explicitement, sur les deux
-       niveaux (conteneur + zone de contenu) pour parer aux versions de
-       Streamlit où le fond est peint par l'un ou l'autre. */
-    [data-testid="stSidebar"],
-    [data-testid="stSidebarContent"],
-    [data-testid="stSidebarUserContent"] {{
-        background: {UI_CONFIG["couleur_fond_page"]} !important;
-        background-color: {UI_CONFIG["couleur_fond_page"]} !important;
-    }}
-    [data-testid="stSidebar"] {{
-        border-right: none !important;
-        box-shadow: none !important;
-    }}
+    }
 
     /* Boutons d'affichage/masquage de la sidebar : stSidebarCollapseButton
        (fermer, visible sidebar ouverte) et stExpandSidebarButton (rouvrir,
        visible sidebar repliée) sont les deux VRAIS data-testid (confirmés
-       dans le bundle JS de Streamlit -> stSidebarCollapsedControl n'existe
-       pas, c'est un nom que j'avais deviné à tort au tour précédent).
-       Streamlit leur donne une couleur d'icône fixe pensée pour son thème
-       par défaut, PAS pour couleur_fond_page choisie par le créateur -> sur
-       un fond sombre/noir, l'icône devient invisible (noir sur noir). On
-       leur donne un badge de fond neutre semi-opaque + une icône blanche
-       forcée, lisibles quel que soit couleur_fond_page (clair ou sombre).
-       visibility:visible + position:fixed forcés : ces boutons peuvent
-       vivre dans header/stToolbar qu'on vient de rendre invisible/sans
-       hauteur juste au-dessus -> sans ça, ils resteraient cascadés
-       invisibles avec leur parent. Volontairement PAS de display:none :
-       cacher ces conteneurs casserait les boutons eux-mêmes (plus moyen de
-       (re)plier/déplier la sidebar), ce n'est qu'un habillage visuel. */
+       dans le bundle JS de Streamlit). Rendus visibles + repositionnés en
+       fixed, avec un badge de fond neutre + icône blanche forcée, lisibles
+       quel que soit le thème (ici fixe et sombre, mais gardé robuste). */
     [data-testid="stSidebarCollapseButton"],
-    [data-testid="stExpandSidebarButton"] {{
+    [data-testid="stExpandSidebarButton"] {
         visibility: visible !important;
         position: fixed !important;
         top: 0.6rem !important;
@@ -317,148 +214,82 @@ st.markdown(f"""
         z-index: 999999 !important;
         background-color: rgba(120, 120, 120, 0.35) !important;
         border-radius: 6px !important;
-    }}
+    }
     [data-testid="stSidebarCollapseButton"] svg,
-    [data-testid="stExpandSidebarButton"] svg {{
+    [data-testid="stExpandSidebarButton"] svg {
         visibility: visible !important;
         fill: #FFFFFF !important;
         color: #FFFFFF !important;
-    }}
+    }
 
     /* Barre de saisie (st.chat_input) : par défaut, Streamlit la loge dans
-       une bande pleine largeur avec SON PROPRE fond clair, indépendant de
-       couleur_fond_page -> c'est ce bandeau clair qui jurait avec le fond
-       sombre choisi. On fait disparaître cette bande (même couleur que la
-       page -> invisible) et on donne à l'input lui-même une allure de
-       pilule flottante, centrée, qui reprend automatiquement la couleur de
-       fond choisie -> plus aucun réglage manuel si le créateur change sa
-       couleur de fond, ça suit tout seul.
+       une bande pleine largeur avec SON PROPRE fond, indépendant du thème
+       -> on la fait disparaître (même couleur que le fond de l'app,
+       fixe désormais -> var(--dj-fond)) et on donne à l'input lui-même une
+       allure de pilule flottante, centrée.
        Note : le nom exact de ce conteneur a changé entre versions de
        Streamlit (stBottomBlockContainer / stChatFloatingInputContainer) ->
-       tous les niveaux connus sont ciblés pour rester robuste. Piège du
-       dernier essai : [data-testid="stBottomBlockContainer"] seul ne colore
-       QUE la colonne centrale (largeur du contenu, pas de la page) -> les
-       deux bandes latérales, peintes par le conteneur PARENT plein largeur
-       ([data-testid="stBottom"] et son wrapper direct), restaient visibles.
-       On colore donc explicitement chaque niveau, du plus englobant (plein
-       largeur) au plus interne, avec la même couleur -> plus aucune bande,
-       ni au centre ni sur les côtés. Volontairement PAS de display:none ici :
-       ça avait fait disparaître le champ de saisie lui-même la dernière fois
-       (il n'est pas juste décoratif, il contient l'input fonctionnel). */
+       tous les niveaux connus sont ciblés pour rester robuste. */
     [data-testid="stBottom"],
     [data-testid="stBottom"] > div,
     [data-testid="stBottomBlockContainer"],
     .stChatFloatingInputContainer,
-    .stChatInputContainer {{
-        background: {UI_CONFIG["couleur_fond_page"]} !important;
-        background-color: {UI_CONFIG["couleur_fond_page"]} !important;
+    .stChatInputContainer {
+        background: var(--dj-fond) !important;
         box-shadow: none !important;
         border-top: none !important;
-    }}
-    /* La pilule de saisie elle-même : contrairement à la bande qui l'entoure
-       (transparente/fondue), elle DOIT rester visiblement délimitée (bordure
-       + ombre) pour qu'on voie où écrire -> sans ça, sur un fond uni de même
-       couleur, l'input devient invisible ("null" à l'écran, signalé un tour
-       précédent). couleur_fond_page est déclarée avant _COULEUR_CHAMP_SAISIE
-       (repli si color-mix() n'est pas supporté par le navigateur -> garde
-       une couleur unie plutôt qu'une déclaration invalide ignorée). Cette
-       même variable _COULEUR_CHAMP_SAISIE est réutilisée plus bas pour les
-       champs texte (email/mot de passe) -> couleur strictement identique
-       entre les deux, comme demandé, pas juste une formule ressemblante. */
-    [data-testid="stChatInput"] {{
-        background-color: {UI_CONFIG["couleur_fond_page"]} !important;
-        background-color: {_COULEUR_CHAMP_SAISIE} !important;
-        border: 1px solid {UI_CONFIG["couleur_bordure"]} !important;
+    }
+    [data-testid="stChatInput"] {
+        background-color: var(--dj-surface) !important;
+        border: 1px solid var(--dj-bordure) !important;
         border-radius: 999px !important;
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28) !important;
         max-width: 720px;
         margin: 0 auto 1.1rem auto !important;
-    }}
-    [data-testid="stChatInput"] textarea {{
+    }
+    [data-testid="stChatInput"] textarea {
         background-color: transparent !important;
-        color: {UI_CONFIG["couleur_texte_utilisateur"]} !important;
-    }}
+        color: var(--dj-texte) !important;
+    }
 
-    /* Champs texte classiques (st.text_input : email/mot de passe dans la
-       sidebar, et tout futur champ ailleurs dans l'app) : jamais stylés
-       jusqu'ici -> ils restaient blancs par défaut, quelle que soit
-       couleur_fond_page (visible sur la capture : champs Email/Mot de passe
-       blancs, alors que le reste de la sidebar est sombre). On leur applique
-       EXACTEMENT la même variable _COULEUR_CHAMP_SAISIE que la barre de
-       chat, pas une formule séparée qui ne ferait que ressembler.
-       stTextInputRootElement est la boîte visible (bordure/fond) ; le
-       <input> à l'intérieur reste transparent pour ne pas empiler un second
-       calque de couleur par-dessus. -webkit-text-fill-color en plus de
-       color : Chrome ignore parfois color seul sur un input already-styled
-       par son autofill/thème natif -> les deux déclarations couvrent les
-       deux mécanismes. */
-    [data-testid="stTextInputRootElement"] {{
-        background-color: {UI_CONFIG["couleur_fond_page"]} !important;
-        background-color: {_COULEUR_CHAMP_SAISIE} !important;
-        border: 1px solid {UI_CONFIG["couleur_bordure"]} !important;
-    }}
-    [data-testid="stTextInputRootElement"] input {{
-        background-color: transparent !important;
-        color: {UI_CONFIG["couleur_texte_utilisateur"]} !important;
-        -webkit-text-fill-color: {UI_CONFIG["couleur_texte_utilisateur"]} !important;
-    }}
-
-    .message-user {{
-        background-color: {UI_CONFIG["couleur_fond"]};
-        color: {UI_CONFIG["couleur_texte_utilisateur"]};
+    /* Bulles de message : thème fixe désormais (plus de personnalisation
+       par agent). Bulle utilisateur visible (fond surface-haute), bulle
+       assistant transparente (comportement historique conservé, juste
+       recodé en couleurs fixes). */
+    .message-user {
+        background-color: var(--dj-surface-haute);
+        color: var(--dj-texte);
         padding: 12px 18px;
-        border-radius: {_RAYON_CSS};
+        border-radius: 18px;
         margin: 8px 0;
         display: inline-block;
         max-width: 75%;
         float: right;
         text-align: right;
-        border: 1px solid {UI_CONFIG["couleur_bordure"]};
-        font-size: {_TAILLE_CSS};
-    }}
+        border: 1px solid var(--dj-bordure);
+    }
 
-    .message-assistant {{
-        font-family: {_POLICE_CSS};
-        color: {UI_CONFIG["couleur_texte_assistant"]};
-        background-color: {_COULEUR_BULLE_ASSISTANT};
-        padding: {_PADDING_BULLE_ASSISTANT};
+    .message-assistant {
+        color: var(--dj-texte);
+        background-color: transparent;
+        padding: 10px 4px;
         margin: 8px 0;
         max-width: 85%;
         line-height: 1.7;
-        border-radius: {_RAYON_BULLE_ASSISTANT};
-        font-size: {_TAILLE_CSS};
-    }}
+        border-radius: 18px;
+    }
 
-    .clearfix {{ clear: both; }}
+    .clearfix { clear: both; }
 
-    .statut-outil {{
-        font-family: {_POLICE_CSS};
+    .statut-outil {
         font-style: italic;
         font-size: 0.85em;
-        color: rgba(128, 128, 128, 0.9);
+        color: var(--dj-texte-muet);
         padding: 4px 4px;
         margin: 4px 0 0 0;
-    }}
+    }
 
-    a {{ color: {_COULEUR_LIEN}; }}
-
-    /* Thème des boutons natifs Streamlit (envoi du chat, Confirmer/Annuler,
-       formulaires, liens-boutons). Ciblage par sélecteurs CSS génériques
-       (pas une API Streamlit officielle) : ça fonctionne sur les versions
-       actuelles, mais une future version de Streamlit qui renommerait ses
-       classes internes casserait ce theming (pas le reste de l'app, juste
-       ces couleurs). */
-    .stButton button, .stFormSubmitButton button, .stLinkButton a,
-    div[data-testid="stChatInput"] button {{
-        background-color: {_COULEUR_BOUTON_FOND} !important;
-        border-color: {_COULEUR_BOUTON_FOND} !important;
-        color: {UI_CONFIG["couleur_texte_bouton"]} !important;
-    }}
-
-    /* CSS avancé du créateur (faces/vues/creer_agent.py, section 5 -
-       "réservé aux personnes à l'aise en CSS"). Placé en dernier pour
-       pouvoir surcharger les règles ci-dessus si besoin. */
-    {UI_CONFIG["css_avance"]}
+    a { color: var(--dj-accent-1); }
     </style>
 """, unsafe_allow_html=True)
 
@@ -713,40 +544,13 @@ if "compteur_visiteur" not in st.session_state:
 
 def _rendre_titre_accueil(ui_config):
     """
-    Chantier thème, point 2 : remplace st.title() par un rendu custom dès
-    qu'une personnalisation de couleur existe, pour permettre le mode
-    multicolore (une couleur par caractère, effet "logo"). Retombe sur
-    l'équivalent visuel de st.title() (taille/graisse similaires) si
-    aucune personnalisation n'est enregistrée, pour ne rien changer aux
-    agents existants sans ces clés.
-
-    Priorité : titre_couleurs_lettres (liste) si rempli et de la même
-    longueur que le texte -> mode multicolore. Sinon titre_couleur_unique
-    si différent de "#000000" (valeur "pas de surcharge"). Sinon rendu
-    par défaut.
+    Pivot social : plus de personnalisation de couleur par agent (mode
+    multicolore "logo" retiré, voir PIVOT_SOCIAL.md). st.title() suffit
+    désormais -- il rend un <h1>, déjà stylé (police, couleur) par la
+    règle "h1, h2, h3, .dj-display" du thème fixe injecté plus haut
+    (injecter_theme()), donc rien à recoder ici.
     """
-    texte = ui_config["titre_accueil"]
-    couleurs_lettres = ui_config.get("titre_couleurs_lettres")
-    couleur_unique = ui_config.get("titre_couleur_unique", "#000000")
-
-    style_titre_base = "font-size: 2.25rem; font-weight: 700; line-height: 1.2; margin: 0.5rem 0 0.25rem 0;"
-
-    if couleurs_lettres and len(couleurs_lettres) == len(texte):
-        # Longueur non concordante (ex: titre modifié en base sans
-        # régénérer les couleurs) -> on ignore le mode multicolore plutôt
-        # que de mal aligner lettres et couleurs ; voir branches suivantes.
-        spans = "".join(
-            f'<span style="color: {couleur};">{caractere}</span>'
-            for caractere, couleur in zip(texte, couleurs_lettres)
-        )
-        st.markdown(f'<div style="{style_titre_base}">{spans}</div>', unsafe_allow_html=True)
-    elif couleur_unique and couleur_unique.lower() != "#000000":
-        st.markdown(
-            f'<div style="{style_titre_base} color: {couleur_unique};">{texte}</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        st.title(texte)
+    st.title(ui_config["titre_accueil"])
 
 
 if len(st.session_state.messages) == 0:
