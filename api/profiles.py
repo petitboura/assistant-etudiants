@@ -206,7 +206,13 @@ def mettre_a_jour_mon_profil(
         supabase.table("profiles").upsert(ligne, on_conflict="user_id").execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (upsert profil {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de mettre à jour le profil pour le moment.")
+        # DEBUG TEMPORAIRE (2026-07-12, 3e tentative) : les deux bugs
+        # précédents (slug NOT NULL, puis vérité Python trompeuse sur
+        # deja_existant.data) sont corrigés mais la 500 persiste encore
+        # -- donc une 3e cause distincte. Expose le message réel le temps
+        # de la trouver ; À RETIRER une fois corrigé, ne pas garder ça en
+        # prod (voir même remarque déjà faite lors du 2e bug).
+        raise HTTPException(status_code=500, detail=f"Impossible de mettre à jour le profil : {e}")
 
     try:
         res = (
