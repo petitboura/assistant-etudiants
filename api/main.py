@@ -27,16 +27,25 @@ app = FastAPI(title="Djiguigne API", version="0.1.0")
 # port par defaut de `npm run dev` en Next.js, a garder tant que le
 # frontend n'est pas deploye. A completer avec le vrai domaine une fois
 # app.djiguigne.com cree (Etape 5 du PLAN.md).
+# Domaines fixes autorisés (pas de motif possible pour ceux-la).
 ORIGINES_AUTORISEES = [
     "http://localhost:3000",
     "https://app.djiguigne.com",
-    "https://djiguign-mv9iwqws2-petitbouras-projects.vercel.app",
-    "https://djiguign-ai.vercel.app",
 ]
+
+# En plus des domaines fixes ci-dessus : Vercel donne une URL DIFFERENTE
+# a chaque deploiement (en plus de l'alias stable djiguign-ai.vercel.app),
+# donc une liste figee doit etre corrigee a la main a chaque fois. Ce
+# motif autorise automatiquement toutes les URLs Vercel de CE projet
+# (elles commencent toutes par "djiguign", ex. djiguign-ai.vercel.app,
+# djiguign-pgwfo47je-petitbouras-projects.vercel.app), sans avoir a
+# retoucher ce fichier a chaque nouveau lien.
+MOTIF_ORIGINES_VERCEL = r"https://djiguign[a-z0-9\-]*\.vercel\.app"
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ORIGINES_AUTORISEES,
+    allow_origin_regex=MOTIF_ORIGINES_VERCEL,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
