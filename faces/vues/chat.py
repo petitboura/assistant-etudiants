@@ -5,6 +5,8 @@ Face étudiant — interface Streamlit du coach mathématique.
 import sys
 import os
 import re
+import uuid
+import json
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'core'))
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 # Le dossier vues/ lui-même : st.navigation() exécute cette page via exec(),
@@ -143,6 +145,92 @@ def _agent_est_actif(agent_id):
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agents.actif, agent_id={agent_id}) : {e}")
         return True
+
+
+def _lister_conversations_passees(user_id, agent_id):
+    """
+    Liste des fils de discussion distincts entre CET utilisateur et CET
+    agent (2026-07-13, Bourama : liste cliquable dans la sidebar, façon
+    Claude.ai -- voir with st.sidebar: plus bas). Titre = début du premier
+    message utilisateur du fil (décision de Bourama : pas de titre généré
+    par IA, trop coûteux pour ce qu'apporte cette fonctionnalité).
+
+    Un seul aller-retour Supabase (tous les messages user+agent, triés du
+    plus ancien au plus récent), regroupés par conversation_id en Python
+    -- même stratégie que api/historique.py côté FastAPI, pour un volume
+    de données comparable (borné par agent, pas par plateforme entière).
+
+    Les lignes d'avant cette fonctionnalité (conversation_id NULL, jamais
+    rattachées à un fil) sont regroupées ensemble sous un fil "Avant
+    l'historique par conversation" plutôt qu'ignorées -- elles existent
+    et restent consultables, juste pas scindées en fils individuels
+    (impossible de savoir rétroactivement où un fil s'arrêtait et où le
+    suivant commençait).
+    """
+    if not user_id:
+        return []
+    try:
+        supabase = create_client(get_secret("SUPABASE_URL"), get_secret("SUPABASE_SECRET"))
+        lignes = (
+            supabase.table("historique_conversations")
+            .select("conversation_id, role, content, created_at")
+            .eq("user_id", user_id)
+            .eq("agent_id", agent_id)
+            .order("created_at")
+            .execute()
+        ).data or []
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lister conversations passées, user_id={user_id}, agent_id={agent_id}) : {e}")
+        return []
+
+    fils = {}
+    for ligne in lignes:
+        cle = ligne["conversation_id"] or "legacy"
+        if cle not in fils:
+            fils[cle] = {"conversation_id": ligne["conversation_id"], "premier_message_user": None, "derniere_activite": ligne["created_at"]}
+        if ligne["role"] == "user" and fils[cle]["premier_message_user"] is None:
+            fils[cle]["premier_message_user"] = ligne["content"]
+        fils[cle]["derniere_activite"] = ligne["created_at"]
+
+    resultat = []
+    for cle, fil in fils.items():
+        if cle == "legacy":
+            titre = "Avant l'historique par conversation"
+        else:
+            titre = (fil["premier_message_user"] or "Conversation sans titre").strip()
+            if len(titre) > 42:
+                titre = titre[:42].rstrip() + "…"
+        resultat.append({"conversation_id": fil["conversation_id"], "titre": titre, "derniere_activite": fil["derniere_activite"]})
+
+    resultat.sort(key=lambda f: f["derniere_activite"], reverse=True)
+    return resultat
+
+
+def _charger_messages_conversation(user_id, agent_id, conversation_id):
+    """
+    Recharge le contenu complet d'un fil precis (clic sur une entree de la
+    liste ci-dessus), dans le meme format que st.session_state.messages
+    ({"role", "content"}). conversation_id peut etre None : recharge alors
+    le fil "legacy" (lignes d'avant cette fonctionnalite, jamais rattachees
+    a un conversation_id).
+    """
+    try:
+        supabase = create_client(get_secret("SUPABASE_URL"), get_secret("SUPABASE_SECRET"))
+        requete = (
+            supabase.table("historique_conversations")
+            .select("role, content, created_at")
+            .eq("user_id", user_id)
+            .eq("agent_id", agent_id)
+        )
+        if conversation_id is None:
+            requete = requete.is_("conversation_id", "null")
+        else:
+            requete = requete.eq("conversation_id", conversation_id)
+        lignes = requete.order("created_at").execute().data or []
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (charger conversation, user_id={user_id}, conversation_id={conversation_id}) : {e}")
+        return []
+    return [{"role": ligne["role"], "content": ligne["content"]} for ligne in lignes]
 
 
 UI_CONFIG = _charger_ui_config(AGENT_ID)
@@ -490,6 +578,23 @@ if (
     del st.query_params["refresh_token"]
     st.rerun()
 
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Identifiant du fil de discussion actif (2026-07-13, Bourama : liste de
+# conversations distinctes et cliquables dans la sidebar, façon Claude.ai
+# -- voir with st.sidebar: juste en dessous, qui en a besoin). Généré une
+# seule fois par fil (pas par message), transmis tel quel à chat() puis à
+# historique_conversations.conversation_id. Un nouvel identifiant est créé
+# soit ici au tout premier chargement, soit explicitement via le bouton
+# "Nouvelle conversation" plus bas, soit en rechargeant un ancien fil
+# depuis la liste (voir plus bas). Initialisé ICI, avant la sidebar (et
+# pas avec compteur/confirmation_en_attente plus bas) : la sidebar en a
+# besoin immédiatement pour afficher "Nouvelle conversation" et la liste
+# des fils passés.
+if "conversation_id" not in st.session_state:
+    st.session_state.conversation_id = str(uuid.uuid4())
+
 with st.sidebar:
     # Lien de retour vers la page agent Next.js (2026-07-12, Bourama : "il
     # n'y a pas de quitter plein écran qui va faire retour où tu étais" --
@@ -503,21 +608,115 @@ with st.sidebar:
     _url_plateforme = get_secret("URL_PLATEFORME")
     if _url_plateforme:
         st.link_button(
-            "← Retour à l'agent",
+            "Retour à l'agent",
             f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}",
+            icon=":material/arrow_back:",
         )
 
         # Bouton partager (2026-07-12, Bourama : "il faut un bouton
-        # partager... dans le chat"). Streamlit n'a pas d'accès direct à
-        # l'API native de partage du navigateur (contrairement à
-        # components/BoutonPartager.tsx côté Next.js) -- st.code() est le
-        # choix le plus simple qui marche partout : Streamlit affiche
-        # automatiquement une petite icône de copie dans son coin, sans
-        # dépendance externe. Repose sur le même `_url_plateforme` que le
-        # bouton "Retour à l'agent" juste au-dessus, pas de nouveau
-        # secret à ajouter.
-        with st.expander("🔗 Partager cet agent"):
-            st.code(f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}", language=None)
+        # partager... dans le chat"). PREMIÈRE VERSION (st.code affichant
+        # juste le lien en lecture seule) remplacée le 2026-07-13 (Bourama :
+        # "ça affichait un lien au lieu de vraiment partager") par un VRAI
+        # partage natif, identique à components/BoutonPartager.tsx côté
+        # Next.js : Web Share API (navigator.share -- ouvre le sélecteur
+        # natif du système, SMS/WhatsApp/etc.) si le navigateur le
+        # supporte, sinon copie presse-papiers avec confirmation "Copié !",
+        # sinon window.prompt en tout dernier recours.
+        #
+        # Streamlit n'expose aucune de ces API navigateur en Python -- même
+        # technique que _typeset_mathjax() plus haut : un <script> injecté
+        # via st.markdown ne s'exécute JAMAIS (limitation du DOM), donc on
+        # passe par st.iframe (vraie page HTML, où les scripts s'exécutent
+        # normalement), qui appelle window.parent.navigator (celui de la
+        # VRAIE page, pas de l'iframe) -- l'iframe elle-même n'a pas la
+        # permission "web-share".
+        #
+        # Couleurs codées en dur (pas de var(--dj-*)) : un iframe srcdoc
+        # est un document séparé, il n'hérite JAMAIS des variables CSS
+        # injectées dans le document parent -- copiées telles quelles
+        # depuis theme_djiguigne.py (mêmes valeurs que le bouton .stButton
+        # standard, pour rester visuellement identique).
+        _url_partage = f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}"
+        _titre_partage = UI_CONFIG["titre_page"]
+        st.iframe(
+            f"""
+            <button id="btn-partager" style="
+                width: 100%; box-sizing: border-box;
+                background: linear-gradient(135deg, #F2A65A 0%, #D9631F 55%, #8A2E0A 100%);
+                color: #1A0D02; font-weight: 700; font-family: Inter, sans-serif;
+                font-size: 0.9rem; border: none; border-radius: 10px;
+                padding: 0.55rem 1.1rem; cursor: pointer;
+                display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+                box-shadow: 0 2px 14px rgba(217,99,31,0.25);
+                transition: transform 0.15s ease;
+            " onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="#1A0D02">
+                    <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
+                </svg>
+                <span id="btn-partager-texte">Partager</span>
+            </button>
+            <script>
+                document.getElementById('btn-partager').addEventListener('click', async function() {{
+                    const url = {json.dumps(_url_partage)};
+                    const titre = {json.dumps(_titre_partage)};
+                    const texte = document.getElementById('btn-partager-texte');
+                    const nav = window.parent.navigator;
+                    if (nav.share) {{
+                        try {{ await nav.share({{ title: titre, url: url }}); }} catch (e) {{
+                            // Annulé par la personne ou échec silencieux du
+                            // sélecteur natif -- flux normal du Web Share
+                            // API, pas une erreur à afficher.
+                        }}
+                        return;
+                    }}
+                    try {{
+                        await nav.clipboard.writeText(url);
+                        texte.textContent = 'Copié !';
+                        setTimeout(function() {{ texte.textContent = 'Partager'; }}, 2000);
+                    }} catch (e) {{
+                        window.parent.prompt('Copie ce lien :', url);
+                    }}
+                }});
+            </script>
+            """,
+            height=48,
+        )
+
+    # Historique par fils de discussion, façon Claude.ai (2026-07-13,
+    # Bourama, capture d'écran de la liste "Discussions" de Claude.ai à
+    # l'appui) : placé sous "Retour à l'agent"/"Partager" comme demandé.
+    # Ne nécessite PAS d'être connecté pour DISCUTER (comme tout le reste
+    # du chat), mais nécessite un user_id pour lire/écrire l'historique
+    # (colonne user_id NOT NULL sur historique_conversations) -- calculé
+    # ici directement plutôt que d'attendre `user_id_courant` plus bas
+    # dans le fichier, pas encore défini à ce stade du script.
+    _user_id_historique = (
+        st.session_state.session_utilisateur.user.id
+        if st.session_state.session_utilisateur else None
+    )
+
+    if _user_id_historique:
+        # "Nouvelle conversation" : n'a de sens que s'il y a quelque chose
+        # à quitter -- pas affiché sur un fil déjà vierge, ça n'aurait
+        # rien à faire de plus qu'un bouton qui ne fait visiblement rien.
+        if st.session_state.messages:
+            if st.button("Nouvelle conversation", icon=":material/add_comment:"):
+                st.session_state.messages = []
+                st.session_state.conversation_id = str(uuid.uuid4())
+                st.rerun()
+
+        _conversations_passees = _lister_conversations_passees(_user_id_historique, AGENT_ID)
+        if _conversations_passees:
+            with st.expander("Historique", icon=":material/history:"):
+                for _conv in _conversations_passees:
+                    _est_active = _conv["conversation_id"] == st.session_state.conversation_id
+                    _libelle = ("● " if _est_active else "") + _conv["titre"]
+                    if st.button(_libelle, key=f"conv_{_conv['conversation_id'] or 'legacy'}", disabled=_est_active):
+                        st.session_state.messages = _charger_messages_conversation(
+                            _user_id_historique, AGENT_ID, _conv["conversation_id"]
+                        )
+                        st.session_state.conversation_id = _conv["conversation_id"] or str(uuid.uuid4())
+                        st.rerun()
 
     # Bloc compte (connexion/inscription) + connexion Notion retiré du
     # panneau latéral le 2026-07-12 (Bourama : "plus de se connecter, plus
@@ -554,7 +753,7 @@ with st.sidebar:
     _url_api = get_secret("URL_API")
     if _url_api:
         _url_api = _url_api.rstrip("/")
-        with st.expander("💬 Avis sur cet agent"):
+        with st.expander("Avis sur cet agent", icon=":material/rate_review:"):
             if st.session_state.session_utilisateur is None:
                 st.caption("Connecte-toi ci-dessus pour noter ou commenter.")
             else:
@@ -665,9 +864,6 @@ def _consommer_flux(generateur, placeholder_statut, placeholder, reponse_deja=""
     return reponse_complete, None
 
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-
 if "compteur" not in st.session_state:
     st.session_state.compteur = 0
 
@@ -726,9 +922,9 @@ if st.session_state.confirmation_en_attente is not None:
 
     colonne_confirmer, colonne_annuler = st.columns(2)
     decision = None
-    if colonne_confirmer.button("✅ Confirmer", key="confirmer_outil"):
+    if colonne_confirmer.button("Confirmer", key="confirmer_outil", icon=":material/check:"):
         decision = True
-    if colonne_annuler.button("❌ Annuler", key="annuler_outil"):
+    if colonne_annuler.button("Annuler", key="annuler_outil", icon=":material/close:"):
         decision = False
 
     if decision is not None:
@@ -812,7 +1008,7 @@ elif prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
     placeholder = st.empty()
 
     try:
-        generateur = chat(prompt, historique, user_id_courant, agent_id=AGENT_ID)
+        generateur = chat(prompt, historique, user_id_courant, agent_id=AGENT_ID, conversation_id=st.session_state.conversation_id)
         reponse_complete, evenement_confirmation = _consommer_flux(generateur, placeholder_statut, placeholder)
     except Exception as e:
         # Idem : chat() catche déjà ses erreurs API en interne (cascade

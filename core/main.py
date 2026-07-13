@@ -156,7 +156,7 @@ DELAI_MAX_PAR_APPEL = 10  # secondes : on bascule vite plutot que d'attendre
 MAX_PASSAGES_CASCADE = 2  # on ne retente toute la cascade que si TOUT a timeout
 
 
-def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale):
+def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale, conversation_id=None):
     """
     Persiste l'echange (question + reponse) dans `conversations`, pour la
     memoire long-terme. Ignore silencieusement si l'etudiant n'est pas
@@ -180,10 +180,19 @@ def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale)
     # distinction. Volontairement dans un bloc try/except À PART : si cette
     # écriture échoue, ça ne doit jamais faire échouer la mémoire de l'IA
     # ci-dessus, qui est la partie critique pour la qualité des réponses.
+    #
+    # `conversation_id` (2026-07-13, Bourama : liste de conversations
+    # distinctes et cliquables dans la sidebar de chat.py, façon Claude.ai)
+    # regroupe les messages d'un même fil de discussion, généré côté
+    # chat.py (une valeur par conversation affichée, PAS par message) et
+    # simplement transmis ici tel quel. None accepté (colonne nullable) :
+    # un appelant qui ne gère pas encore les fils continue de fonctionner
+    # sans erreur, ses messages sont juste groupés sous "historique ancien"
+    # côté affichage plutôt que dans un fil précis.
     try:
         supabase.table("historique_conversations").insert([
-            {"user_id": user_id, "agent_id": agent_id, "role": "user", "content": message_utilisateur},
-            {"user_id": user_id, "agent_id": agent_id, "role": "assistant", "content": reponse_finale},
+            {"user_id": user_id, "agent_id": agent_id, "role": "user", "content": message_utilisateur, "conversation_id": conversation_id},
+            {"user_id": user_id, "agent_id": agent_id, "role": "assistant", "content": reponse_finale, "conversation_id": conversation_id},
         ]).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (sauvegarde historique_conversations) : {e}")
@@ -478,7 +487,7 @@ def _capturer_reponse(generateur, accumulateur):
         yield event
 
 
-def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None):
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
@@ -504,13 +513,20 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     RAG utiliser (voir configuration.py / retriever.py). Si non fourni, on
     utilise le secret AGENT_ID du deploiement, puis AGENT_ID_PAR_DEFAUT.
 
+    `conversation_id` (optionnel, 2026-07-13) identifie le fil de
+    discussion affiche dans la sidebar de chat.py (liste de conversations
+    distinctes et cliquables, façon Claude.ai) -- genere cote chat.py, une
+    valeur par conversation, pas par message. Simplement transmis a
+    _sauvegarder_echange(). None accepte : un appelant qui ne gere pas
+    encore les fils continue de fonctionner normalement.
+
     Pour reprendre apres une confirmation_requise, appeler :
         chat(reprise={"etat_reprise": evenement["etat_reprise"], "approuve": True|False})
     (message_utilisateur/historique/user_id sont alors ignores.)
     LIMITE CONNUE : la memoire long-terme n'est PAS persistee sur ce chemin de
     reprise (etat_reprise ne transporte ni agent_id, ni user_id, ni le message
-    utilisateur d'origine). A etendre si besoin en les ajoutant a etat_reprise
-    dans _evenement_confirmation.
+    utilisateur d'origine, ni conversation_id). A etendre si besoin en les
+    ajoutant a etat_reprise dans _evenement_confirmation.
 
     Si TOUS les maillons de la cascade (Groq principal, Gemini, fallbacks
     Groq) echouent uniquement a cause d'un timeout, on retente une seconde
@@ -598,7 +614,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 _agent_groq(client_groq, messages_agent, outils_mcp, table_routage),
                 reponse_accumulee,
             )
-            _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee))
+            _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
             _mettre_a_jour_resume_si_besoin(user_id)
             return
         except Exception as e:
@@ -627,7 +643,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     ),
                     reponse_accumulee,
                 )
-                _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee))
+                _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
                 _mettre_a_jour_resume_si_besoin(user_id)
                 return
             except Exception as e:
@@ -659,7 +675,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     reponse_accumulee.append(chunk.text)
                     yield {"type": "reponse", "texte": chunk.text}
             logging.info("Réponse via GEMINI")
-            _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee))
+            _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
             _mettre_a_jour_resume_si_besoin(user_id)
             return
         except Exception as e:
