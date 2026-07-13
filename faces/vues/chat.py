@@ -482,89 +482,18 @@ with st.sidebar:
         with st.expander("🔗 Partager cet agent"):
             st.code(f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}", language=None)
 
-    if st.session_state.session_utilisateur is None:
-        st.markdown("### Compte (optionnel)")
-        st.caption(
-            "Le chat fonctionne sans compte. Connecte-toi seulement si tu "
-            "veux débloquer des fonctionnalités qui en ont besoin."
-        )
+    # Bloc compte (connexion/inscription) + connexion Notion retiré du
+    # panneau latéral le 2026-07-12 (Bourama : "plus de se connecter, plus
+    # de notion connectée, plus de connecter un outil, juste ce qu'il y
+    # a"). Le chat reste utilisable sans aucun compte, comme avant.
+    #
+    # CONSÉQUENCE À NOTER : la section "Avis sur cet agent" juste en
+    # dessous (notes/commentaires) exigeait d'être connecté -- sans ce
+    # bloc, il n'existe plus AUCUN moyen de se connecter depuis chat.py,
+    # donc cette section affichera en permanence "Connecte-toi ci-dessus"
+    # sans qu'aucun "ci-dessus" n'existe plus pour le faire. Signalé à
+    # Bourama, pas corrigé ici -- pas demandé dans cette instruction.
 
-        onglet_connexion, onglet_inscription = st.tabs(["Se connecter", "Créer un compte"])
-
-        with onglet_connexion:
-            email_connexion = st.text_input("Email", key="email_connexion")
-            mdp_connexion = st.text_input("Mot de passe", type="password", key="mdp_connexion")
-            if st.button("Se connecter", key="bouton_connexion"):
-                succes, resultat = connexion(email_connexion, mdp_connexion)
-                if succes:
-                    st.session_state.session_utilisateur = resultat
-                    st.rerun()
-                else:
-                    st.error(resultat)
-
-            with st.expander("Mot de passe oublié ?"):
-                email_oublie = st.text_input("Ton email", key="email_mdp_oublie")
-                if st.button("Envoyer le lien de réinitialisation", key="btn_mdp_oublie"):
-                    _url_base_retour_oubli = get_secret("URL_RETOUR_APP")
-                    _redirection_oubli = (
-                        f"{_url_base_retour_oubli.rstrip('/')}/?agent={AGENT_ID}"
-                        if _url_base_retour_oubli else None
-                    )
-                    _, message = demarrer_reinitialisation_mot_de_passe(email_oublie, redirection=_redirection_oubli)
-                    st.info(message)
-
-        with onglet_inscription:
-            email_inscription = st.text_input("Email", key="email_inscription")
-            mdp_inscription = st.text_input("Mot de passe", type="password", key="mdp_inscription")
-            if st.button("Créer mon compte", key="bouton_inscription"):
-                # Redirection après clic sur le lien de confirmation reçu par
-                # email : CET agent précis (pas la plateforme), sinon
-                # l'étudiant confirmerait son compte et se retrouverait sur
-                # le tableau de bord créateur au lieu de son chat.
-                _url_base_retour = get_secret("URL_RETOUR_APP")
-                _redirection_inscription = (
-                    f"{_url_base_retour.rstrip('/')}/?agent={AGENT_ID}" if _url_base_retour else None
-                )
-                succes, resultat = inscription(email_inscription, mdp_inscription, redirection=_redirection_inscription)
-                if succes:
-                    if hasattr(resultat, "user"):
-                        # Session directement valide (confirmation email
-                        # désactivée sur ce projet) : on connecte tout de
-                        # suite, pas besoin de repasser par l'onglet
-                        # "Se connecter" juste après avoir créé le compte.
-                        st.session_state.session_utilisateur = resultat
-                        st.rerun()
-                    else:
-                        st.success(resultat)
-                else:
-                    st.error(resultat)
-    else:
-        email_connecte = st.session_state.session_utilisateur.user.email
-        user_id_connecte = st.session_state.session_utilisateur.user.id
-        st.markdown(f"Connecté : **{email_connecte}**")
-
-        if "notion_message" in st.session_state:
-            st.info(st.session_state.pop("notion_message"))
-
-        st.markdown("---")
-        if est_connecte(user_id_connecte):
-            st.caption("📓 Notion connecté (compte, valable pour tous les agents)")
-        else:
-            # Compte unifié : la connexion Notion, une fois établie
-            # depuis n'importe quel agent, vaut pour tous les autres.
-            st.caption("📓 Notion non connecté")
-            if st.button("Connecter mon Notion"):
-                url = demarrer_connexion_notion(user_id_connecte, AGENT_ID)
-                if url:
-                    st.link_button("Continuer vers Notion", url)
-                else:
-                    st.error("Connexion Notion impossible pour le moment.")
-
-        st.markdown("---")
-        if st.button("Se déconnecter"):
-            deconnexion()
-            st.session_state.session_utilisateur = None
-            st.rerun()
 
     # Notes + commentaires (2026-07-12, Bourama : "je veux que ce soit dans
     # le tableau de bord du chat lui-même pour que quelqu'un qui a ouvert
