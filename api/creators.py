@@ -11,9 +11,9 @@ deux ressources différentes dans un seul fichier déjà long.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -22,6 +22,88 @@ from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
 logging.basicConfig(level=logging.INFO)
 
 router = APIRouter(prefix="/api/creators", tags=["creators"])
+
+
+class CreateurFeedItem(BaseModel):
+    user_id: str
+    nom_affiche: str = ""
+    bio: str = ""
+    avatar_url: Optional[str] = None
+    nombre_agents: int = 0
+
+
+class CreateursFeedReponse(BaseModel):
+    createurs: List[CreateurFeedItem]
+    page: int
+    limite: int
+    total: int
+
+
+@router.get("", response_model=CreateursFeedReponse)
+def lister_createurs(page: int = Query(1, ge=1), limite: int = Query(20, ge=1, le=50)):
+    """
+    Liste paginée des créateurs de la plateforme (table `profiles`),
+    ajouté le 2026-07-13 pour l'onglet "Créateurs" du feed demandé par
+    Bourama (à côté de l'onglet "Agents" existant, voir app/page.tsx).
+    Public, pas d'auth requise — même logique que GET /api/feed.
+
+    Montre TOUS les profils, y compris ceux à 0 agent créé (pas de filtre
+    ici) : filtrer aurait cassé la pagination (une page pourrait afficher
+    moins de `limite` résultats sans que ce soit la dernière page) pour
+    un gain d'intérêt limité en v1.
+    """
+    debut = (page - 1) * limite
+    fin = debut + limite - 1
+
+    try:
+        res = (
+            supabase.table("profiles")
+            .select("user_id, nom_affiche, bio, avatar_url", count="exact")
+            .order("nom_affiche")
+            .range(debut, fin)
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture liste créateurs, page={page}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger les créateurs pour le moment.")
+
+    lignes = res.data or []
+
+    # Nombre d'agents par créateur, en une requête groupée (même pattern
+    # que la résolution des noms dans les commentaires, voir
+    # api/agents.py:lister_commentaires) — pas une requête par créateur.
+    comptes_par_user_id: dict[str, int] = {}
+    ids_uniques = [ligne["user_id"] for ligne in lignes]
+    if ids_uniques:
+        try:
+            agents_res = (
+                supabase.table("agents")
+                .select("owner_id")
+                .in_("owner_id", ids_uniques)
+                .execute()
+            )
+            for a in agents_res.data or []:
+                oid = a.get("owner_id")
+                if oid:
+                    comptes_par_user_id[oid] = comptes_par_user_id.get(oid, 0) + 1
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (comptage agents par créateur, page={page}) : {e}")
+            # best-effort : comptes_par_user_id reste vide, chaque créateur
+            # retombe sur nombre_agents=0 plutôt que de faire échouer tout
+            # l'affichage de la liste.
+
+    createurs = [
+        CreateurFeedItem(
+            user_id=ligne["user_id"],
+            nom_affiche=ligne.get("nom_affiche") or "",
+            bio=ligne.get("bio") or "",
+            avatar_url=ligne.get("avatar_url"),
+            nombre_agents=comptes_par_user_id.get(ligne["user_id"], 0),
+        )
+        for ligne in lignes
+    ]
+
+    return CreateursFeedReponse(createurs=createurs, page=page, limite=limite, total=res.count or 0)
 
 
 class EtatFollow(BaseModel):
