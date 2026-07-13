@@ -9,7 +9,7 @@ Résultats créateurs identifiés par `user_id`, pas par `profiles.slug`
 """
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -30,6 +30,14 @@ class ResultatAgent(BaseModel):
 class ResultatCreateur(BaseModel):
     user_id: str
     nom_affiche: str = ""
+    # Ajouté le 2026-07-13 (Bourama : les créateurs en résultat de
+    # recherche s'affichaient en simple ligne de texte, contrairement à
+    # l'onglet "Créateurs" du feed qui, lui, utilise déjà CreateurCard.tsx
+    # -- même champs, même calcul de nombre_agents, pour que le frontend
+    # puisse réutiliser exactement le même composant aux deux endroits.
+    bio: str = ""
+    avatar_url: Optional[str] = None
+    nombre_agents: int = 0
 
 
 class ResultatsRecherche(BaseModel):
@@ -69,7 +77,7 @@ def rechercher(q: str = Query(..., min_length=1)):
     try:
         createurs_res = (
             supabase.table("profiles")
-            .select("user_id, nom_affiche")
+            .select("user_id, nom_affiche, bio, avatar_url")
             .ilike("nom_affiche", terme)
             .limit(20)
             .execute()
@@ -78,6 +86,25 @@ def rechercher(q: str = Query(..., min_length=1)):
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (recherche créateurs, q={q}) : {e}")
         lignes_createurs = []
+
+    # Même pattern de comptage groupé que GET /api/creators
+    # (lister_createurs) : une requête, pas une par créateur.
+    comptes_par_user_id: dict = {}
+    ids_uniques = [ligne["user_id"] for ligne in lignes_createurs]
+    if ids_uniques:
+        try:
+            agents_res = (
+                supabase.table("agents")
+                .select("owner_id")
+                .in_("owner_id", ids_uniques)
+                .execute()
+            )
+            for a in agents_res.data or []:
+                oid = a.get("owner_id")
+                if oid:
+                    comptes_par_user_id[oid] = comptes_par_user_id.get(oid, 0) + 1
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (comptage agents, recherche créateurs, q={q}) : {e}")
 
     return ResultatsRecherche(
         agents=[
@@ -89,7 +116,13 @@ def rechercher(q: str = Query(..., min_length=1)):
             for ligne in lignes_agents
         ],
         createurs=[
-            ResultatCreateur(user_id=ligne["user_id"], nom_affiche=ligne.get("nom_affiche") or "")
+            ResultatCreateur(
+                user_id=ligne["user_id"],
+                nom_affiche=ligne.get("nom_affiche") or "",
+                bio=ligne.get("bio") or "",
+                avatar_url=ligne.get("avatar_url"),
+                nombre_agents=comptes_par_user_id.get(ligne["user_id"], 0),
+            )
             for ligne in lignes_createurs
         ],
     )
