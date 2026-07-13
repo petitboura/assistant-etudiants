@@ -130,6 +130,15 @@ hr { border-color: var(--dj-bordure) !important; }
 /* Boutons secondaires (déconnexion, annuler) : plus discrets */
 .stButton > button:has(> div > p:contains("Déconnexion")) { background: transparent !important; }
 
+/* Texte de "Retour à l'agent" forcé en noir (2026-07-13, Bourama, capture
+   d'écran) : la règle "p, span, label { color: var(--dj-texte) }" plus bas
+   dans ce fichier s'applique directement au <p> interne au lien (Streamlit
+   enveloppe le texte dans un <p>), et gagne sur la couleur du <a> parent
+   même si celle-ci est en !important -- un !important ne gouverne que la
+   propriété de SON PROPRE élément, pas celle d'un enfant qui a sa propre
+   règle explicite plus spécifique. */
+.stLinkButton > a p, .stLinkButton > a span, .stLinkButton > a div { color: #1A0D02 !important; }
+
 /* --- Champs de saisie ---------------------------------------------------*/
 .stTextInput input, .stTextArea textarea, .stNumberInput input {
     background: var(--dj-surface) !important;
