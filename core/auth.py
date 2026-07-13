@@ -111,6 +111,34 @@ def connexion(email, mot_de_passe):
         return False, "Email ou mot de passe incorrect."
 
 
+def connexion_depuis_jetons(access_token, refresh_token):
+    """
+    Ajoute le 2026-07-12 (Bourama : "des que tu crees un compte a la
+    plateforme, tu es automatiquement connecte a tous les agents dans la
+    plateforme, sans exception"). Le compte est deja unifie cote base de
+    donnees (comme pour Notion, une connexion vaut pour tous les agents) --
+    ce qui manquait, c'etait un pont technique entre la session Supabase
+    de la plateforme Next.js (autre origine, autre stockage de session) et
+    chat.py, qui n'a aucun moyen natif de la voir.
+
+    Le pont : components/BoutonUtiliser.tsx transmet access_token et
+    refresh_token de la session Next.js en cours dans l'URL qui ouvre le
+    chat (si la personne est deja connectee sur la plateforme). Cette
+    fonction les echange contre une session Supabase valide ICI, cote
+    Streamlit -- sans redemander ni email ni mot de passe, quel que soit
+    l'agent ouvert.
+
+    Retourne (succes: bool, session_ou_message), meme convention que
+    connexion() ci-dessus.
+    """
+    try:
+        resultat = supabase.auth.set_session(access_token, refresh_token)
+        return True, resultat.session
+    except Exception as e:
+        logging.error(f"ERREUR CONNEXION (depuis jetons plateforme) : {e}")
+        return False, "Session plateforme invalide ou expirée."
+
+
 def demarrer_connexion_google():
     """
     Premiere etape de la connexion Google : genere l'URL vers laquelle

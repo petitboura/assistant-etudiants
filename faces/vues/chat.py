@@ -18,7 +18,7 @@ import requests
 import streamlit as st
 from supabase import create_client
 from main import chat
-from auth import inscription, connexion, deconnexion, demarrer_reinitialisation_mot_de_passe
+from auth import connexion_depuis_jetons
 from connexions.notion import demarrer_connexion_notion, finaliser_connexion_notion, etat_notion_en_attente, est_connecte
 from theme_djiguigne import injecter_theme
 from recuperation_mdp import gerer_recuperation_mot_de_passe
@@ -451,6 +451,39 @@ if "code" in _params and "state" in _params and etat_notion_en_attente(_params["
         st.session_state.notion_message = f"✅ Notion connecté ({message})."
     else:
         st.session_state.notion_message = f"❌ {message}"
+    st.rerun()
+
+# --- Connexion automatique depuis la plateforme -------------------------
+# Ajouté le 2026-07-12 (Bourama : "dès que tu crées un compte à la
+# plateforme, tu es automatiquement connecté à tous les agents dans la
+# plateforme, sans exception"). Le compte est déjà unifié côté base de
+# données (comme pour Notion : une connexion vaut pour tous les agents) --
+# ce qui manquait, c'était un pont technique entre la session Supabase de
+# la plateforme Next.js et chat.py, qui n'a aucun moyen natif de la voir
+# (origine différente, pas de cookie/stockage partagé).
+#
+# Le pont : components/BoutonUtiliser.tsx transmet access_token et
+# refresh_token de la session Next.js en cours dans l'URL qui ouvre le
+# chat, si la personne est déjà connectée sur la plateforme. On échange
+# ces jetons contre une session Streamlit valide ici, sans redemander ni
+# email ni mot de passe -- quel que soit l'agent ouvert, sans exception.
+if (
+    "access_token" in _params
+    and "refresh_token" in _params
+    and st.session_state.session_utilisateur is None
+):
+    _succes_jetons, _resultat_jetons = connexion_depuis_jetons(
+        _params["access_token"], _params["refresh_token"]
+    )
+    if _succes_jetons:
+        st.session_state.session_utilisateur = _resultat_jetons
+    # Retire IMMÉDIATEMENT les jetons de l'URL, qu'ils aient marché ou non
+    # -- un JWT ne doit jamais rester dans la barre d'adresse / l'historique
+    # du navigateur au-delà du strict nécessaire. `agent` est préservé
+    # (déjà capturé dans AGENT_ID plus haut, donc pas affecté par ce
+    # nettoyage) mais retiré aussi de l'URL affichée par cohérence -- il
+    # sera repassé par le lien "Retour à l'agent" si besoin.
+    st.query_params.clear()
     st.rerun()
 
 with st.sidebar:
