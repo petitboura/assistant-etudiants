@@ -864,6 +864,15 @@ def supprimer_document(agent_id: str, nom_stockage: str, utilisateur=Depends(uti
         raise HTTPException(status_code=500, detail="Impossible de supprimer ce document.")
 
 
+class NoterAgentPayload(BaseModel):
+    # Classe manquante : provoquait un NameError au chargement du module,
+    # qui faisait crasher TOUT le service au démarrage (pas seulement cet
+    # endpoint) - Railway l'a marqué "CRASHED" juste après le déploiement
+    # de main.py du 2026-07-13. La fonction noter_agent juste en dessous
+    # l'utilisait déjà, seule la définition manquait.
+    note: int
+
+
 @router.post("/{agent_id}/rating", status_code=204)
 def noter_agent(agent_id: str, payload: NoterAgentPayload, utilisateur=Depends(utilisateur_courant)):
     """
