@@ -477,13 +477,17 @@ if (
     )
     if _succes_jetons:
         st.session_state.session_utilisateur = _resultat_jetons
-    # Retire IMMÉDIATEMENT les jetons de l'URL, qu'ils aient marché ou non
-    # -- un JWT ne doit jamais rester dans la barre d'adresse / l'historique
-    # du navigateur au-delà du strict nécessaire. `agent` est préservé
-    # (déjà capturé dans AGENT_ID plus haut, donc pas affecté par ce
-    # nettoyage) mais retiré aussi de l'URL affichée par cohérence -- il
-    # sera repassé par le lien "Retour à l'agent" si besoin.
-    st.query_params.clear()
+    # BUG CORRIGÉ le 2026-07-12 (repéré en conditions réelles par Bourama :
+    # "ça pointe vers un autre dépôt streamlit" -- en réalité un AUTRE
+    # AGENT, pas un autre déploiement). st.query_params.clear() effaçait
+    # TOUS les paramètres, y compris `agent` -- au st.rerun() qui suit,
+    # Streamlit réexécute le script depuis le début, _resoudre_agent_id()
+    # ne retrouve plus `agent` dans l'URL et retombe sur l'agent par
+    # défaut (tutorat-maths), quel que soit l'agent réellement ouvert. On
+    # retire donc UNIQUEMENT les jetons, en préservant tout le reste
+    # (`agent` en particulier).
+    del st.query_params["access_token"]
+    del st.query_params["refresh_token"]
     st.rerun()
 
 with st.sidebar:
