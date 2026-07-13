@@ -868,12 +868,14 @@ with st.sidebar:
     # capture d'écran) : c'était la barre de défilement par défaut de
     # l'iframe, déclenchée par un léger dépassement de hauteur (le corps
     # HTML par défaut a une marge de 8px que rien ne retirait, donc le
-    # contenu dépassait très légèrement les 48px demandés). Corrigé par
-    # `scrolling=False` explicite ET un reset margin/padding sur html,body
-    # dans le document iframe -- les deux ensemble, pas un seul, pour ne
-    # pas dépendre uniquement du support navigateur de l'attribut HTML
-    # "scrolling" (non standard, retiré de HTML5, encore honoré par la
-    # plupart des moteurs mais pas garanti).
+    # contenu dépassait très légèrement les 48px demandés). Corrigé par un
+    # reset margin/padding/overflow sur html,body dans le document iframe.
+    # `scrolling=False` tenté d'abord (2026-07-13) puis RETIRÉ aussitôt :
+    # cette version de Streamlit (voir requirements.txt, non pinnée) ne
+    # supporte pas ce paramètre sur st.iframe -- "TypeError:
+    # IframeMixin.iframe() got an unexpected keyword argument 'scrolling'",
+    # confirmé par capture d'écran de l'erreur en prod. Le reset CSS seul
+    # suffit à empêcher le débordement qui déclenchait la barre.
     if _url_plateforme:
         _url_partage = f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}"
         _titre_partage = UI_CONFIG["titre_page"]
@@ -921,7 +923,6 @@ with st.sidebar:
             </script>
             """,
             height=52,
-            scrolling=False,
         )
 
 
