@@ -18,7 +18,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from api.auth import utilisateur_courant, supabase
+from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
 from creation_agent import generer_id_depuis_nom
 
 logging.basicConfig(level=logging.INFO)
@@ -46,13 +46,23 @@ class ProfilDetailPublic(ProfilPublic):
 
 
 @router.get("/{user_id}", response_model=ProfilDetailPublic)
-def obtenir_profil_public(user_id: str):
+def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionnel)):
     """
     Portfolio public d'un créateur, pour `/u/[slug]` (en pratique
     `/u/{user_id}` pour l'instant, voir docstring du module). Public,
-    aucune auth. Inclut la liste de ses agents actifs (même convention
-    "True par défaut" que `/api/feed`), pour le tableau des pages du
-    frontend ("Liste des agents du créateur, bouton Follow").
+    aucune auth requise. Inclut la liste de ses agents actifs (même
+    convention "True par défaut" que `/api/feed`), pour le tableau des
+    pages du frontend ("Liste des agents du créateur, bouton Follow").
+
+    Bug corrigé le 2026-07-13 (Bourama : un agent désactivé disparaissait
+    complètement, même pour son propriétaire) : ce même endpoint est
+    réutilisé par le dashboard pour "Mes agents" (voir dashboard/page.tsx)
+    — masquer les agents inactifs y était correct côté visiteur public,
+    mais empêchait le créateur de retrouver son propre agent pour le
+    réactiver. `utilisateur_optionnel` (jamais de 401 ici, contrairement
+    à `utilisateur_courant`) permet de savoir si la personne qui regarde
+    EST le propriétaire de ce profil ; si oui, elle voit tous ses agents,
+    actifs ou non — sinon, comportement inchangé.
 
     404 si aucun profil n'existe pour ce `user_id` : un compte tout juste
     inscrit sans `PATCH /me` préalable n'a pas encore de portfolio public
@@ -78,14 +88,17 @@ def obtenir_profil_public(user_id: str):
     if not profil or not profil.data:
         raise HTTPException(status_code=404, detail="Profil introuvable.")
 
+    est_le_proprietaire = bool(utilisateur and utilisateur.id == user_id)
+
     try:
-        agents_res = (
+        requete_agents = (
             supabase.table("agents")
             .select("id, nom, ui_config, image_vitrine_url, description")
             .eq("owner_id", user_id)
-            .or_("actif.is.null,actif.eq.true")
-            .execute()
         )
+        if not est_le_proprietaire:
+            requete_agents = requete_agents.or_("actif.is.null,actif.eq.true")
+        agents_res = requete_agents.execute()
         lignes_agents = agents_res.data or []
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agents du créateur {user_id}) : {e}")
