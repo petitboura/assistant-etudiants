@@ -39,6 +39,12 @@ class AgentDuCreateur(BaseModel):
     icone_page: str = "🤖"
     image_vitrine_url: Optional[str] = None
     description: str = ""
+    # Ajouté le 2026-07-13 (Bourama : bouton on/off pour (dés)activer un
+    # agent publiquement, directement à côté de sa carte dans "Mes
+    # agents") : sans ce champ, le frontend ne pouvait pas savoir quel
+    # état afficher pour le bouton. True par défaut, même convention que
+    # partout ailleurs (`actif` absent/NULL = actif).
+    actif: bool = True
 
 
 class ProfilDetailPublic(ProfilPublic):
@@ -93,7 +99,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
     try:
         requete_agents = (
             supabase.table("agents")
-            .select("id, nom, ui_config, image_vitrine_url, description")
+            .select("id, nom, ui_config, image_vitrine_url, description, actif")
             .eq("owner_id", user_id)
         )
         if not est_le_proprietaire:
@@ -111,6 +117,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
             icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
             image_vitrine_url=ligne.get("image_vitrine_url"),
             description=ligne.get("description") or "",
+            actif=ligne.get("actif") if ligne.get("actif") is not None else True,
         )
         for ligne in lignes_agents
     ]
