@@ -605,6 +605,18 @@ with st.sidebar:
     # minimaliste -- ce n'est pas un sujet principal de la page).
     # `URL_PLATEFORME` optionnel (comme URL_RETOUR_APP) : si absent, on
     # n'affiche simplement pas le lien plutôt que de planter.
+    #
+    # Texte forcé en noir (2026-07-13, Bourama, capture d'écran) : la
+    # règle générale ".stLinkButton > a { color: #1A0D02 !important }"
+    # dans theme_djiguigne.py ne suffisait pas -- Streamlit enveloppe le
+    # texte du lien dans un <p> interne, et la règle générale
+    # "p, span, label { color: var(--dj-texte) }" (texte crème clair)
+    # s'applique DIRECTEMENT à ce <p>, qui gagne sur la couleur héritée du
+    # <a> parent même si celle du <a> est en !important -- un !important
+    # ne gouverne que la propriété de SON PROPRE élément, pas celle d'un
+    # enfant qui a sa propre règle explicite. Voir le correctif ajouté
+    # dans theme_djiguigne.py (nouvelle règle ciblant spécifiquement les
+    # <p>/<span> à l'intérieur de .stLinkButton > a).
     _url_plateforme = get_secret("URL_PLATEFORME")
     if _url_plateforme:
         st.link_button(
@@ -613,110 +625,117 @@ with st.sidebar:
             icon=":material/arrow_back:",
         )
 
-        # Bouton partager (2026-07-12, Bourama : "il faut un bouton
-        # partager... dans le chat"). PREMIÈRE VERSION (st.code affichant
-        # juste le lien en lecture seule) remplacée le 2026-07-13 (Bourama :
-        # "ça affichait un lien au lieu de vraiment partager") par un VRAI
-        # partage natif, identique à components/BoutonPartager.tsx côté
-        # Next.js : Web Share API (navigator.share -- ouvre le sélecteur
-        # natif du système, SMS/WhatsApp/etc.) si le navigateur le
-        # supporte, sinon copie presse-papiers avec confirmation "Copié !",
-        # sinon window.prompt en tout dernier recours.
-        #
-        # Streamlit n'expose aucune de ces API navigateur en Python -- même
-        # technique que _typeset_mathjax() plus haut : un <script> injecté
-        # via st.markdown ne s'exécute JAMAIS (limitation du DOM), donc on
-        # passe par st.iframe (vraie page HTML, où les scripts s'exécutent
-        # normalement), qui appelle window.parent.navigator (celui de la
-        # VRAIE page, pas de l'iframe) -- l'iframe elle-même n'a pas la
-        # permission "web-share".
-        #
-        # Couleurs codées en dur (pas de var(--dj-*)) : un iframe srcdoc
-        # est un document séparé, il n'hérite JAMAIS des variables CSS
-        # injectées dans le document parent -- copiées telles quelles
-        # depuis theme_djiguigne.py (mêmes valeurs que le bouton .stButton
-        # standard, pour rester visuellement identique).
-        _url_partage = f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}"
-        _titre_partage = UI_CONFIG["titre_page"]
-        st.iframe(
-            f"""
-            <button id="btn-partager" style="
-                width: 100%; box-sizing: border-box;
-                background: linear-gradient(135deg, #F2A65A 0%, #D9631F 55%, #8A2E0A 100%);
-                color: #1A0D02; font-weight: 700; font-family: Inter, sans-serif;
-                font-size: 0.9rem; border: none; border-radius: 10px;
-                padding: 0.55rem 1.1rem; cursor: pointer;
-                display: flex; align-items: center; justify-content: center; gap: 0.5rem;
-                box-shadow: 0 2px 14px rgba(217,99,31,0.25);
-                transition: transform 0.15s ease;
-            " onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="#1A0D02">
-                    <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
-                </svg>
-                <span id="btn-partager-texte">Partager</span>
-            </button>
-            <script>
-                document.getElementById('btn-partager').addEventListener('click', async function() {{
-                    const url = {json.dumps(_url_partage)};
-                    const titre = {json.dumps(_titre_partage)};
-                    const texte = document.getElementById('btn-partager-texte');
-                    const nav = window.parent.navigator;
-                    if (nav.share) {{
-                        try {{ await nav.share({{ title: titre, url: url }}); }} catch (e) {{
-                            // Annulé par la personne ou échec silencieux du
-                            // sélecteur natif -- flux normal du Web Share
-                            // API, pas une erreur à afficher.
-                        }}
-                        return;
-                    }}
-                    try {{
-                        await nav.clipboard.writeText(url);
-                        texte.textContent = 'Copié !';
-                        setTimeout(function() {{ texte.textContent = 'Partager'; }}, 2000);
-                    }} catch (e) {{
-                        window.parent.prompt('Copie ce lien :', url);
-                    }}
-                }});
-            </script>
-            """,
-            height=48,
-        )
-
     # Historique par fils de discussion, façon Claude.ai (2026-07-13,
     # Bourama, capture d'écran de la liste "Discussions" de Claude.ai à
-    # l'appui) : placé sous "Retour à l'agent"/"Partager" comme demandé.
-    # Ne nécessite PAS d'être connecté pour DISCUTER (comme tout le reste
-    # du chat), mais nécessite un user_id pour lire/écrire l'historique
-    # (colonne user_id NOT NULL sur historique_conversations) -- calculé
-    # ici directement plutôt que d'attendre `user_id_courant` plus bas
-    # dans le fichier, pas encore défini à ce stade du script.
+    # l'appui). Ne nécessite PAS d'être connecté pour DISCUTER (comme tout
+    # le reste du chat), mais nécessite un user_id pour lire/écrire
+    # l'historique (colonne user_id NOT NULL sur historique_conversations)
+    # -- calculé ici directement plutôt que d'attendre `user_id_courant`
+    # plus bas dans le fichier, pas encore défini à ce stade du script.
     _user_id_historique = (
         st.session_state.session_utilisateur.user.id
         if st.session_state.session_utilisateur else None
     )
 
     if _user_id_historique:
-        # "Nouvelle conversation" : n'a de sens que s'il y a quelque chose
-        # à quitter -- pas affiché sur un fil déjà vierge, ça n'aurait
-        # rien à faire de plus qu'un bouton qui ne fait visiblement rien.
+        # "Nouvelle conversation" sans le dégradé orange (2026-07-13,
+        # Bourama : "enlever les couleurs pour nouvelle conversation") :
+        # .stButton cible TOUS les boutons standards via le CSS global de
+        # theme_djiguigne.py (voir son commentaire "mêmes valeurs que le
+        # bouton .stButton standard" plus haut) -- st.container(key=...)
+        # ajoute une classe stable ".st-key-<key>" (Streamlit >= 1.37) sur
+        # son wrapper, ce qui permet de neutraliser LE dégradé UNIQUEMENT
+        # pour ce bouton précis sans toucher aux autres. N'a de sens que
+        # s'il y a quelque chose à quitter -- pas affiché sur un fil déjà
+        # vierge, ça n'aurait rien à faire de plus qu'un bouton qui ne
+        # fait visiblement rien.
         if st.session_state.messages:
-            if st.button("Nouvelle conversation", icon=":material/add_comment:"):
-                st.session_state.messages = []
-                st.session_state.conversation_id = str(uuid.uuid4())
-                st.rerun()
+            with st.container(key="bouton_nouvelle_conversation"):
+                st.markdown(
+                    """<style>
+                    .st-key-bouton_nouvelle_conversation .stButton > button {
+                        background: var(--dj-surface-haute) !important;
+                        color: var(--dj-texte) !important;
+                        box-shadow: none !important;
+                        border: 1px solid var(--dj-bordure) !important;
+                    }
+                    </style>""",
+                    unsafe_allow_html=True,
+                )
+                if st.button("Nouvelle conversation", icon=":material/add_comment:"):
+                    st.session_state.messages = []
+                    st.session_state.conversation_id = str(uuid.uuid4())
+                    st.rerun()
 
         _conversations_passees = _lister_conversations_passees(_user_id_historique, AGENT_ID)
         if _conversations_passees:
-            with st.expander("Historique", icon=":material/history:"):
-                for _conv in _conversations_passees:
-                    _est_active = _conv["conversation_id"] == st.session_state.conversation_id
-                    _libelle = ("● " if _est_active else "") + _conv["titre"]
-                    if st.button(_libelle, key=f"conv_{_conv['conversation_id'] or 'legacy'}", disabled=_est_active):
-                        st.session_state.messages = _charger_messages_conversation(
-                            _user_id_historique, AGENT_ID, _conv["conversation_id"]
-                        )
-                        st.session_state.conversation_id = _conv["conversation_id"] or str(uuid.uuid4())
-                        st.rerun()
+            # Volet qui se referme après un clic sur une ancienne
+            # conversation (2026-07-13, Bourama : "les volets se ferment
+            # automatiquement"). st.expander n'a pas d'état contrôlable
+            # après coup en une seule passe Streamlit -- son "expanded="
+            # ne peut être positionné qu'AVANT le rerun qui suit le clic,
+            # donc on le pilote depuis session_state, mis à jour juste
+            # avant le st.rerun() du bloc historique ci-dessous (pas ici).
+            _cle_ouvert = "historique_expander_ouvert"
+            with st.expander(
+                "Historique",
+                icon=":material/history:",
+                expanded=st.session_state.get(_cle_ouvert, False),
+            ):
+                # Boutons sans effet bouton (2026-07-13, Bourama : "enlever
+                # l'effet bouton des anciennes conversations et faire texte
+                # libre séparé par des lignes quasi invisibles"). Même
+                # technique de scoping que "Nouvelle conversation"
+                # ci-dessus (st.container(key=...) + classe
+                # ".st-key-...") : fond transparent, pas de bordure ni
+                # d'ombre, texte aligné à gauche, séparateur presque
+                # invisible entre chaque ligne (rgba très faible plutôt
+                # qu'une vraie bordure visible).
+                with st.container(key="liste_historique_conversations"):
+                    st.markdown(
+                        """<style>
+                        .st-key-liste_historique_conversations .stButton > button {
+                            background: transparent !important;
+                            color: var(--dj-texte) !important;
+                            box-shadow: none !important;
+                            border: none !important;
+                            border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+                            border-radius: 0 !important;
+                            font-weight: 400 !important;
+                            text-align: left !important;
+                            justify-content: flex-start !important;
+                            padding: 0.5rem 0.2rem !important;
+                        }
+                        .st-key-liste_historique_conversations .stButton > button:hover {
+                            transform: none !important;
+                            box-shadow: none !important;
+                            color: var(--dj-accent-1) !important;
+                        }
+                        .st-key-liste_historique_conversations .stButton > button:disabled {
+                            color: var(--dj-accent-1) !important;
+                            opacity: 1 !important;
+                        }
+                        </style>""",
+                        unsafe_allow_html=True,
+                    )
+                    for _conv in _conversations_passees:
+                        _est_active = _conv["conversation_id"] == st.session_state.conversation_id
+                        _libelle = ("● " if _est_active else "") + _conv["titre"]
+                        if st.button(
+                            _libelle,
+                            key=f"conv_{_conv['conversation_id'] or 'legacy'}",
+                            disabled=_est_active,
+                        ):
+                            st.session_state.messages = _charger_messages_conversation(
+                                _user_id_historique, AGENT_ID, _conv["conversation_id"]
+                            )
+                            st.session_state.conversation_id = _conv["conversation_id"] or str(uuid.uuid4())
+                            # Referme le volet Historique au clic (voir
+                            # commentaire plus haut) : positionné avant le
+                            # rerun, donc pris en compte au prochain
+                            # rendu du st.expander ci-dessus.
+                            st.session_state[_cle_ouvert] = False
+                            st.rerun()
 
     # Bloc compte (connexion/inscription) + connexion Notion retiré du
     # panneau latéral le 2026-07-12 (Bourama : "plus de se connecter, plus
@@ -818,6 +837,93 @@ with st.sidebar:
             except Exception as e:
                 logging.error(f"ERREUR API (GET comments, agent_id={AGENT_ID}) : {e}")
                 st.caption("Impossible de charger les commentaires pour le moment.")
+
+    # Bouton partager (2026-07-12, Bourama : "il faut un bouton
+    # partager... dans le chat"). Déplacé sous "Avis sur cet agent"
+    # (2026-07-13, Bourama : "emmener partager en dessous de avis") --
+    # dernier élément de la sidebar désormais, plus juste après "Retour à
+    # l'agent" comme avant.
+    #
+    # VRAI partage natif, identique à components/BoutonPartager.tsx côté
+    # Next.js : Web Share API (navigator.share -- ouvre le sélecteur natif
+    # du système, SMS/WhatsApp/etc.) si le navigateur le supporte, sinon
+    # copie presse-papiers avec confirmation "Copié !", sinon
+    # window.prompt en tout dernier recours.
+    #
+    # Streamlit n'expose aucune de ces API navigateur en Python -- même
+    # technique que _typeset_mathjax() plus haut : un <script> injecté via
+    # st.markdown ne s'exécute JAMAIS (limitation du DOM), donc on passe
+    # par st.iframe (vraie page HTML, où les scripts s'exécutent
+    # normalement), qui appelle window.parent.navigator (celui de la
+    # VRAIE page, pas de l'iframe) -- l'iframe elle-même n'a pas la
+    # permission "web-share".
+    #
+    # Couleurs codées en dur (pas de var(--dj-*)) : un iframe srcdoc est un
+    # document séparé, il n'hérite JAMAIS des variables CSS injectées dans
+    # le document parent -- copiées telles quelles depuis
+    # theme_djiguigne.py (mêmes valeurs que le bouton .stButton standard,
+    # pour rester visuellement identique).
+    #
+    # Bande blanche à côté du bouton corrigée (2026-07-13, Bourama,
+    # capture d'écran) : c'était la barre de défilement par défaut de
+    # l'iframe, déclenchée par un léger dépassement de hauteur (le corps
+    # HTML par défaut a une marge de 8px que rien ne retirait, donc le
+    # contenu dépassait très légèrement les 48px demandés). Corrigé par
+    # `scrolling=False` explicite ET un reset margin/padding sur html,body
+    # dans le document iframe -- les deux ensemble, pas un seul, pour ne
+    # pas dépendre uniquement du support navigateur de l'attribut HTML
+    # "scrolling" (non standard, retiré de HTML5, encore honoré par la
+    # plupart des moteurs mais pas garanti).
+    if _url_plateforme:
+        _url_partage = f"{_url_plateforme.rstrip('/')}/agent/{AGENT_ID}"
+        _titre_partage = UI_CONFIG["titre_page"]
+        st.iframe(
+            f"""
+            <html><body style="margin:0;padding:0;overflow:hidden;">
+            <button id="btn-partager" style="
+                width: 100%; box-sizing: border-box;
+                background: linear-gradient(135deg, #F2A65A 0%, #D9631F 55%, #8A2E0A 100%);
+                color: #1A0D02; font-weight: 700; font-family: Inter, sans-serif;
+                font-size: 0.9rem; border: none; border-radius: 10px;
+                padding: 0.55rem 1.1rem; cursor: pointer;
+                display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+                box-shadow: 0 2px 14px rgba(217,99,31,0.25);
+                transition: transform 0.15s ease;
+            " onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="#1A0D02">
+                    <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
+                </svg>
+                <span id="btn-partager-texte">Partager</span>
+            </button>
+            </body></html>
+            <script>
+                document.getElementById('btn-partager').addEventListener('click', async function() {{
+                    const url = {json.dumps(_url_partage)};
+                    const titre = {json.dumps(_titre_partage)};
+                    const texte = document.getElementById('btn-partager-texte');
+                    const nav = window.parent.navigator;
+                    if (nav.share) {{
+                        try {{ await nav.share({{ title: titre, url: url }}); }} catch (e) {{
+                            // Annulé par la personne ou échec silencieux du
+                            // sélecteur natif -- flux normal du Web Share
+                            // API, pas une erreur à afficher.
+                        }}
+                        return;
+                    }}
+                    try {{
+                        await nav.clipboard.writeText(url);
+                        texte.textContent = 'Copié !';
+                        setTimeout(function() {{ texte.textContent = 'Partager'; }}, 2000);
+                    }} catch (e) {{
+                        window.parent.prompt('Copie ce lien :', url);
+                    }}
+                }});
+            </script>
+            """,
+            height=52,
+            scrolling=False,
+        )
+
 
 
 def _afficher_arguments(arguments):
