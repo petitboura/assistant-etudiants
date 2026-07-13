@@ -773,22 +773,24 @@ _visiteur_bloque = (
 )
 
 if _visiteur_bloque:
-    _url_retour_inscription = get_secret("URL_RETOUR_APP")
-    # "/inscription" est l'URL cible une fois le frontend Next.js de la
-    # plateforme en place (voir PIVOT_SOCIAL.md) ; en attendant, si le
-    # secret est absent, on n'affiche simplement pas de bouton plutôt que
-    # de pointer vers un lien cassé.
-    _lien_inscription = (
-        f"{_url_retour_inscription.rstrip('/')}/inscription"
-        if _url_retour_inscription else None
+    # Corrigé le 2026-07-12 (Bourama) : ce lien utilisait URL_RETOUR_APP,
+    # qui est l'URL de CE déploiement Streamlit (sert au retour OAuth
+    # Notion/Google), pas celle de la plateforme Next.js -- il pointait
+    # donc vers une page /connexion qui n'existe pas côté Streamlit.
+    # URL_PLATEFORME (déjà utilisé plus haut pour "← Retour à l'agent")
+    # est la bonne variable ici.
+    _url_plateforme_inscription = get_secret("URL_PLATEFORME")
+    _lien_connexion = (
+        f"{_url_plateforme_inscription.rstrip('/')}/connexion"
+        if _url_plateforme_inscription else None
     )
     st.info(
         "Tu as atteint la limite de messages en tant que visiteur non "
         "connecté. Crée un compte gratuitement pour continuer à discuter "
         "avec cet agent."
     )
-    if _lien_inscription:
-        st.link_button("Créer mon compte", _lien_inscription)
+    if _lien_connexion:
+        st.link_button("Se connecter / Créer un compte", _lien_connexion)
     st.chat_input(UI_CONFIG["placeholder_saisie"], disabled=True)
 elif prompt := st.chat_input(UI_CONFIG["placeholder_saisie"]):
     st.session_state.compteur += 1
