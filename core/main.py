@@ -173,6 +173,21 @@ def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale)
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (sauvegarde conversations) : {e}")
 
+    # Ajouté le 2026-07-13 (Bourama : historique de conversation visible,
+    # conservée par agent, dans le tableau de bord). Table SÉPARÉE de
+    # `conversations` ci-dessus, jamais purgée -- voir le commentaire de
+    # migration (historique_conversations) pour le detail de la
+    # distinction. Volontairement dans un bloc try/except À PART : si cette
+    # écriture échoue, ça ne doit jamais faire échouer la mémoire de l'IA
+    # ci-dessus, qui est la partie critique pour la qualité des réponses.
+    try:
+        supabase.table("historique_conversations").insert([
+            {"user_id": user_id, "agent_id": agent_id, "role": "user", "content": message_utilisateur},
+            {"user_id": user_id, "agent_id": agent_id, "role": "assistant", "content": reponse_finale},
+        ]).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (sauvegarde historique_conversations) : {e}")
+
 
 def _mettre_a_jour_resume_si_besoin(user_id):
     """
