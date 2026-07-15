@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 class NotificationItem(BaseModel):
     id: int
-    type: str  # "follow" | "comment" | "rating" | "categorie_manquante"
+    type: str  # "follow" | "comment" | "rating" | "categorie_manquante" | "agent_update"
     lu: bool
     created_at: Optional[str] = None
     # Nullable depuis le 2026-07-15 (Bourama : système de catégories) :
@@ -35,6 +35,10 @@ class NotificationItem(BaseModel):
     agent_id: Optional[str] = None
     agent_nom: Optional[str] = None
     agent_icone: Optional[str] = None
+    # Ajouté le 2026-07-15 pour le type "agent_update" (voir migration
+    # pivot_social_mises_a_jour_agent) : permet au frontend de faire un
+    # deep-link direct vers la mise à jour plutôt que juste l'agent.
+    update_id: Optional[int] = None
 
 
 class NotificationsReponse(BaseModel):
@@ -63,7 +67,7 @@ def lister_notifications(
     try:
         res = (
             supabase.table("notifications")
-            .select("id, type, acteur_id, agent_id, lu, created_at", count="exact")
+            .select("id, type, acteur_id, agent_id, update_id, lu, created_at", count="exact")
             .eq("user_id", utilisateur.id)
             .order("created_at", desc=True)
             .range(debut, fin)
@@ -138,6 +142,7 @@ def lister_notifications(
                 agent_id=l.get("agent_id"),
                 agent_nom=agent.get("nom"),
                 agent_icone=(agent.get("ui_config") or {}).get("icone_page"),
+                update_id=l.get("update_id"),
             )
         )
 

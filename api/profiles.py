@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
+from api.agents import supprimer_agent_completement
 from creation_agent import generer_id_depuis_nom
 
 logging.basicConfig(level=logging.INFO)
@@ -269,3 +270,74 @@ def mettre_a_jour_mon_profil(
         bio=resultat.get("bio") or "",
         avatar_url=resultat.get("avatar_url"),
     )
+
+
+@router.delete("/me", status_code=204)
+def supprimer_mon_compte(utilisateur=Depends(utilisateur_courant)):
+    """
+    "Supprimer mon compte" dans la zone de danger de Mon espace (demande
+    Bourama, 2026-07-15). Purge dans l'ordre : chaque agent possédé (via
+    api.agents.supprimer_agent_completement, même fonction que "Supprimer
+    un agent" pour ne pas dupliquer cette logique), les publications
+    (posts), les traces laissées sur le contenu des AUTRES (commentaires,
+    notes, likes/commentaires de mises à jour, follows dans les deux
+    sens), le profil, puis enfin le compte Supabase Auth lui-même via
+    l'API admin (le client `supabase` de api.auth utilise déjà la service
+    role key, seule capable d'appeler `auth.admin`).
+
+    Ne touche PAS à `historique_conversations` (même choix que
+    supprimer_agent_completement, journal permanent jamais purgé ailleurs
+    dans le projet) : les échanges passés restent en base, seulement
+    détachés de tout profil/agent visible.
+
+    Chaque étape est best-effort (log et continue) sauf la suppression
+    finale du compte Auth, seule à faire échouer la requête si elle
+    plante -- mieux vaut un compte orphelin nettoyé à 95% qu'un compte qui
+    ne se supprime jamais parce qu'une seule ligne annexe a fait échouer
+    tout le reste.
+    """
+    user_id = utilisateur.id
+
+    try:
+        mes_agents = supabase.table("agents").select("id").eq("owner_id", user_id).execute()
+        for ligne in mes_agents.data or []:
+            try:
+                supprimer_agent_completement(ligne["id"])
+            except Exception as e:
+                logging.error(f"ERREUR suppression agent {ligne['id']} (compte {user_id}) : {e}")
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (liste agents à purger, compte {user_id}) : {e}")
+
+    for table, colonne in (
+        ("posts", "user_id"),
+        ("agent_comments", "user_id"),
+        ("agent_ratings", "user_id"),
+        ("agent_updates", "user_id"),
+        ("agent_update_likes", "user_id"),
+        ("agent_update_comments", "user_id"),
+        ("notifications", "user_id"),
+    ):
+        try:
+            supabase.table(table).delete().eq(colonne, user_id).execute()
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (purge table {table} pour compte {user_id}) : {e}")
+
+    for table, colonne in (("follows", "follower_id"), ("follows", "creator_id")):
+        try:
+            supabase.table(table).delete().eq(colonne, user_id).execute()
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (purge follows.{colonne} pour compte {user_id}) : {e}")
+
+    try:
+        supabase.table("profiles").delete().eq("user_id", user_id).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (suppression profil, compte {user_id}) : {e}")
+
+    try:
+        supabase.auth.admin.delete_user(user_id)
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE AUTH (suppression compte {user_id}) : {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Le contenu a été supprimé mais le compte lui-même n'a pas pu être fermé, réessaie.",
+        )

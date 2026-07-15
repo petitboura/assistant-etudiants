@@ -1124,3 +1124,67 @@ def lister_commentaires(
         )
         for ligne in lignes
     ]
+
+
+def supprimer_agent_completement(agent_id: str):
+    """
+    Purge un agent et tout ce qui en dépend directement (documents PDF +
+    chunks vectorisés `documents`/`prompts_chunks`, commentaires, notes ;
+    `agent_updates` et ses likes/commentaires partent tout seuls via
+    ON DELETE CASCADE, voir la migration
+    pivot_social_mises_a_jour_agent). Ne vérifie AUCUNE propriété : c'est
+    à l'appelant de l'avoir fait avant (voir supprimer_agent ci-dessous et
+    api/profiles.py:supprimer_mon_compte, qui appelle ceci pour chaque
+    agent du compte).
+
+    Ne touche PAS à `historique_conversations` (journal permanent des
+    échanges, jamais purgé ailleurs dans le projet) ni aux notifications
+    qui référencent cet agent_id (colonne sans contrainte FK, laissée
+    orpheline -- même choix de simplicité que le reste du projet, aucun
+    nettoyage de notifications n'existait avant cette fonctionnalité).
+    Chaque étape est best-effort (log et continue) sauf la suppression
+    finale de la ligne `agents`, qui doit réussir pour que l'appelant
+    sache si l'opération a globalement marché.
+    """
+    try:
+        prefixe = f"{agent_id}__"
+        for nom_stockage in [f for f in list_documents() if f.startswith(prefixe)]:
+            try:
+                delete_document(nom_stockage)
+            except Exception as e:
+                logging.error(f"ERREUR suppression fichier storage {nom_stockage} (agent={agent_id}) : {e}")
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE STORAGE (liste documents pour purge agent={agent_id}) : {e}")
+
+    for table in ("documents", "prompts_chunks", "agent_comments", "agent_ratings"):
+        try:
+            supabase.table(table).delete().eq("agent_id", agent_id).execute()
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (purge table {table} pour agent={agent_id}) : {e}")
+
+    supabase.table("agents").delete().eq("id", agent_id).execute()
+
+
+@router.delete("/{agent_id}", status_code=204)
+def supprimer_agent(agent_id: str, utilisateur=Depends(utilisateur_courant)):
+    """
+    "Supprimer un agent" dans la zone de danger de Mon espace (demande
+    Bourama, 2026-07-15). Propriétaire uniquement -- même vérification que
+    tous les autres endpoints d'écriture sur un agent.
+    """
+    try:
+        res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant suppression complète) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de supprimer cet agent pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+    if res.data["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    try:
+        supprimer_agent_completement(agent_id)
+    except Exception as e:
+        logging.error(f"ERREUR suppression complète agent={agent_id} : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de supprimer cet agent pour le moment.")

@@ -4,15 +4,15 @@ Plateforme multi-agents : n'importe qui peut créer son propre assistant IA
 sans coder (documents PDF, prompt Notion, outils externes) et obtenir un
 lien de chat prêt à partager.
 
-Le projet est en cours de **pivot vers une plateforme sociale** (feed de
+Le projet a effectué son **pivot vers une plateforme sociale** (feed de
 découverte, pages agent publiques, profils créateurs, notes, commentaires,
-follow). Voir `PIVOT_SOCIAL.md` pour le détail complet et l'avancement
-exact de ce chantier, et `api/PLAN.md` pour la migration Streamlit → API
-qui le sous-tend.
+follow, notifications, mises à jour d'agent, Article/Réflexion/Histoire —
+détail dans la section dédiée plus bas). Voir `api/PLAN.md` pour la
+migration Streamlit → API qui sous-tend ce pivot.
 
-**Ce README décrit l'état réel du code.** En cas de doute, le code et ces
-deux fichiers de suivi (`PIVOT_SOCIAL.md`, `api/PLAN.md`) font foi — pas
-d'anciennes conversations ou de documentation externe.
+**Ce README décrit l'état réel du code.** En cas de doute, le code et
+`api/PLAN.md` font foi — pas d'anciennes conversations ou de documentation
+externe.
 
 ---
 
@@ -53,17 +53,41 @@ indexers/
 api/
   main.py               app FastAPI (backend en construction, voir api/PLAN.md)
   auth.py               vérification du JWT Supabase envoyé par le frontend
-  agents.py             endpoints agents (création, feed, détail, vitrine, notes, commentaires)
+  agents.py             endpoints agents (création, feed, détail, vitrine, notes, commentaires, suppression)
+  agent_updates.py      endpoints mises à jour d'agent (publier, lister, liker, commenter)
+  posts.py               endpoints Article/Réflexion/Histoire
   creators.py            endpoints follow/unfollow créateur
-  profiles.py            endpoints portfolio créateur
+  profiles.py            endpoints portfolio créateur (+ suppression de compte)
+  notifications.py       endpoints notifications (follow, commentaire, note, mise à jour d'agent)
   search.py              endpoint de recherche (agents + créateurs)
   PLAN.md                suivi détaillé de la migration Streamlit → API
 ```
 
+## Fonctionnalités sociales (pivot terminé)
+
+- **Feed public** (`/`, `GET /api/feed`) : agents publiés récemment, 5
+  onglets (Agents / Créateurs / Article / Réflexion / Histoire).
+- **Pages agent publiques** (`/agent/[id]`) : note, commentaires, mises à
+  jour (avec like/commentaire/partage), bouton "Utiliser" vers le chat
+  Streamlit.
+- **Profils créateurs** (`/u/[id]`) : agents publiés, follow, et les 3
+  mêmes sections Article/Réflexion/Histoire filtrées sur ce créateur.
+- **Mises à jour d'agent** (`api/agent_updates.py`) : un créateur publie
+  ce qu'il a changé sur un agent (depuis "Modifier agent") ; toute
+  personne ayant déjà utilisé cet agent (même une fois) reçoit une
+  notification.
+- **Article / Réflexion / Histoire** (`api/posts.py`, table `posts`) :
+  3 formats de publication créateur, publiables depuis "Mon espace".
+- **Notifications** (`api/notifications.py`) : follow, commentaire, note,
+  mise à jour d'agent — lignes créées uniquement par des triggers
+  Postgres, jamais insérées directement par l'API.
+- **Zone de danger** ("Modifier le profil" côté frontend) : déconnexion,
+  suppression de compte / d'un agent / d'une histoire.
+
 ## Ce qui tourne en production aujourd'hui
 
 - **L'app Streamlit (`faces/`) est l'unique interface utilisateur actuellement déployée**, hébergée sur Railway.
-- **Le chat restera en Streamlit indéfiniment**, même après le pivot social — voir `PIVOT_SOCIAL.md`. Seules les autres vues créateur (`creer_agent.py`, `mes_agents.py`, `vitrine.py`) seront progressivement remplacées par un frontend Next.js séparé.
+- **Le chat restera en Streamlit indéfiniment**, même après le pivot social. Seules les autres vues créateur (`creer_agent.py`, `mes_agents.py`, `vitrine.py`) seront progressivement remplacées par un frontend Next.js séparé.
 - **`api/` existe dans le dépôt mais n'est pas encore déployé** : Railway fait toujours tourner Streamlit, pas ce backend FastAPI (bascule prévue à l'Étape 6 de `api/PLAN.md`, pas avant que tout soit validé en conditions réelles).
 
 ## Variables d'environnement / secrets nécessaires
@@ -101,6 +125,5 @@ python indexers/index_documents.py mon_document.pdf
 
 ## Pour aller plus loin
 
-- **`PIVOT_SOCIAL.md`** — plan et avancement du pivot vers une plateforme sociale (profils, feed, notes, commentaires, follow)
 - **`api/PLAN.md`** — plan et avancement de la migration Streamlit → API FastAPI
 - **`RAILWAY_DEPLOY.md`** — checklist des secrets à configurer sur Railway
