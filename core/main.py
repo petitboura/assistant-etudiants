@@ -119,7 +119,24 @@ def _charger_resume_memoire(user_id):
         return ""
 
 
-def _construire_system_prompt(message_utilisateur, agent_id, user_id=None):
+INSTRUCTIONS_LONGUEUR_REPONSE = {
+    # Migration Next.js (voir MIGRATION_CHAT_VERS_NEXTJS.md, section 3.3) :
+    # sélecteur Courte/Moyenne/Longue dans la barre de saisie, modifiable
+    # à chaque message. "moyenne" = comportement historique (pas
+    # d'instruction ajoutée), pour ne rien changer par défaut.
+    "courte": (
+        "\n\nCONSIGNE DE LONGUEUR : réponds de façon brève et directe (quelques "
+        "phrases maximum), sans sacrifier l'exactitude. Va à l'essentiel."
+    ),
+    "moyenne": "",
+    "longue": (
+        "\n\nCONSIGNE DE LONGUEUR : développe ta réponse en détail (explications, "
+        "exemples, étapes intermédiaires si utile), sans être verbeux pour rien."
+    ),
+}
+
+
+def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne"):
     system_prompt = get_system_prompt(agent_id)
     candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
     resume_memoire = _charger_resume_memoire(user_id)
@@ -137,6 +154,7 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None):
         system_final += f"\n\n{instructions}"
     if contexte_docs:
         system_final += f"\n\n{contexte_docs}"
+    system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
     system_final += REGLE_CONTEXTE_INVISIBLE
 
     logging.info(
@@ -163,8 +181,10 @@ def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale,
     connecte (user_id=None) ou si la reponse est vide (ex: message
     d'erreur technique, qu'on ne veut pas polluer la memoire avec).
     """
+    ids_historique = None  # renvoyé à l'appelant pour l'indexation du feedback
+
     if not user_id or not (reponse_finale or "").strip():
-        return
+        return ids_historique
     try:
         supabase.table("conversations").insert([
             {"user_id": user_id, "agent_id": agent_id, "role": "user", "content": message_utilisateur},
@@ -190,12 +210,27 @@ def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale,
     # sans erreur, ses messages sont juste groupés sous "historique ancien"
     # côté affichage plutôt que dans un fil précis.
     try:
-        supabase.table("historique_conversations").insert([
-            {"user_id": user_id, "agent_id": agent_id, "role": "user", "content": message_utilisateur, "conversation_id": conversation_id},
-            {"user_id": user_id, "agent_id": agent_id, "role": "assistant", "content": reponse_finale, "conversation_id": conversation_id},
-        ]).execute()
+        res = (
+            supabase.table("historique_conversations")
+            .insert([
+                {"user_id": user_id, "agent_id": agent_id, "role": "user", "content": message_utilisateur, "conversation_id": conversation_id},
+                {"user_id": user_id, "agent_id": agent_id, "role": "assistant", "content": reponse_finale, "conversation_id": conversation_id},
+            ])
+            .execute()
+        )
+        lignes = res.data or []
+        ligne_user = next((l for l in lignes if l["role"] == "user"), None)
+        ligne_assistant = next((l for l in lignes if l["role"] == "assistant"), None)
+        if ligne_user and ligne_assistant:
+            ids_historique = {
+                "message_id_user": ligne_user["id"],
+                "message_id_assistant": ligne_assistant["id"],
+                "created_at_assistant": ligne_assistant.get("created_at"),
+            }
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (sauvegarde historique_conversations) : {e}")
+
+    return ids_historique
 
 
 def _mettre_a_jour_resume_si_besoin(user_id):
@@ -487,7 +522,7 @@ def _capturer_reponse(generateur, accumulateur):
         yield event
 
 
-def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None):
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne"):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
@@ -497,9 +532,22 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
       l'etudiant (ex: creer une page Notion) attend une confirmation avant de s'executer.
       Contient "nom_lisible", "arguments" (a afficher a l'etudiant), et "etat_reprise"
       (a repasser tel quel a chat(reprise=...) une fois la decision prise).
+    - {"type": "meta", "message_id_user": ..., "message_id_assistant": ...,
+      "created_at_assistant": ...}                -> DERNIER evenement emis, une fois
+      l'echange persiste dans historique_conversations (voir _sauvegarder_echange).
+      Ids necessaires cote appelant (API de migration Next.js) pour indexer un
+      feedback like/dislike sur CE message precis (voir
+      MIGRATION_CHAT_VERS_NEXTJS.md, section 3.2). Absent si l'etudiant n'est pas
+      connecte (user_id=None) : dans ce cas aucun feedback n'est possible non plus.
 
     faces/app_etudiant.py doit distinguer ces types pour savoir quoi afficher, et ne
     garder que "reponse" dans l'historique de conversation.
+
+    `longueur_reponse` (optionnel, "courte" | "moyenne" | "longue", defaut
+    "moyenne" = comportement historique inchange) pilote la longueur de la
+    reponse generee via une consigne ajoutee au prompt systeme (voir
+    INSTRUCTIONS_LONGUEUR_REPONSE). Migration Next.js, section 3.3 :
+    modifiable a chaque message par l'etudiant.
 
     `user_id` (session.user.id de Supabase Auth, ou None si l'etudiant n'est
     pas connecte) est transmis au registre d'outils pour que les outils "par
@@ -582,7 +630,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     if agent_id is None:
         agent_id = get_secret("AGENT_ID") or AGENT_ID_PAR_DEFAUT
 
-    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id)
+    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse)
 
     messages_base = [{"role": "system", "content": system_final}]
     messages_base += historique
@@ -614,7 +662,9 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 _agent_groq(client_groq, messages_agent, outils_mcp, table_routage),
                 reponse_accumulee,
             )
-            _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+            ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+            if ids_historique:
+                yield {"type": "meta", **ids_historique}
             _mettre_a_jour_resume_si_besoin(user_id)
             return
         except Exception as e:
@@ -643,7 +693,9 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     ),
                     reponse_accumulee,
                 )
-                _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+                ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+                if ids_historique:
+                    yield {"type": "meta", **ids_historique}
                 _mettre_a_jour_resume_si_besoin(user_id)
                 return
             except Exception as e:
@@ -675,7 +727,9 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     reponse_accumulee.append(chunk.text)
                     yield {"type": "reponse", "texte": chunk.text}
             logging.info("Réponse via GEMINI")
-            _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+            ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+            if ids_historique:
+                yield {"type": "meta", **ids_historique}
             _mettre_a_jour_resume_si_besoin(user_id)
             return
         except Exception as e:

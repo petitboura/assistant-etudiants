@@ -22,6 +22,8 @@ from api.historique import router as historique_router
 from api.notifications import router as notifications_router
 from api.agent_updates import router as agent_updates_router
 from api.posts import router as posts_router
+from api.chat import router as chat_router
+from api.feedback import router as feedback_router
 
 logging.basicConfig(level=logging.INFO)
 
@@ -65,6 +67,8 @@ app.include_router(historique_router)
 app.include_router(notifications_router)
 app.include_router(agent_updates_router)
 app.include_router(posts_router)
+app.include_router(chat_router)
+app.include_router(feedback_router)
 
 
 @app.get("/health")
