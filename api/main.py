@@ -154,7 +154,7 @@ class CategorieItem(BaseModel):
 
 
 @app.get("/api/categories", response_model=List[CategorieItem])
-def lister_categories():
+def lister_categories(seulement_utilisees: bool = Query(False)):
     """
     Toutes les catégories, pour le popup de sélection sur la page
     d'accueil et les formulaires de création/modification d'agent.
@@ -162,6 +162,13 @@ def lister_categories():
     prépare l'arrivée des sous-catégories (Bourama, 2026-07-15) : NULL
     pour toutes pour l'instant, aucune catégorie n'est encore un enfant
     d'une autre.
+
+    `seulement_utilisees` (ajouté 2026-07-15, demande de Bourama : les
+    catégories vides ne doivent pas apparaître à l'accueil) : si True, ne
+    renvoie que les catégories ayant au moins un agent publié. UNIQUEMENT
+    pour le popup de l'accueil -- les formulaires de création/modification
+    continuent d'appeler cette route SANS ce paramètre, pour permettre de
+    choisir une catégorie même si on est le premier agent dedans.
     """
     try:
         res = supabase.table("categories").select("id, nom, mots_cles, parent_id").execute()
@@ -169,4 +176,21 @@ def lister_categories():
         logging.error(f"ERREUR SUPABASE (lecture categories) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de charger les catégories pour le moment.")
 
-    return [CategorieItem(**ligne) for ligne in (res.data or [])]
+    categories = res.data or []
+
+    if seulement_utilisees:
+        try:
+            res_agents = (
+                supabase.table("agents")
+                .select("categorie_id")
+                .or_("actif.is.null,actif.eq.true")
+                .not_.is_("categorie_id", "null")
+                .execute()
+            )
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (lecture categorie_id des agents) : {e}")
+            raise HTTPException(status_code=500, detail="Impossible de charger les catégories pour le moment.")
+        ids_utilisees = {l["categorie_id"] for l in (res_agents.data or [])}
+        categories = [c for c in categories if c["id"] in ids_utilisees]
+
+    return [CategorieItem(**ligne) for ligne in categories]
