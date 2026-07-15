@@ -52,6 +52,12 @@ class UiConfig(BaseModel):
     part, voir PIVOT_SOCIAL.md Étape B).
     """
     icone_page: str = "🤖"
+    # Ajouté le 2026-07-14 (Bourama : le formulaire n'avait aucune section
+    # pour ce champ, alors que faces/vues/chat.py le lit déjà depuis
+    # ui_config.placeholder_saisie -- voir UI_CONFIG_PAR_DEFAUT). Le
+    # formulaire Streamlit (creer_agent.py) l'avait déjà, seul le flow
+    # Next.js en manquait.
+    placeholder_saisie: str = "Pose ta question..."
 
 
 class CreerAgentPayload(BaseModel):
@@ -159,6 +165,11 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
         # est vide, pour ne jamais laisser un agent sans sous-titre.
         "sous_titre_accueil": payload.sous_titre.strip() or payload.description.strip(),
         "emoji_reponse": ui.icone_page.strip(),
+        # Point 5 (2026-07-14, Bourama) : texte de la barre de saisie du
+        # chat, personnalisable par agent -- déjà lu tel quel côté
+        # faces/vues/chat.py (UI_CONFIG["placeholder_saisie"]), seul le
+        # flow de création Next.js ne l'écrivait pas encore.
+        "placeholder_saisie": ui.placeholder_saisie.strip() or "Pose ta question...",
     }
 
     knowledge_source = {
@@ -411,6 +422,7 @@ class AgentEditable(BaseModel):
     image_vitrine_url: Optional[str] = None
     description: str = ""
     sous_titre: str = ""
+    placeholder_saisie: str = "Pose ta question..."
     actif: bool = True
 
 
@@ -461,6 +473,9 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         image_vitrine_url=ligne.get("image_vitrine_url"),
         description=ligne.get("description") or "",
         sous_titre=(ligne.get("ui_config") or {}).get("sous_titre_accueil", ""),
+        placeholder_saisie=(ligne.get("ui_config") or {}).get(
+            "placeholder_saisie", "Pose ta question..."
+        ),
         actif=ligne.get("actif", True),
     )
 
@@ -482,6 +497,10 @@ class ModifierAgentPayload(BaseModel):
     type_connaissance: Optional[str] = None
     description_connaissance: Optional[str] = None
     sous_titre: Optional[str] = None
+    # Point 5 (2026-07-14, Bourama) : indépendant de nom/icone_page/
+    # sous_titre, même traitement que sous_titre dans le handler plus bas
+    # (sa propre condition, pas rattaché au bloc nom/icone).
+    placeholder_saisie: Optional[str] = None
     # Repli brut (agents pré-migration, AgentEditable.config_creation
     # était None) : ignoré si un champ discret ci-dessus est fourni.
     system_prompt: Optional[str] = None
@@ -565,6 +584,14 @@ def modifier_agent(
     # dessus s'il est présent, voir plus bas.
     if payload.sous_titre is not None:
         ui_config["sous_titre_accueil"] = payload.sous_titre.strip()
+        ui_config_modifie = True
+
+    # Même raisonnement que sous_titre_accueil juste au-dessus (2026-07-14,
+    # Bourama) : indépendant de nom/icône, sa propre condition.
+    if payload.placeholder_saisie is not None:
+        ui_config["placeholder_saisie"] = (
+            payload.placeholder_saisie.strip() or "Pose ta question..."
+        )
         ui_config_modifie = True
 
     if ui_config_modifie:

@@ -367,6 +367,16 @@ for agent in mes_agents:
                 key=f"soustitre_{agent['id']}",
             )
 
+            # Point 5 (2026-07-15, Bourama : "il n'y a pas de section pour
+            # modifier le texte qui s'affiche dans la barre de saisie")
+            # -- déjà présent côté formulaire de création
+            # (creer_agent.py), manquait ici côté modification.
+            nouveau_placeholder_saisie = st.text_input(
+                "Texte de la barre de saisie",
+                value=ui_config.get("placeholder_saisie", "Pose ta question..."),
+                key=f"placeholder_saisie_{agent['id']}",
+            )
+
             st.caption("Thème visuel")
             st.markdown("*Arrière-plans*")
             st.caption("↑ La visibilité de la bulle assistant se règle juste au-dessus (\"Style visuel — aperçu en direct\").")
@@ -603,6 +613,7 @@ for agent in mes_agents:
                     "icone_page": nouvelle_icone.strip() or "🤖",
                     "titre_accueil": f"{nouvelle_icone.strip()} {nouveau_nom.strip()}",
                     "sous_titre_accueil": nouveau_sous_titre.strip(),
+                    "placeholder_saisie": nouveau_placeholder_saisie.strip() or "Pose ta question...",
                     "emoji_reponse": nouvelle_icone.strip() or "🤖",
                     "couleur_fond": nouvelle_couleur_fond,
                     "couleur_accent": nouvelle_couleur_accent,

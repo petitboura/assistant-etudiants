@@ -78,12 +78,17 @@ def _recuperer_config_prompt(agent_id):
     - system_prompt : agents créés via le formulaire de la plateforme
       (étape 2), saisi directement par le créateur, pas de compte Notion
       nécessaire.
+
+    owner_id (2026-07-15, Bourama : "le nom et la bio du créateur doivent
+    être dits à l'agent, dynamiquement") : récupéré ici pour pouvoir
+    résoudre le profil du créateur dans _charger_depuis_notion, sans un
+    second aller-retour Supabase séparé.
     """
     try:
         resultat = (
             _get_supabase()
             .table("agents")
-            .select("notion_page_id, system_prompt")
+            .select("notion_page_id, system_prompt, owner_id")
             .eq("id", agent_id)
             .single()
             .execute()
@@ -92,6 +97,53 @@ def _recuperer_config_prompt(agent_id):
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (récupération config prompt pour agent_id={agent_id}) : {e}")
         return {}
+
+
+def _recuperer_bloc_createur(owner_id):
+    """
+    Nom affiché + bio du profil créateur (table `profiles`), formatés en
+    un bloc de texte à ajouter au system prompt -- pour que l'agent sache
+    qui l'a créé et connaisse quelque chose sur cette personne (demande de
+    Bourama, 2026-07-15 : "que cela s'applique aussi aux IA existantes").
+
+    Appelé à chaque rechargement de cache (voir CACHE_DUREE, 5 minutes) :
+    si le créateur modifie son nom ou sa bio, l'agent le reflète dès le
+    prochain rechargement, sans qu'aucune valeur ne soit figée en dur dans
+    `agents.system_prompt` lui-même. Chaîne vide (rien à ajouter) si le
+    créateur n'a pas encore de ligne `profiles`, ou si nom_affiche et bio
+    sont tous les deux vides -- best-effort, ne doit jamais faire échouer
+    le chargement du system prompt.
+    """
+    if not owner_id:
+        return ""
+    try:
+        resultat = (
+            _get_supabase()
+            .table("profiles")
+            .select("nom_affiche, bio")
+            .eq("user_id", owner_id)
+            .maybe_single()
+            .execute()
+        )
+        profil = resultat.data if resultat else None
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (récupération profil créateur owner_id={owner_id}) : {e}")
+        return ""
+
+    if not profil:
+        return ""
+
+    nom_affiche = (profil.get("nom_affiche") or "").strip()
+    bio = (profil.get("bio") or "").strip()
+    if not nom_affiche and not bio:
+        return ""
+
+    lignes = []
+    if nom_affiche:
+        lignes.append(f"Tu as été créé par {nom_affiche}.")
+    if bio:
+        lignes.append(f"Ce que tu sais de cette personne : {bio}")
+    return "## Ton créateur\n" + "\n".join(lignes)
 
 
 def _echec(agent_id, garder_ancien_prompt=True):
@@ -123,8 +175,11 @@ def _charger_depuis_notion(agent_id):
     """
     config = _recuperer_config_prompt(agent_id)
     system_prompt = (config.get("system_prompt") or "").strip()
+    bloc_createur = _recuperer_bloc_createur(config.get("owner_id"))
 
     if system_prompt:
+        if bloc_createur:
+            system_prompt = f"{system_prompt}\n\n{bloc_createur}"
         _cache[agent_id] = {"prompt": system_prompt, "timestamp": time.time(), "succes": True}
         return
 
@@ -178,6 +233,9 @@ def _charger_depuis_notion(agent_id):
             "répond (200 OK) mais ne contient aucun bloc paragraph/liste/heading exploitable "
             "(peut-être du contenu dans des toggles, colonnes, ou sous-pages non gérées ici)."
         )
+
+    if bloc_createur:
+        texte = f"{texte}\n\n{bloc_createur}" if texte else bloc_createur
 
     _cache[agent_id] = {"prompt": texte, "timestamp": time.time(), "succes": True}
 
