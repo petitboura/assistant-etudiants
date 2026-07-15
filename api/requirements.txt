@@ -4,3 +4,6 @@ python-multipart
 supabase
 PyPDF2
 google-genai
+groq
+mcp
+httpx
