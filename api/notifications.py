@@ -23,10 +23,13 @@ router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
 class NotificationItem(BaseModel):
     id: int
-    type: str  # "follow" | "comment" | "rating"
+    type: str  # "follow" | "comment" | "rating" | "categorie_manquante"
     lu: bool
     created_at: Optional[str] = None
-    acteur_id: str
+    # Nullable depuis le 2026-07-15 (Bourama : système de catégories) :
+    # "categorie_manquante" est une notif système, sans acteur humain
+    # (personne n'a "agi" sur toi, contrairement à follow/comment/rating).
+    acteur_id: Optional[str] = None
     acteur_nom: str = ""
     acteur_avatar_url: Optional[str] = None
     agent_id: Optional[str] = None
@@ -90,7 +93,7 @@ def lister_notifications(
     # (même pattern que api/agents.py:lister_commentaires -- une requête
     # par table, pas une par notification).
     acteurs_par_id: dict = {}
-    ids_acteurs = list({l["acteur_id"] for l in lignes})
+    ids_acteurs = list({l["acteur_id"] for l in lignes if l.get("acteur_id")})
     if ids_acteurs:
         try:
             profils_res = (

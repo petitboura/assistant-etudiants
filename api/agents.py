@@ -76,6 +76,10 @@ class CreerAgentPayload(BaseModel):
     lien_notion: Optional[str] = None
     texte_libre: str = ""
     ui_config: UiConfig = Field(default_factory=UiConfig)
+    # Ajouté le 2026-07-15 (Bourama : système de catégories) : obligatoire
+    # à la création (voir validation plus bas), doit référencer une ligne
+    # existante de la table `categories`.
+    categorie_id: str
     # Nouveau flow de création (pivot social) : image de vitrine et
     # description publique de la page agent, distinctes de
     # description_connaissance qui reste un usage interne au RAG.
@@ -113,6 +117,22 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
             status_code=422,
             detail="Remplis au moins la posture générale ou les limites globales.",
         )
+    if not payload.categorie_id.strip():
+        raise HTTPException(status_code=422, detail="La catégorie est obligatoire.")
+
+    try:
+        categorie_existe = (
+            supabase.table("categories")
+            .select("id")
+            .eq("id", payload.categorie_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (vérification catégorie={payload.categorie_id}) : {e}")
+        categorie_existe = None
+    if not categorie_existe or not categorie_existe.data:
+        raise HTTPException(status_code=422, detail="Catégorie inconnue.")
 
     agent_id = generer_id_depuis_nom(payload.nom)
 
@@ -193,6 +213,7 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
         # distincte de knowledge_source.description (usage RAG interne).
         "image_vitrine_url": payload.image_vitrine_url,
         "description": payload.description.strip(),
+        "categorie_id": payload.categorie_id,
         # Colonne ajoutée le 2026-07-12 (Bourama : le formulaire de
         # modification doit contenir tous les champs de la création).
         # composer_system_prompt() fusionne ces champs puis les jette —
@@ -424,6 +445,7 @@ class AgentEditable(BaseModel):
     sous_titre: str = ""
     placeholder_saisie: str = "Pose ta question..."
     actif: bool = True
+    categorie_id: Optional[str] = None
 
 
 @router.get("/{agent_id}/edition", response_model=AgentEditable)
@@ -442,7 +464,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id"
+                "actif, owner_id, categorie_id"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -477,6 +499,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
             "placeholder_saisie", "Pose ta question..."
         ),
         actif=ligne.get("actif", True),
+        categorie_id=ligne.get("categorie_id"),
     )
 
 
@@ -509,6 +532,7 @@ class ModifierAgentPayload(BaseModel):
     image_vitrine_url: Optional[str] = None
     description: Optional[str] = None
     actif: Optional[bool] = None
+    categorie_id: Optional[str] = None
 
 
 @router.patch("/{agent_id}", response_model=AgentEditable)
@@ -533,7 +557,7 @@ def modifier_agent(
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id"
+                "actif, owner_id, categorie_id"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -685,6 +709,21 @@ def modifier_agent(
         mise_a_jour["description"] = payload.description.strip()
     if payload.actif is not None:
         mise_a_jour["actif"] = payload.actif
+    if payload.categorie_id is not None:
+        try:
+            categorie_existe = (
+                supabase.table("categories")
+                .select("id")
+                .eq("id", payload.categorie_id)
+                .maybe_single()
+                .execute()
+            )
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (vérification catégorie={payload.categorie_id}) : {e}")
+            categorie_existe = None
+        if not categorie_existe or not categorie_existe.data:
+            raise HTTPException(status_code=422, detail="Catégorie inconnue.")
+        mise_a_jour["categorie_id"] = payload.categorie_id
 
     if not mise_a_jour:
         raise HTTPException(status_code=422, detail="Rien à modifier.")
@@ -729,6 +768,7 @@ def modifier_agent(
         description=mise_a_jour.get("description", ligne.get("description") or ""),
         sous_titre=ui_config.get("sous_titre_accueil", ""),
         actif=mise_a_jour.get("actif", ligne.get("actif", True)),
+        categorie_id=mise_a_jour.get("categorie_id", ligne.get("categorie_id")),
     )
 
 

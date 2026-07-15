@@ -87,6 +87,7 @@ class AgentFeedItem(BaseModel):
     icone_page: str = "🤖"
     image_vitrine_url: Optional[str] = None
     description: str = ""
+    categorie_id: Optional[str] = None
 
 
 class FeedReponse(BaseModel):
@@ -97,7 +98,11 @@ class FeedReponse(BaseModel):
 
 
 @app.get("/api/feed", response_model=FeedReponse)
-def feed(page: int = Query(1, ge=1), limite: int = Query(20, ge=1, le=50)):
+def feed(
+    page: int = Query(1, ge=1),
+    limite: int = Query(20, ge=1, le=50),
+    categorie: Optional[str] = Query(None),
+):
     """
     Liste paginée des agents publiés, pour le feed de découverte de la
     page `/` (voir PIVOT_SOCIAL.md). Public, aucune auth requise.
@@ -106,19 +111,22 @@ def feed(page: int = Query(1, ge=1), limite: int = Query(20, ge=1, le=50)):
     (même convention de "True par défaut" que
     faces/vues/chat.py:_agent_est_actif, pour ne pas faire disparaître du
     feed des agents créés avant l'ajout de cette colonne).
+
+    `categorie` (ajouté 2026-07-15, système de catégories) : filtre par
+    `categorie_id` si fourni, sinon comportement inchangé (tout le feed).
     """
     debut = (page - 1) * limite
     fin = debut + limite - 1
 
     try:
-        res = (
+        requete = (
             supabase.table("agents")
-            .select("id, nom, ui_config, image_vitrine_url, description", count="exact")
+            .select("id, nom, ui_config, image_vitrine_url, description, categorie_id", count="exact")
             .or_("actif.is.null,actif.eq.true")
-            .order("id")
-            .range(debut, fin)
-            .execute()
         )
+        if categorie:
+            requete = requete.eq("categorie_id", categorie)
+        res = requete.order("id").range(debut, fin).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture feed, page={page}) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de charger le feed pour le moment.")
@@ -130,8 +138,35 @@ def feed(page: int = Query(1, ge=1), limite: int = Query(20, ge=1, le=50)):
             icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
             image_vitrine_url=ligne.get("image_vitrine_url"),
             description=ligne.get("description") or "",
+            categorie_id=ligne.get("categorie_id"),
         )
         for ligne in (res.data or [])
     ]
 
     return FeedReponse(agents=agents, page=page, limite=limite, total=res.count or 0)
+
+
+class CategorieItem(BaseModel):
+    id: str
+    nom: str
+    mots_cles: List[str] = []
+    parent_id: Optional[str] = None
+
+
+@app.get("/api/categories", response_model=List[CategorieItem])
+def lister_categories():
+    """
+    Toutes les catégories, pour le popup de sélection sur la page
+    d'accueil et les formulaires de création/modification d'agent.
+    Public, aucune auth requise (même statut que /api/feed). `parent_id`
+    prépare l'arrivée des sous-catégories (Bourama, 2026-07-15) : NULL
+    pour toutes pour l'instant, aucune catégorie n'est encore un enfant
+    d'une autre.
+    """
+    try:
+        res = supabase.table("categories").select("id, nom, mots_cles, parent_id").execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture categories) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger les catégories pour le moment.")
+
+    return [CategorieItem(**ligne) for ligne in (res.data or [])]
