@@ -19,6 +19,7 @@ from api.profiles import router as profiles_router
 from api.search import router as search_router
 from api.uploads import router as uploads_router
 from api.historique import router as historique_router
+from api.notifications import router as notifications_router
 
 logging.basicConfig(level=logging.INFO)
 
@@ -59,6 +60,7 @@ app.include_router(profiles_router)
 app.include_router(search_router)
 app.include_router(uploads_router)
 app.include_router(historique_router)
+app.include_router(notifications_router)
 
 
 @app.get("/health")
