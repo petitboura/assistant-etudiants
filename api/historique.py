@@ -143,3 +143,110 @@ def obtenir_historique_agent(agent_id: str, utilisateur=Depends(utilisateur_cour
         raise HTTPException(status_code=500, detail="Impossible de charger l'historique.")
 
     return [MessageHistorique(**ligne) for ligne in lignes]
+
+
+# --- Fils de discussion (par conversation_id), ajouté le 2026-07-16 ------
+# Bourama : reproduire dans le chat Next.js la sidebar "Historique" du chat
+# Streamlit (faces/vues/chat.py), qui liste les fils de discussion
+# DISTINCTS avec un même agent (pas juste "un agent = une conversation",
+# comme le fait lister_conversations ci-dessus pour le tableau de bord).
+# Même logique de regroupement que _lister_conversations_passees côté
+# Streamlit : titre = début du premier message utilisateur du fil (pas de
+# titre généré par IA, décision de Bourama : trop coûteux pour ce que ça
+# apporte), lignes sans conversation_id (NULL, d'avant cette fonctionnalité)
+# regroupées sous un fil "legacy" plutôt qu'ignorées.
+LONGUEUR_MAX_TITRE = 42
+
+
+class FilConversation(BaseModel):
+    conversation_id: Optional[str]
+    titre: str
+    derniere_activite: str
+
+
+@router.get("/{agent_id}/conversations", response_model=List[FilConversation])
+def lister_fils_conversation(agent_id: str, utilisateur=Depends(utilisateur_courant)):
+    """
+    Liste des fils de discussion distincts entre CET utilisateur et CET
+    agent, le plus récemment actif en premier -- pour la section
+    "Historique" de la sidebar du chat (un agent peut avoir plusieurs
+    conversations séparées, contrairement à GET /api/historique qui n'en
+    garde qu'une par agent pour le tableau de bord).
+    """
+    try:
+        lignes = (
+            supabase.table("historique_conversations")
+            .select("conversation_id, role, content, created_at")
+            .eq("user_id", utilisateur.id)
+            .eq("agent_id", agent_id)
+            .order("created_at")
+            .execute()
+        ).data or []
+    except Exception as e:
+        logging.error(
+            f"ERREUR SUPABASE (lister_fils_conversation, user_id={utilisateur.id}, "
+            f"agent_id={agent_id}) : {e}"
+        )
+        raise HTTPException(status_code=500, detail="Impossible de charger l'historique.")
+
+    fils: dict = {}
+    for ligne in lignes:
+        cle = ligne["conversation_id"] or "legacy"
+        if cle not in fils:
+            fils[cle] = {
+                "conversation_id": ligne["conversation_id"],
+                "premier_message_user": None,
+                "derniere_activite": ligne["created_at"],
+            }
+        if ligne["role"] == "user" and fils[cle]["premier_message_user"] is None:
+            fils[cle]["premier_message_user"] = ligne["content"]
+        fils[cle]["derniere_activite"] = ligne["created_at"]
+
+    resultat = []
+    for cle, fil in fils.items():
+        if cle == "legacy":
+            titre = "Avant l'historique par conversation"
+        else:
+            titre = (fil["premier_message_user"] or "Conversation sans titre").strip()
+            if len(titre) > LONGUEUR_MAX_TITRE:
+                titre = titre[:LONGUEUR_MAX_TITRE].rstrip() + "…"
+        resultat.append(
+            FilConversation(
+                conversation_id=fil["conversation_id"],
+                titre=titre,
+                derniere_activite=fil["derniere_activite"],
+            )
+        )
+
+    resultat.sort(key=lambda f: f.derniere_activite, reverse=True)
+    return resultat
+
+
+@router.get("/{agent_id}/conversations/{conversation_id}", response_model=List[MessageHistorique])
+def obtenir_fil_conversation(agent_id: str, conversation_id: str, utilisateur=Depends(utilisateur_courant)):
+    """
+    Contenu complet d'UN fil précis (clic sur une entrée de la liste
+    ci-dessus). `conversation_id` vaut littéralement "legacy" pour recharger
+    le fil des lignes d'avant cette fonctionnalité (conversation_id NULL en
+    base) -- convention interne à cette route, jamais stockée telle quelle.
+    """
+    try:
+        requete = (
+            supabase.table("historique_conversations")
+            .select("role, content, created_at")
+            .eq("user_id", utilisateur.id)
+            .eq("agent_id", agent_id)
+        )
+        if conversation_id == "legacy":
+            requete = requete.is_("conversation_id", "null")
+        else:
+            requete = requete.eq("conversation_id", conversation_id)
+        lignes = requete.order("created_at").execute().data or []
+    except Exception as e:
+        logging.error(
+            f"ERREUR SUPABASE (obtenir_fil_conversation, user_id={utilisateur.id}, "
+            f"agent_id={agent_id}, conversation_id={conversation_id}) : {e}"
+        )
+        raise HTTPException(status_code=500, detail="Impossible de charger cette conversation.")
+
+    return [MessageHistorique(**ligne) for ligne in lignes]

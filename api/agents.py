@@ -268,6 +268,14 @@ class AgentDetailPublic(BaseModel):
     id: str
     nom: str
     icone_page: str = "🤖"
+    # Ajoutés le 2026-07-16 (Bourama : reproduire visuellement l'accueil du
+    # chat Streamlit -- faces/vues/chat.py:_rendre_titre_accueil -- dans le
+    # chat Next.js, qui n'affichait jusqu'ici qu'un placeholder générique
+    # "Pose ta question à {nomAgent}..." au lieu du titre/sous-titre propres
+    # à chaque agent). Mêmes clés ui_config et mêmes valeurs de repli que
+    # UI_CONFIG_PAR_DEFAUT côté Streamlit, pour un rendu identique.
+    titre_accueil: str = "🎓 Votre coatch mathématique"
+    sous_titre_accueil: str = "Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout."
     image_vitrine_url: Optional[str] = None
     description: str = ""
     owner_id: str
@@ -312,10 +320,13 @@ def obtenir_agent_public(agent_id: str):
     if ligne.get("actif") is False:
         raise HTTPException(status_code=404, detail="Agent introuvable.")
 
+    _ui_config = ligne.get("ui_config") or {}
     return AgentDetailPublic(
         id=ligne["id"],
         nom=ligne["nom"],
-        icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
+        icone_page=_ui_config.get("icone_page", "🤖"),
+        titre_accueil=_ui_config.get("titre_accueil") or AgentDetailPublic.model_fields["titre_accueil"].default,
+        sous_titre_accueil=_ui_config.get("sous_titre_accueil") or AgentDetailPublic.model_fields["sous_titre_accueil"].default,
         image_vitrine_url=ligne.get("image_vitrine_url"),
         description=ligne.get("description") or "",
         owner_id=ligne["owner_id"],
@@ -387,10 +398,13 @@ def mettre_a_jour_vitrine(
         )
 
     ligne.update(mise_a_jour)
+    _ui_config = ligne.get("ui_config") or {}
     return AgentDetailPublic(
         id=ligne["id"],
         nom=ligne["nom"],
-        icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
+        icone_page=_ui_config.get("icone_page", "🤖"),
+        titre_accueil=_ui_config.get("titre_accueil") or AgentDetailPublic.model_fields["titre_accueil"].default,
+        sous_titre_accueil=_ui_config.get("sous_titre_accueil") or AgentDetailPublic.model_fields["sous_titre_accueil"].default,
         image_vitrine_url=ligne.get("image_vitrine_url"),
         description=ligne.get("description") or "",
         owner_id=ligne["owner_id"],
