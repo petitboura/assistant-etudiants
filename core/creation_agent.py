@@ -30,10 +30,21 @@ def extraire_id_notion(lien_ou_id):
     format UUID standard attendu par indexers/index_notion.py (déjà
     multi-agent, lit agents.notion_page_id pour chaque agent).
     Retourne None si rien d'exploitable n'est trouvé (champ optionnel).
+
+    2026-07-17 (bug remonté par Bourama, "le lien Notion ne fonctionne
+    pas") : tout lien copié via le bouton "Copier le lien" de Notion se
+    termine par une query string (ex: "?pvs=4"), dont les chiffres sont
+    eux-mêmes des caractères hexadécimaux valides. Sans les retirer
+    D'ABORD, ils se retrouvaient collés après le véritable ID et
+    décalaient la fenêtre des "32 derniers caractères hexadécimaux" --
+    l'ID extrait et stocké en base était corrompu (décalé de 1-2
+    caractères) pour quasiment tout lien copié normalement depuis
+    Notion, d'où l'échec silencieux de l'appel à l'API Notion ensuite.
     """
     if not lien_ou_id or not lien_ou_id.strip():
         return None
-    hex_seul = re.sub(r"[^a-f0-9]", "", lien_ou_id.strip().lower())
+    lien_sans_requete = lien_ou_id.strip().split("?")[0]
+    hex_seul = re.sub(r"[^a-f0-9]", "", lien_sans_requete.lower())
     if len(hex_seul) < 32:
         return None
     brut = hex_seul[-32:]
