@@ -16,7 +16,6 @@
 [phases.setup]
 nixPkgs = [
   "ffmpeg",
-  "...",
   "pango",
   "cairo",
   "gdk-pixbuf",
