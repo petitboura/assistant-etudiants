@@ -43,9 +43,17 @@ class Localisation(BaseModel):
     longitude: float
 
 
+class RepriseConfirmation(BaseModel):
+    etat_reprise: dict
+    approuve: bool
+
+
 class EnvoyerMessagePayload(BaseModel):
-    message: str
-    agent_id: str
+    # message/agent_id optionnels : sur un appel de reprise (après
+    # confirmation_requise), seul `reprise` est fourni -- chat_generateur
+    # les ignore dans ce cas (voir core/main.py:chat()).
+    message: Optional[str] = None
+    agent_id: Optional[str] = None
     historique: List[MessageHistorique] = []
     conversation_id: Optional[str] = None
     # Barre de saisie migrée (MIGRATION_CHAT_VERS_NEXTJS.md, section 3.3) :
@@ -68,6 +76,11 @@ class EnvoyerMessagePayload(BaseModel):
     # api/uploads.py:uploader_video_chat). Combinable avec image_url mais
     # rarement les deux en même temps en pratique.
     images_base64: Optional[List[str]] = None
+    # Ajouté (2026-07-20) pour exposer le chemin de reprise de chat() --
+    # jusqu'ici accessible seulement en appel Python interne (chat.py
+    # Streamlit), jamais via cette route HTTP. Voir StatutOutil.tsx /
+    # ChatIA.tsx côté djiguign--ai pour le flux de confirmation d'outil.
+    reprise: Optional[RepriseConfirmation] = None
 
 
 def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
@@ -80,18 +93,27 @@ def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
     docstring) -- on les sérialise tels quels, un JSON par ligne `data:`.
     """
     try:
-        for evenement in chat_generateur(
-            message_utilisateur=payload.message,
-            historique=[m.model_dump() for m in payload.historique],
-            user_id=user_id,
-            agent_id=payload.agent_id,
-            conversation_id=payload.conversation_id,
-            longueur_reponse=payload.longueur_reponse,
-            image_url=payload.image_url,
-            localisation=payload.localisation.model_dump() if payload.localisation else None,
-            fuseau_horaire=payload.fuseau_horaire,
-            images_base64=payload.images_base64,
-        ):
+        if payload.reprise is not None:
+            generateur = chat_generateur(
+                reprise={
+                    "etat_reprise": payload.reprise.etat_reprise,
+                    "approuve": payload.reprise.approuve,
+                }
+            )
+        else:
+            generateur = chat_generateur(
+                message_utilisateur=payload.message,
+                historique=[m.model_dump() for m in payload.historique],
+                user_id=user_id,
+                agent_id=payload.agent_id,
+                conversation_id=payload.conversation_id,
+                longueur_reponse=payload.longueur_reponse,
+                image_url=payload.image_url,
+                localisation=payload.localisation.model_dump() if payload.localisation else None,
+                fuseau_horaire=payload.fuseau_horaire,
+                images_base64=payload.images_base64,
+            )
+        for evenement in generateur:
             yield f"data: {json.dumps(evenement)}\n\n"
     except Exception as e:
         logging.error(f"ERREUR chat() en streaming (agent_id={payload.agent_id}) : {e}")
