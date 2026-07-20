@@ -31,15 +31,22 @@ l'app mais pas encore a CET outil POUR CET AGENT) -> pas de bloc if/else
 a ecrire ici.
 """
 
+import os
+
 from connexions.notion import obtenir_token_valide
 
 def _url_generation(get_secret, user_id, agent_id):
     # Serveur MCP interne, pas un tiers externe (voir
-    # core/serveur_mcp_generation.py, monté dans api/main.py). BACKEND_URL
-    # est déjà nécessaire ailleurs dans le projet (URLs absolues) ; à
-    # défaut on retombe sur localhost pour le dev local.
-    base = get_secret("BACKEND_URL") or "http://localhost:8000"
-    return f"{base.rstrip('/')}/mcp/generation"
+    # core/serveur_mcp_generation.py, monté dans api/main.py). C'est
+    # TOUJOURS le même process/port que celui qui répond à cette
+    # requête (localhost, jamais un vrai domaine externe), donc pas
+    # besoin de BACKEND_URL ici : on lit directement $PORT, la variable
+    # que Railway fournit et qu'uvicorn utilise pour écouter. Coder
+    # "8000" en dur ici serait faux dès que Railway attribue un autre
+    # port -- c'est exactement le bug qui a empêché l'outil de
+    # fonctionner au premier test (2026-07-20).
+    port = os.environ.get("PORT", "8000")
+    return f"http://localhost:{port}/mcp/generation"
 
 
 def _url_tavily(get_secret, user_id, agent_id):
