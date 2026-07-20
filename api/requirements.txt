@@ -3,6 +3,10 @@ uvicorn[standard]
 python-multipart
 supabase
 PyPDF2
+python-docx
+openpyxl
+trafilatura
+youtube-transcript-api
 google-genai
 groq
 mcp

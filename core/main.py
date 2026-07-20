@@ -1,7 +1,12 @@
 import os
 import json
 import logging
+import base64
+import re
 import concurrent.futures
+import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from groq import Groq
 from google import genai
 from google.genai import types
@@ -84,6 +89,111 @@ NOMS_OUTILS_LISIBLES = {
 }
 
 
+def _construire_parts_gemini(texte, images=None):
+    """
+    Construit la liste `parts` d'un message Gemini. Le texte est toujours
+    présent ; `images` (si fourni) est une liste de tuples
+    (bytes, mime_type), ajoutés en inline_data base64 -- format REST
+    attendu par google-genai pour du contenu multimodal, voir
+    https://ai.google.dev/gemini-api/docs/vision. Une image (cas simple)
+    ou plusieurs (frames vidéo, voir _extraire_frames_video) sont traitées
+    de la même façon.
+    """
+    parts = [{"text": texte}]
+    for image_bytes, image_mime in (images or []):
+        parts.append({
+            "inline_data": {
+                "mime_type": image_mime or "image/jpeg",
+                "data": base64.b64encode(image_bytes).decode("utf-8"),
+            }
+        })
+    return parts
+
+
+def _telecharger_image(image_url):
+    """
+    Télécharge l'image pointée par `image_url` (URL publique Supabase
+    Storage, voir api/uploads.py:uploader_image_chat) pour l'envoyer en
+    base64 à Gemini. On ne passe jamais l'URL telle quelle à Gemini : les
+    URLs Supabase ne sont pas des URI Google Cloud Storage, `Part.from_uri`
+    ne les accepterait pas.
+    """
+    reponse = requests.get(image_url, timeout=15)
+    reponse.raise_for_status()
+    return reponse.content, reponse.headers.get("content-type", "image/jpeg")
+
+
+REGEX_URL = re.compile(r"https?://[^\s<>\"']+")
+LONGUEUR_MAX_TEXTE_URL = 8_000  # caracteres, par lien, pour ne pas saturer le prompt
+
+
+def _extraire_id_youtube(url):
+    match = re.search(r"(?:youtu\.be/|youtube\.com/watch\?v=|youtube\.com/shorts/)([\w-]{11})", url)
+    return match.group(1) if match else None
+
+
+def _lire_url(url):
+    """
+    Récupère le contenu textuel d'un lien collé dans le message. Deux cas :
+    - YouTube (vidéo) : transcript via youtube-transcript-api, pas de
+      scraping HTML -- c'est notre seule "entrée vidéo" pour l'instant,
+      limitée aux vidéos YouTube sous-titrées (voir note plus bas, pas de
+      vrai traitement vidéo/image par frame).
+    - Page web générique : extraction via trafilatura (garde le texte
+      utile, jette nav/pubs/footer).
+    Retourne None si l'extraction échoue (lien mort, page protégée, vidéo
+    sans sous-titres...) -- on ne bloque jamais le message pour ça, on
+    l'envoie tel quel au modèle.
+    """
+    id_youtube = _extraire_id_youtube(url)
+    if id_youtube:
+        try:
+            from youtube_transcript_api import YouTubeTranscriptApi
+            transcript = YouTubeTranscriptApi.get_transcript(id_youtube, languages=["fr", "en"])
+            texte = " ".join(morceau["text"] for morceau in transcript)
+            return texte[:LONGUEUR_MAX_TEXTE_URL]
+        except Exception as e:
+            logging.error(f"ERREUR TRANSCRIPT YOUTUBE ({url}): {e}")
+            return None
+
+    try:
+        import trafilatura
+        telechargement = trafilatura.fetch_url(url, timeout=10)
+        if not telechargement:
+            return None
+        texte = trafilatura.extract(telechargement)
+        return texte[:LONGUEUR_MAX_TEXTE_URL] if texte else None
+    except Exception as e:
+        logging.error(f"ERREUR LECTURE URL ({url}): {e}")
+        return None
+
+
+def _enrichir_message_avec_urls(message):
+    """
+    Détecte les liens collés dans le message utilisateur, récupère leur
+    contenu, et l'ajoute en contexte APRÈS le message original (jamais à la
+    place) -- le modèle voit toujours la question telle que posée, plus le
+    contenu des liens en pièce jointe textuelle. Le message ORIGINAL (sans
+    enrichissement) reste ce qui est sauvegardé dans l'historique -- voir
+    l'appel à _sauvegarder_echange dans chat(), qui reçoit toujours
+    message_utilisateur brut, jamais message_pour_modele.
+    """
+    urls = REGEX_URL.findall(message)
+    if not urls:
+        return message
+
+    blocs = []
+    for url in urls[:3]:  # au plus 3 liens par message, pour le temps de réponse
+        contenu = _lire_url(url)
+        if contenu:
+            blocs.append(f"[Contenu de {url}]\n{contenu}")
+
+    if not blocs:
+        return message
+
+    return message + "\n\n" + "\n\n".join(blocs)
+
+
 def _nom_lisible(nom_outil):
     return NOMS_OUTILS_LISIBLES.get(nom_outil, nom_outil)
 
@@ -136,7 +246,7 @@ INSTRUCTIONS_LONGUEUR_REPONSE = {
 }
 
 
-def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne"):
+def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None):
     system_prompt = get_system_prompt(agent_id)
     candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
     resume_memoire = _charger_resume_memoire(user_id)
@@ -156,6 +266,31 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
         system_final += f"\n\n{contexte_docs}"
     system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
     system_final += REGLE_CONTEXTE_INVISIBLE
+
+    # Contexte système "date/heure actuelle" (2026-07-20) : sans ça, le
+    # modèle ne sait pas qu'on est en 2026 et peut situer les événements
+    # récents n'importe où par rapport à sa coupure d'entraînement.
+    #
+    # Fuseau horaire (corrigé 2026-07-20) : PAS figé sur Tunis -- Djiguignè
+    # est un projet panafricain (voir Maame), rien ne dit que l'étudiant
+    # est à Tunis. `fuseau_horaire` vient du navigateur
+    # (Intl.DateTimeFormat().resolvedOptions().timeZone, voir
+    # ChatIA.tsx:envoyerMessage), pas d'une valeur choisie côté serveur.
+    # Repli sur UTC si absent ou si le navigateur envoie un nom de fuseau
+    # invalide (ZoneInfo lève ZoneInfoNotFoundError) -- jamais une supposition
+    # de pays.
+    try:
+        fuseau = ZoneInfo(fuseau_horaire) if fuseau_horaire else ZoneInfo("UTC")
+    except Exception:
+        fuseau = ZoneInfo("UTC")
+    maintenant = datetime.now(fuseau)
+    jours_fr = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+    mois_fr = [
+        "janvier", "février", "mars", "avril", "mai", "juin",
+        "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+    ]
+    date_fr = f"{jours_fr[maintenant.weekday()]} {maintenant.day} {mois_fr[maintenant.month - 1]} {maintenant.year}, {maintenant.strftime('%H:%M')}"
+    system_final += f"\n\nNous sommes le {date_fr} (fuseau : {fuseau.key if hasattr(fuseau, 'key') else 'UTC'})."
 
     logging.info(
         f"Prompt système construit -> base_notion:{len(system_prompt)} caractères, "
@@ -522,7 +657,7 @@ def _capturer_reponse(generateur, accumulateur):
         yield event
 
 
-def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne"):
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
@@ -575,6 +710,40 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     reprise (etat_reprise ne transporte ni agent_id, ni user_id, ni le message
     utilisateur d'origine, ni conversation_id). A etendre si besoin en les
     ajoutant a etat_reprise dans _evenement_confirmation.
+
+    `image_url` (optionnel, 2026-07-20) : URL publique d'une image jointe au
+    message (voir api/uploads.py:uploader_image_chat). Si presente, on ne
+    passe PAS par le cascade Groq habituel (aucun des modeles Groq de
+    GROQ_PRIMARY/GROQ_FALLBACKS n'est multimodal) : on route directement et
+    uniquement vers Gemini, seul modele vision de la cascade. Consequence
+    connue : pas d'outils MCP (Notion, Wolfram, recherche web) sur un
+    message avec image, comme pour le fallback Gemini texte plus bas. Si
+    Gemini echoue sur ce chemin, on renvoie MESSAGE_ERREUR direct (pas de
+    retry cascade complet comme pour le texte : un seul modele disponible).
+
+    `localisation` (optionnel, 2026-07-20) : dict {"latitude":..., "longitude":...}
+    transmis explicitement par l'etudiant (bouton dedie, jamais automatique).
+    Injecte en fin de prompt systeme, jamais traite comme un fait dit par
+    l'etudiant. N'affecte ni le cascade ni le choix de modele.
+
+    `fuseau_horaire` (optionnel, 2026-07-20) : nom de fuseau IANA lu depuis
+    le navigateur (Intl.DateTimeFormat().resolvedOptions().timeZone, voir
+    ChatIA.tsx:envoyerMessage). PAS de fuseau fixe côté serveur -- Djiguignè
+    est panafricain, aucune hypothèse de pays. Repli sur UTC si absent ou
+    invalide.
+
+    `images_base64` (optionnel, 2026-07-20) : liste de frames JPEG en
+    base64, extraites d'une vidéo uploadée (voir
+    api/uploads.py:uploader_video_chat et core/video.py:_extraire_frames_video).
+    Combinable avec image_url (rare en pratique) -- toutes les images sont
+    envoyées à Gemini dans le MÊME message. Le son de la vidéo n'est PAS
+    envoyé ici : il est transcrit à part (Whisper) et injecté comme texte
+    dans message_utilisateur par le frontend, avant l'appel à chat().
+
+    Liens colles dans message_utilisateur (page web ou video YouTube) :
+    recuperes automatiquement (_enrichir_message_avec_urls) et ajoutes en
+    contexte APRES le message original avant envoi au modele. Le message
+    BRUT (sans ce contenu) reste ce qui est sauvegarde dans l'historique.
 
     Si TOUS les maillons de la cascade (Groq principal, Gemini, fallbacks
     Groq) echouent uniquement a cause d'un timeout, on retente une seconde
@@ -630,11 +799,86 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     if agent_id is None:
         agent_id = get_secret("AGENT_ID") or AGENT_ID_PAR_DEFAUT
 
-    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse)
+    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire)
+
+    if localisation and localisation.get("latitude") is not None and localisation.get("longitude") is not None:
+        # Contexte "système/environnement" (2026-07-20) : position GPS
+        # transmise explicitement par l'étudiant (bouton dédié côté
+        # frontend, jamais automatique/silencieux -- voir BarreDeSaisie.tsx
+        # et la permission navigateur navigator.geolocation). Ajoutée en
+        # fin de prompt système, jamais comme un fait affirmé par
+        # l'étudiant lui-même.
+        system_final += (
+            "\n\nContexte de localisation (fourni par le navigateur de "
+            "l'étudiant, à utiliser seulement si pertinent pour la "
+            f"question) : latitude {localisation['latitude']}, "
+            f"longitude {localisation['longitude']}."
+        )
+
+    # Liens collés dans le message (page web ou vidéo YouTube) : récupérés
+    # ICI, sur le message pour le modèle uniquement -- message_utilisateur
+    # (brut, sans le contenu des liens) reste ce qui est sauvegardé dans
+    # l'historique via _sauvegarder_echange plus bas.
+    message_pour_modele = _enrichir_message_avec_urls(message_utilisateur)
 
     messages_base = [{"role": "system", "content": system_final}]
     messages_base += historique
-    messages_base.append({"role": "user", "content": message_utilisateur})
+    messages_base.append({"role": "user", "content": message_pour_modele})
+
+    if image_url or images_base64:
+        # Chemin dédié image(s) : voir docstring ci-dessus. Pas de cascade
+        # multi-modeles ici, Gemini est le seul maillon capable de traiter
+        # de la vision -- s'il echoue, il n'y a pas de second recours
+        # multimodal. `images_base64` (2026-07-20) : frames extraites d'une
+        # vidéo par _extraire_frames_video, voir la branche vidéo dédiée
+        # dans api/uploads.py:uploader_video_chat -- même mécanique que
+        # l'image simple, juste plusieurs inline_data au lieu d'un seul.
+        images = []
+        if image_url:
+            try:
+                images.append(_telecharger_image(image_url))
+            except Exception as e:
+                logging.error(f"ERREUR TELECHARGEMENT IMAGE ({image_url}): {e}")
+                yield {"type": "reponse", "texte": "Désolé, je n'ai pas pu récupérer l'image envoyée. Réessaie."}
+                return
+        if images_base64:
+            for image_b64 in images_base64:
+                images.append((base64.b64decode(image_b64), "image/jpeg"))
+
+        gemini_messages = [
+            {"role": "user" if m["role"] != "assistant" else "model", "parts": [{"text": m["content"]}]}
+            for m in messages_base[:-1] if m["role"] != "system"
+        ]
+        gemini_messages.append({
+            "role": "user",
+            "parts": _construire_parts_gemini(message_pour_modele, images),
+        })
+
+        reponse_accumulee = []
+        try:
+            client_google = genai.Client(api_key=get_secret("GOOGLE_API_KEY"))
+            response = client_google.models.generate_content_stream(
+                model=GOOGLE_MODEL,
+                contents=gemini_messages,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_final,
+                    max_output_tokens=1024
+                )
+            )
+            for chunk in response:
+                if chunk.text:
+                    reponse_accumulee.append(chunk.text)
+                    yield {"type": "reponse", "texte": chunk.text}
+            logging.info("Réponse via GEMINI (image)")
+            ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+            if ids_historique:
+                yield {"type": "meta", **ids_historique}
+            _mettre_a_jour_resume_si_besoin(user_id)
+        except Exception as e:
+            logging.error(f"ERREUR GEMINI (image): {e}")
+            if not reponse_accumulee:
+                yield {"type": "reponse", "texte": MESSAGE_ERREUR}
+        return
 
     client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
     outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id, agent_id)

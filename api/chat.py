@@ -38,6 +38,11 @@ class MessageHistorique(BaseModel):
     content: str
 
 
+class Localisation(BaseModel):
+    latitude: float
+    longitude: float
+
+
 class EnvoyerMessagePayload(BaseModel):
     message: str
     agent_id: str
@@ -46,6 +51,23 @@ class EnvoyerMessagePayload(BaseModel):
     # Barre de saisie migrée (MIGRATION_CHAT_VERS_NEXTJS.md, section 3.3) :
     # sélecteur Courte/Moyenne/Longue, modifiable à chaque message.
     longueur_reponse: Literal["courte", "moyenne", "longue"] = "moyenne"
+    # Image jointe au message (URL publique renvoyée par
+    # POST /api/uploads/image-chat, voir uploads.py). Quand présente,
+    # core/main.py:chat() route directement vers Gemini (seul modèle
+    # multimodal de la cascade) au lieu du cascade Groq habituel — voir
+    # le commentaire au-dessus de la branche image_url dans chat().
+    image_url: Optional[str] = None
+    # Position GPS transmise explicitement par l'étudiant via un bouton
+    # dédié (jamais capturée automatiquement) -- voir core/main.py:chat(),
+    # paramètre localisation, injecté en contexte de prompt système.
+    localisation: Optional[Localisation] = None
+    # Fuseau IANA du navigateur (Intl.DateTimeFormat().resolvedOptions().timeZone),
+    # PAS une valeur choisie côté serveur -- voir core/main.py:chat().
+    fuseau_horaire: Optional[str] = None
+    # Frames JPEG en base64, extraites d'une vidéo uploadée (voir
+    # api/uploads.py:uploader_video_chat). Combinable avec image_url mais
+    # rarement les deux en même temps en pratique.
+    images_base64: Optional[List[str]] = None
 
 
 def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
@@ -65,6 +87,10 @@ def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
             agent_id=payload.agent_id,
             conversation_id=payload.conversation_id,
             longueur_reponse=payload.longueur_reponse,
+            image_url=payload.image_url,
+            localisation=payload.localisation.model_dump() if payload.localisation else None,
+            fuseau_horaire=payload.fuseau_horaire,
+            images_base64=payload.images_base64,
         ):
             yield f"data: {json.dumps(evenement)}\n\n"
     except Exception as e:

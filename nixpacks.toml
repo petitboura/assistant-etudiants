@@ -1,0 +1,10 @@
+# Ajouté le 2026-07-20 : sans ce fichier, Railway/Nixpacks détecte ce repo
+# comme un projet Python standard et n'installe PAS ffmpeg/ffprobe. Le
+# nouvel endpoint /api/uploads/video-chat (extraction audio + frames d'une
+# vidéo, voir api/uploads.py) en dépend directement via subprocess -- sans
+# ce paquet système, il échoue en prod avec FileNotFoundError au premier
+# appel, alors que tout fonctionne normalement en local si ffmpeg est déjà
+# installé sur la machine du développeur (d'où le risque de ne jamais le
+# remarquer avant un déploiement réel).
+[phases.setup]
+nixPkgs = ["ffmpeg"]
