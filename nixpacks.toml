@@ -19,6 +19,8 @@ nixPkgs = [
   "pango",
   "cairo",
   "gdk-pixbuf",
+  "glib",
+  "gobject-introspection",
   "libffi",
   "fontconfig",
   "harfbuzz",
