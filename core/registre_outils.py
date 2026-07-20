@@ -33,6 +33,15 @@ a ecrire ici.
 
 from connexions.notion import obtenir_token_valide
 
+def _url_generation(get_secret, user_id, agent_id):
+    # Serveur MCP interne, pas un tiers externe (voir
+    # core/serveur_mcp_generation.py, monté dans api/main.py). BACKEND_URL
+    # est déjà nécessaire ailleurs dans le projet (URLs absolues) ; à
+    # défaut on retombe sur localhost pour le dev local.
+    base = get_secret("BACKEND_URL") or "http://localhost:8000"
+    return f"{base.rstrip('/')}/mcp/generation"
+
+
 def _url_tavily(get_secret, user_id, agent_id):
     return f"https://mcp.tavily.com/mcp/?tavilyApiKey={get_secret('TAVILY_API_KEY')}"
 
@@ -61,6 +70,13 @@ def _headers_notion(get_secret, user_id, agent_id):
 
 SERVEURS_MCP = [
     {"nom": "wolfram", "url_builder": _url_wolfram},
+    {
+        "nom": "generation",
+        "url_builder": _url_generation,
+        # Pas de "outils_autorises" : les 3 (ou 2, tant que
+        # TOGETHER_API_KEY est absente -- voir serveur_mcp_generation.py)
+        # outils exposés sont tous surs, aucun n'est dans OUTILS_SENSIBLES.
+    },
     {
         "nom": "notion",
         "url_builder": _url_notion,
