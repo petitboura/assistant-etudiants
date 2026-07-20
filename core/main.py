@@ -246,6 +246,42 @@ INSTRUCTIONS_LONGUEUR_REPONSE = {
 }
 
 
+# Ajouté 2026-07-20 après un test réel de Bourama : demander "montre-moi
+# une image d'un ordinateur portable" ou "une carte de Tunis" faisait
+# INVENTER un lien markdown ![](url) vers une fausse source ("Wikimedia
+# Commons", "OpenStreetMap") -- URL cassée, citation fabriquée, aucun
+# outil réel derrière. Deux causes distinctes, une seule règle :
+#   1. La génération d'image réelle (Together AI/Flux, voir
+#      core/generation_images.py) existe mais TOGETHER_API_KEY n'est pas
+#      encore configurée -> l'outil n'est pas dans outils_mcp, donc
+#      injoignable. Pas de solution ici tant que la clé n'est pas ajoutée.
+#   2. Carte/graphique/widget interactif N'ONT JAMAIS eu d'outil dédié --
+#      le frontend (djiguign--ai) sait déjà rendre ces trois blocs
+#      nativement (voir CarteMessage.tsx, GraphiqueDonnees.tsx,
+#      WidgetSandbox.tsx), il manquait juste la convention ici.
+INSTRUCTIONS_FORMATS_AFFICHAGE = (
+    "\n\nFORMATS ENRICHIS DISPONIBLES : l'interface sait afficher nativement les "
+    "blocs suivants (à utiliser quand ils apportent une vraie valeur, jamais pour "
+    "décorer) :\n"
+    "- ```mermaid ... ``` pour un diagramme (flowchart, séquence, état...).\n"
+    "- ```chart avec un JSON {\"type\": \"line\"|\"bar\"|\"pie\", \"data\": [...], "
+    "\"titre\"?: \"...\"} pour un graphique. \"data\" est un tableau d'objets plats ; "
+    "la première clé sert d'axe X (ou de nom pour \"pie\"), les suivantes sont les "
+    "séries.\n"
+    "- ```carte avec un JSON {\"lat\": ..., \"lng\": ..., \"label\"?: \"...\"} pour "
+    "localiser un lieu (tu connais les coordonnées des lieux courants).\n"
+    "- ```widget ou ```html avec du HTML/CSS/JS complet et autonome pour un mini-outil "
+    "interactif (calculateur, formulaire, mini-jeu).\n"
+    "RÈGLE ABSOLUE, sans exception : n'utilise JAMAIS ![alt](url) (image markdown) "
+    "avec une URL que tu inventes ou que tu crois plausible sans l'avoir obtenue "
+    "d'un outil réel dans cette conversation. N'invente jamais non plus une "
+    "attribution de source (\"Source : Wikimedia Commons\", \"via OpenStreetMap\"...) "
+    "pour un contenu que tu n'as pas réellement obtenu. Si on te demande une image et "
+    "qu'aucun outil de génération d'image n'est disponible dans cette conversation, "
+    "dis-le clairement plutôt que d'inventer un lien."
+)
+
+
 def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None):
     system_prompt = get_system_prompt(agent_id)
     candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
@@ -265,6 +301,7 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     if contexte_docs:
         system_final += f"\n\n{contexte_docs}"
     system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
+    system_final += INSTRUCTIONS_FORMATS_AFFICHAGE
     system_final += REGLE_CONTEXTE_INVISIBLE
 
     # Contexte système "date/heure actuelle" (2026-07-20) : sans ça, le
