@@ -6,6 +6,7 @@ Lancement local : uvicorn api.main:app --reload --port 8000
 """
 
 import logging
+from contextlib import asynccontextmanager
 from typing import List, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, Query
@@ -24,10 +25,31 @@ from api.agent_updates import router as agent_updates_router
 from api.posts import router as posts_router
 from api.chat import router as chat_router
 from api.feedback import router as feedback_router
+from api.generation import router as generation_router
+from core.serveur_mcp_generation import mcp_generation
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="Djiguigne API", version="0.1.0")
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # Requis par FastMCP (stateless_http=True) : le session_manager du
+    # serveur MCP de génération (voir core/serveur_mcp_generation.py) a
+    # besoin de tourner pendant toute la durée de vie du process, sinon
+    # streamable_http_app() renvoie une erreur "Task group is not
+    # initialized" au premier appel d'outil.
+    async with mcp_generation.session_manager.run():
+        yield
+
+
+app = FastAPI(title="Djiguigne API", version="0.1.0", lifespan=_lifespan)
+
+# Serveur MCP interne (documents/code/images), monté en sous-application
+# ASGI : voir core/serveur_mcp_generation.py pour le detail des outils, et
+# registre_outils.py pour son enregistrement côté agent (nom "generation").
+# streamable_http_path="/" (configuré dans le serveur lui-même) fait que
+# le point d'entree final est bien /mcp/generation, sans /mcp en trop.
+app.mount("/mcp/generation", mcp_generation.streamable_http_app())
 
 # Domaines autorisés à appeler cette API. "http://localhost:3000" est le
 # port par defaut de `npm run dev` en Next.js, a garder tant que le
@@ -69,6 +91,7 @@ app.include_router(agent_updates_router)
 app.include_router(posts_router)
 app.include_router(chat_router)
 app.include_router(feedback_router)
+app.include_router(generation_router)
 
 
 @app.get("/health")

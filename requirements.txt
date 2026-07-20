@@ -8,3 +8,4 @@ notion-client
 mcp
 PyPDF2
 markdown
+weasyprint
