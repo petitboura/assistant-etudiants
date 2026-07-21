@@ -148,9 +148,23 @@ def _lire_url(url):
     id_youtube = _extraire_id_youtube(url)
     if id_youtube:
         try:
+            # BUG corrigé le 2026-07-20 : même famille de bug que
+            # trafilatura.fetch_url(timeout=...) -- youtube-transcript-api
+            # 1.x a totalement changé son API par rapport à l'ancienne
+            # version que j'avais en tête. `YouTubeTranscriptApi.get_transcript`
+            # (méthode statique, résultat = liste de dicts) n'existe plus :
+            # il faut instancier la classe et appeler `.fetch()` (méthode
+            # d'instance), qui renvoie un objet FetchedTranscript itérable
+            # de FetchedTranscriptSnippet (dataclasses avec un attribut
+            # `.text`, pas une clé de dict `["text"]`). Confirmé cassé en
+            # test réel le 2026-07-20 (lien YouTube collé, aucun contenu
+            # récupéré, le modèle répondait qu'il ne pouvait pas voir de
+            # vidéos -- comme pour trafilatura, l'exception était avalée
+            # silencieusement par le except plus bas).
             from youtube_transcript_api import YouTubeTranscriptApi
-            transcript = YouTubeTranscriptApi.get_transcript(id_youtube, languages=["fr", "en"])
-            texte = " ".join(morceau["text"] for morceau in transcript)
+            api = YouTubeTranscriptApi()
+            transcript = api.fetch(id_youtube, languages=["fr", "en"])
+            texte = " ".join(morceau.text for morceau in transcript)
             return texte[:LONGUEUR_MAX_TEXTE_URL]
         except Exception as e:
             logging.error(f"ERREUR TRANSCRIPT YOUTUBE ({url}): {e}")
