@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from api.auth import utilisateur_courant
 from core.generation_documents import generer_pdf_depuis_markdown
 from core.generation_code import generer_zip_depuis_fichiers
+from core.generation_donnees import exporter_donnees
 from core.generation_images import generer_image, image_generation_disponible
 
 router = APIRouter(prefix="/api/generation", tags=["generation"])
@@ -31,6 +32,12 @@ class DemandeCode(BaseModel):
 
 class DemandeImage(BaseModel):
     prompt: str
+
+
+class DemandeDonnees(BaseModel):
+    nom: str
+    donnees: dict
+    format: str = "json"
 
 
 class ReponseGeneration(BaseModel):
@@ -54,6 +61,18 @@ def generer_code_route(demande: DemandeCode, utilisateur=Depends(utilisateur_cou
     except Exception as e:
         logging.error(f"ERREUR génération code (utilisateur {utilisateur.id}) : {e}")
         raise HTTPException(status_code=500, detail="Échec de la génération de l'archive, réessaie.")
+    return ReponseGeneration(url=url)
+
+
+@router.post("/donnees", response_model=ReponseGeneration)
+def exporter_donnees_route(demande: DemandeDonnees, utilisateur=Depends(utilisateur_courant)):
+    try:
+        url = exporter_donnees(demande.nom, demande.donnees, demande.format)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"ERREUR export données (utilisateur {utilisateur.id}) : {e}")
+        raise HTTPException(status_code=500, detail="Échec de l'export, réessaie.")
     return ReponseGeneration(url=url)
 
 

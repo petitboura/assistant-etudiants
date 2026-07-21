@@ -23,6 +23,7 @@ from mcp.server.fastmcp import FastMCP
 
 from core.generation_documents import generer_pdf_depuis_markdown
 from core.generation_code import generer_zip_depuis_fichiers
+from core.generation_donnees import exporter_donnees as _exporter_donnees
 from core.generation_images import generer_image as _generer_image, image_generation_disponible
 
 mcp_generation = FastMCP(
@@ -57,6 +58,19 @@ def generer_code(nom_projet: str, fichiers: dict) -> str:
         return generer_zip_depuis_fichiers(nom_projet, fichiers)
     except Exception:
         return "Erreur : la génération de l'archive a échoué, réessaie."
+
+
+@mcp_generation.tool()
+def exporter_donnees(nom: str, donnees: dict, format: str = "json") -> str:
+    """
+    Exporte des données structurées (un dictionnaire, potentiellement
+    imbriqué) vers un fichier JSON ou XML téléchargeable. `format` doit
+    valoir "json" ou "xml". Renvoie l'URL publique du fichier généré.
+    """
+    try:
+        return _exporter_donnees(nom, donnees, format)
+    except Exception:
+        return "Erreur : l'export des données a échoué, réessaie."
 
 
 # Enregistré conditionnellement (pas de decorateur @mcp_generation.tool()
