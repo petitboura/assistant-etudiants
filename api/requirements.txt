@@ -11,3 +11,5 @@ google-genai
 groq
 mcp
 httpx
+weasyprint
+markdown
