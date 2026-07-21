@@ -26,6 +26,11 @@ from core.generation_video import (
     statut_video,
     video_disponible,
 )
+from core.generation_3d import (
+    lancer_generation_3d,
+    statut_modele_3d,
+    modele_3d_disponible,
+)
 from core.generation_images import generer_image, image_generation_disponible
 
 router = APIRouter(prefix="/api/generation", tags=["generation"])
@@ -64,6 +69,10 @@ class DemandeAudio(BaseModel):
 class DemandeVideo(BaseModel):
     prompt: str
     duree_secondes: int = 5
+
+
+class Demande3D(BaseModel):
+    prompt: str
 
 
 class DemandeSignature(BaseModel):
@@ -136,6 +145,31 @@ def statut_signature_route(signature_request_id: str, utilisateur=Depends(utilis
         return statut_signature(signature_request_id)
     except Exception as e:
         logging.error(f"ERREUR statut signature (utilisateur {utilisateur.id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de récupérer le statut.")
+
+
+@router.post("/3d")
+def lancer_3d_route(demande: Demande3D, utilisateur=Depends(utilisateur_courant)):
+    if not modele_3d_disponible():
+        raise HTTPException(
+            status_code=503,
+            detail="La génération 3D n'est pas encore activée sur cette plateforme.",
+        )
+    try:
+        return lancer_generation_3d(demande.prompt)
+    except Exception as e:
+        logging.error(f"ERREUR lancement 3D (utilisateur {utilisateur.id}) : {e}")
+        raise HTTPException(status_code=500, detail="Échec du lancement de la génération 3D.")
+
+
+@router.get("/3d/{request_id}")
+def statut_3d_route(request_id: str, utilisateur=Depends(utilisateur_courant)):
+    if not modele_3d_disponible():
+        raise HTTPException(status_code=503, detail="La génération 3D n'est pas encore activée.")
+    try:
+        return statut_modele_3d(request_id)
+    except Exception as e:
+        logging.error(f"ERREUR statut 3D (utilisateur {utilisateur.id}) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de récupérer le statut.")
 
 
