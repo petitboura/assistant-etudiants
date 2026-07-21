@@ -30,6 +30,11 @@ from core.generation_signature import (
     signature_disponible,
 )
 from core.generation_audio import generer_audio as _generer_audio, audio_disponible
+from core.generation_video import (
+    lancer_generation_video as _lancer_generation_video,
+    statut_video as _statut_video,
+    video_disponible,
+)
 from core.generation_images import generer_image as _generer_image, image_generation_disponible
 
 mcp_generation = FastMCP(
@@ -77,6 +82,47 @@ def exporter_donnees(nom: str, donnees: dict, format: str = "json") -> str:
         return _exporter_donnees(nom, donnees, format)
     except Exception:
         return "Erreur : l'export des données a échoué, réessaie."
+
+
+# Enregistré conditionnellement, gate par FAL_KEY (voir
+# generation_video.py). IMPORTANT : la génération vidéo prend 1-3
+# minutes, donc en 2 outils separes (lancer + consulter), jamais un
+# seul outil bloquant -- l'agent doit dire a l'etudiant de revenir
+# verifier un peu plus tard, pas rester bloque a attendre.
+if video_disponible():
+    @mcp_generation.tool()
+    def lancer_generation_video(prompt: str, duree_secondes: int = 5) -> str:
+        """
+        Lance une génération vidéo à partir d'une description
+        textuelle. NE renvoie PAS la vidéo (elle prend 1 à 3 minutes à
+        générer) : renvoie un identifiant à donner à
+        consulter_statut_video un peu plus tard. Préviens l'étudiant
+        que ça prend du temps et qu'il doit redemander le statut dans
+        quelques minutes.
+        """
+        try:
+            resultat = _lancer_generation_video(prompt, duree_secondes)
+            return (
+                f"Génération lancée (id: {resultat['request_id']}). "
+                f"Ça prend 1 à 3 minutes -- redemande le statut avec cet identifiant un peu plus tard."
+            )
+        except Exception:
+            return "Erreur : le lancement de la génération vidéo a échoué, réessaie."
+
+    @mcp_generation.tool()
+    def consulter_statut_video(request_id: str) -> str:
+        """
+        Consulte l'état d'une génération vidéo lancée avec
+        lancer_generation_video. Si terminée, renvoie l'URL publique de
+        la vidéo. Sinon, indique qu'elle est toujours en cours.
+        """
+        try:
+            resultat = _statut_video(request_id)
+            if resultat["statut"] == "COMPLETED":
+                return f"Vidéo prête : {resultat['url']}"
+            return f"Toujours en cours (statut : {resultat['statut']}), redemande dans une minute."
+        except Exception:
+            return "Erreur : impossible de récupérer le statut, vérifie l'identifiant."
 
 
 # Enregistré conditionnellement, gate par interrupteur dédié (voir

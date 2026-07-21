@@ -67,6 +67,19 @@ GROQ_API_KEY est déjà là pour le chat. Coût indicatif : ~22$/million de
 caractères (modèle Orpheus, statut "Preview" chez Groq au 20/07/2026),
 à comparer aux ~0,003$/image pour Together AI.
 
+## 7. Vidéo (le plus cher de loin -- à activer en dernier)
+
+Ajoute `FAL_KEY` (compte fal.ai, modèle Wan 2.6) dans les variables
+d'environnement Railway. ~0,05-0,07$/seconde, soit ~15-25x le coût
+d'une image ou d'un message audio pour un contenu comparable -- à
+activer seulement quand le budget le permet vraiment, pas en même
+temps que les autres.
+
+Particularité : contrairement à toutes les autres fonctionnalités, la
+génération prend 1 à 3 minutes. Le flux est donc en 2 outils separes
+(`lancer_generation_video` puis `consulter_statut_video`), jamais un
+seul outil qui bloquerait l'agent en pleine conversation.
+
 ## Ce qui reste à faire ensuite (pas fait dans cette passe)
 
 - Frontend : `lib/api.ts` (fonctions d'appel des 3 routes
