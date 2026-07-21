@@ -20,6 +20,7 @@ from core.generation_signature import (
     statut_signature,
     signature_disponible,
 )
+from core.generation_audio import generer_audio, audio_disponible
 from core.generation_images import generer_image, image_generation_disponible
 
 router = APIRouter(prefix="/api/generation", tags=["generation"])
@@ -48,6 +49,11 @@ class DemandeDonnees(BaseModel):
 class Signataire(BaseModel):
     nom: str
     email: str
+
+
+class DemandeAudio(BaseModel):
+    texte: str
+    voix: str = "austin"
 
 
 class DemandeSignature(BaseModel):
@@ -121,6 +127,21 @@ def statut_signature_route(signature_request_id: str, utilisateur=Depends(utilis
     except Exception as e:
         logging.error(f"ERREUR statut signature (utilisateur {utilisateur.id}) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de récupérer le statut.")
+
+
+@router.post("/audio", response_model=ReponseGeneration)
+def generer_audio_route(demande: DemandeAudio, utilisateur=Depends(utilisateur_courant)):
+    if not audio_disponible():
+        raise HTTPException(
+            status_code=503,
+            detail="La génération audio n'est pas encore activée sur cette plateforme.",
+        )
+    try:
+        url = generer_audio(demande.texte, demande.voix)
+    except Exception as e:
+        logging.error(f"ERREUR génération audio (utilisateur {utilisateur.id}) : {e}")
+        raise HTTPException(status_code=500, detail="Échec de la génération audio, réessaie.")
+    return ReponseGeneration(url=url)
 
 
 @router.post("/image", response_model=ReponseGeneration)

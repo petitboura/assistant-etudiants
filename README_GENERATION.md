@@ -50,6 +50,23 @@ maintenant :
 Même détection automatique que pour Together AI (`signature_disponible()`
 dans core/generation_signature.py).
 
+## 6. Audio / synthèse vocale (via Groq, clé déjà présente -- interrupteur séparé)
+
+Contrairement aux autres fonctionnalités, `GROQ_API_KEY` existe déjà
+dans ce projet (utilisée pour le chat). Le gate n'est donc PAS la
+présence de la clé, mais un interrupteur dédié à ajouter dans les
+variables d'environnement Railway :
+
+```
+AUDIO_TTS_ACTIF=true
+```
+
+Tant que cette variable n'existe pas (ou vaut autre chose que "true"),
+`audio_disponible()` (core/generation_audio.py) renvoie False, même si
+GROQ_API_KEY est déjà là pour le chat. Coût indicatif : ~22$/million de
+caractères (modèle Orpheus, statut "Preview" chez Groq au 20/07/2026),
+à comparer aux ~0,003$/image pour Together AI.
+
 ## Ce qui reste à faire ensuite (pas fait dans cette passe)
 
 - Frontend : `lib/api.ts` (fonctions d'appel des 3 routes

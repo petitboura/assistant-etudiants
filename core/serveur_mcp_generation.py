@@ -29,6 +29,7 @@ from core.generation_signature import (
     statut_signature as _statut_signature,
     signature_disponible,
 )
+from core.generation_audio import generer_audio as _generer_audio, audio_disponible
 from core.generation_images import generer_image as _generer_image, image_generation_disponible
 
 mcp_generation = FastMCP(
@@ -76,6 +77,25 @@ def exporter_donnees(nom: str, donnees: dict, format: str = "json") -> str:
         return _exporter_donnees(nom, donnees, format)
     except Exception:
         return "Erreur : l'export des données a échoué, réessaie."
+
+
+# Enregistré conditionnellement, gate par interrupteur dédié (voir
+# generation_audio.py : GROQ_API_KEY existe déjà pour le chat, donc ne
+# peut pas servir de gate ici -- il faut qu'AUDIO_TTS_ACTIF="true" soit
+# mis explicitement par Bourama).
+if audio_disponible():
+    @mcp_generation.tool()
+    def generer_audio(texte: str, voix: str = "austin") -> str:
+        """
+        Convertit du texte en audio parlé (voix naturelle). Le texte
+        peut inclure des indications vocales entre crochets, ex.
+        "[cheerful] Bienvenue !". Renvoie l'URL publique du fichier
+        audio généré.
+        """
+        try:
+            return _generer_audio(texte, voix)
+        except Exception:
+            return "Erreur : la génération audio a échoué, réessaie."
 
 
 # Enregistré conditionnellement, même logique que generer_image ci-dessous :
