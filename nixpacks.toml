@@ -1,10 +1,20 @@
 # Ajouté le 2026-07-20 : sans ce fichier, Railway/Nixpacks détecte ce repo
-# comme un projet Python standard et n'installe PAS ffmpeg/ffprobe. Le
-# nouvel endpoint /api/uploads/video-chat (extraction audio + frames d'une
-# vidéo, voir api/uploads.py) en dépend directement via subprocess -- sans
-# ce paquet système, il échoue en prod avec FileNotFoundError au premier
-# appel, alors que tout fonctionne normalement en local si ffmpeg est déjà
-# installé sur la machine du développeur (d'où le risque de ne jamais le
-# remarquer avant un déploiement réel).
+# comme un projet Python standard et n'installe PAS les paquets système
+# suivants. Deux besoins distincts, dans le même fichier (Railway ne lit
+# qu'un seul nixpacks.toml par repo) :
+#
+# - ffmpeg : /api/uploads/video-chat (extraction audio + frames d'une
+#   vidéo, voir api/uploads.py) en dépend via subprocess.
+#
+# - pango/cairo/gdk-pixbuf/glib/harfbuzz/fontconfig/freetype : WeasyPrint
+#   (core/generation_documents.py) en a besoin pour générer des PDF --
+#   sans eux, `from weasyprint import HTML` plante au chargement avec
+#   "cannot load library 'libgobject-2.0-0'" (erreur vue en prod le
+#   2026-07-20). glib fournit libgobject ; les autres sont les
+#   dépendances de rendu de texte/image de WeasyPrint lui-même.
+#
+# Dans les deux cas : tout fonctionne normalement en local si ces libs
+# sont déjà installées sur la machine du développeur (ce qui masque le
+# problème jusqu'au déploiement réel).
 [phases.setup]
-nixPkgs = ["ffmpeg"]
+nixPkgs = ["ffmpeg", "pango", "cairo", "gdk-pixbuf", "glib", "harfbuzz", "fontconfig", "freetype"]
