@@ -24,6 +24,11 @@ from mcp.server.fastmcp import FastMCP
 from core.generation_documents import generer_pdf_depuis_markdown
 from core.generation_code import generer_zip_depuis_fichiers
 from core.generation_donnees import exporter_donnees as _exporter_donnees
+from core.generation_signature import (
+    envoyer_pour_signature as _envoyer_pour_signature,
+    statut_signature as _statut_signature,
+    signature_disponible,
+)
 from core.generation_images import generer_image as _generer_image, image_generation_disponible
 
 mcp_generation = FastMCP(
@@ -71,6 +76,40 @@ def exporter_donnees(nom: str, donnees: dict, format: str = "json") -> str:
         return _exporter_donnees(nom, donnees, format)
     except Exception:
         return "Erreur : l'export des données a échoué, réessaie."
+
+
+# Enregistré conditionnellement, même logique que generer_image ci-dessous :
+# LUMIN_API_KEY absente -> l'agent ne voit tout simplement pas ces outils.
+if signature_disponible():
+    @mcp_generation.tool()
+    def envoyer_pour_signature(titre: str, contenu_markdown: str, signataires: list) -> str:
+        """
+        Génère un document PDF à partir d'un contenu markdown et
+        l'envoie pour signature électronique (via Lumin) à un ou
+        plusieurs signataires. `signataires` : liste de
+        {"nom": ..., "email": ...}. Chaque signataire reçoit un email
+        avec un lien pour signer. Renvoie l'identifiant de la demande
+        de signature et son statut.
+        """
+        try:
+            resultat = _envoyer_pour_signature(titre, contenu_markdown, signataires)
+            return (
+                f"Demande de signature envoyée (id: {resultat['signature_request_id']}, "
+                f"statut: {resultat['statut']}). Document : {resultat['url_document']}"
+            )
+        except Exception:
+            return "Erreur : l'envoi pour signature a échoué, réessaie."
+
+    @mcp_generation.tool()
+    def consulter_statut_signature(signature_request_id: str) -> str:
+        """
+        Consulte l'état d'une demande de signature déjà envoyée
+        (en attente, signé, expiré...).
+        """
+        try:
+            return str(_statut_signature(signature_request_id))
+        except Exception:
+            return "Erreur : impossible de récupérer le statut, vérifie l'identifiant."
 
 
 # Enregistré conditionnellement (pas de decorateur @mcp_generation.tool()

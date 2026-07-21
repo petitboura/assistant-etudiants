@@ -29,7 +29,7 @@ cairo, GDK-Pixbuf), pas seulement du package Python. Sur Railway
 (`pip install weasyprint --break-system-packages` puis un essai simple)
 avant de déployer, pour isoler l'erreur si ça casse.
 
-## 4. Quand tu as les sous : génération d'images
+## 4. Génération d'images (payant, en attente de budget)
 
 Ajoute simplement `TOGETHER_API_KEY` dans les variables d'environnement
 Railway. Rien d'autre à changer : `image_generation_disponible()`
@@ -38,6 +38,17 @@ démarrage du process, et l'outil `generer_image` apparaît alors tout
 seul dans la liste proposée à l'agent, plus le bouton frontend cesse de
 renvoyer "pas encore disponible" (une fois le frontend branché --
 prochaine étape, pas encore fait).
+
+## 5. Signature électronique (gratuit jusqu'à 5/mois, aucune urgence budget)
+
+Contrairement à Together AI, Lumin (developers.luminpdf.com) est
+gratuit jusqu'à 5 signatures/mois, donc rien n'empêche de l'activer dès
+maintenant :
+1. Connecte-toi sur Lumin -> Settings -> Developer settings -> API keys
+   -> Generate key
+2. Ajoute `LUMIN_API_KEY` dans les variables d'environnement Railway
+Même détection automatique que pour Together AI (`signature_disponible()`
+dans core/generation_signature.py).
 
 ## Ce qui reste à faire ensuite (pas fait dans cette passe)
 
