@@ -15,6 +15,11 @@ from api.auth import utilisateur_courant
 from core.generation_documents import generer_pdf_depuis_markdown
 from core.generation_code import generer_zip_depuis_fichiers
 from core.generation_donnees import exporter_donnees
+from core.generation_signature import (
+    envoyer_pour_signature,
+    statut_signature,
+    signature_disponible,
+)
 from core.generation_images import generer_image, image_generation_disponible
 
 router = APIRouter(prefix="/api/generation", tags=["generation"])
@@ -38,6 +43,18 @@ class DemandeDonnees(BaseModel):
     nom: str
     donnees: dict
     format: str = "json"
+
+
+class Signataire(BaseModel):
+    nom: str
+    email: str
+
+
+class DemandeSignature(BaseModel):
+    titre: str
+    contenu_markdown: str
+    signataires: list[Signataire]
+    jours_expiration: int = 14
 
 
 class ReponseGeneration(BaseModel):
@@ -74,6 +91,36 @@ def exporter_donnees_route(demande: DemandeDonnees, utilisateur=Depends(utilisat
         logging.error(f"ERREUR export données (utilisateur {utilisateur.id}) : {e}")
         raise HTTPException(status_code=500, detail="Échec de l'export, réessaie.")
     return ReponseGeneration(url=url)
+
+
+@router.post("/signature")
+def envoyer_pour_signature_route(demande: DemandeSignature, utilisateur=Depends(utilisateur_courant)):
+    if not signature_disponible():
+        raise HTTPException(
+            status_code=503,
+            detail="La signature électronique n'est pas encore activée sur cette plateforme.",
+        )
+    try:
+        return envoyer_pour_signature(
+            demande.titre,
+            demande.contenu_markdown,
+            [s.model_dump() for s in demande.signataires],
+            demande.jours_expiration,
+        )
+    except Exception as e:
+        logging.error(f"ERREUR envoi signature (utilisateur {utilisateur.id}) : {e}")
+        raise HTTPException(status_code=500, detail="Échec de l'envoi pour signature, réessaie.")
+
+
+@router.get("/signature/{signature_request_id}")
+def statut_signature_route(signature_request_id: str, utilisateur=Depends(utilisateur_courant)):
+    if not signature_disponible():
+        raise HTTPException(status_code=503, detail="La signature électronique n'est pas encore activée.")
+    try:
+        return statut_signature(signature_request_id)
+    except Exception as e:
+        logging.error(f"ERREUR statut signature (utilisateur {utilisateur.id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de récupérer le statut.")
 
 
 @router.post("/image", response_model=ReponseGeneration)
