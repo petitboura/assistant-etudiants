@@ -158,7 +158,14 @@ def _lire_url(url):
 
     try:
         import trafilatura
-        telechargement = trafilatura.fetch_url(url, timeout=10)
+        # BUG corrigé le 2026-07-20 : trafilatura 2.1.0 n'a pas de paramètre
+        # `timeout` sur fetch_url() (TypeError à CHAQUE appel, silencieux
+        # car avalé par le except plus bas -- résultat : cette fonction ne
+        # récupérait jamais aucun lien depuis le déploiement initial,
+        # confirmé en testant en conditions réelles contre Wikipedia et
+        # ia-info.fr, qui échouaient identiquement). Le timeout par défaut
+        # de trafilatura reste raisonnable, pas besoin de le personnaliser.
+        telechargement = trafilatura.fetch_url(url)
         if not telechargement:
             return None
         texte = trafilatura.extract(telechargement)
