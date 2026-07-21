@@ -236,6 +236,41 @@ async def uploader_document_chat(
 
 TAILLE_MAX_AUDIO_OCTETS = 20 * 1024 * 1024  # 20 Mo (limite Groq Whisper)
 
+# Whisper hallucine des phrases précises quand l'audio reçu est silencieux
+# ou quasi-vide, au lieu de renvoyer un texte vide -- artefact documenté de
+# la communauté (hérité de ses données d'entraînement : sous-titres de
+# vidéos, génériques de fin...). Confirmé le 2026-07-20 : "Sous-titrage
+# Société Radio-Canada" est ressorti de façon répétée en dictée réelle.
+# Sans ce filtre, ce texte halluciné serait envoyé tel quel comme si
+# l'étudiant l'avait vraiment dit -- on le traite plutôt comme une
+# transcription vide (même message d'erreur que "rien entendu").
+PHRASES_HALLUCINEES_WHISPER = {
+    "sous-titrage société radio-canada",
+    "sous-titrage societe radio-canada",
+    "sous-titres réalisés par la communauté d'amara.org",
+    "sous-titres realises par la communaute d'amara.org",
+    "merci d'avoir regardé cette vidéo",
+    "merci d'avoir regardé la vidéo",
+    "abonnez-vous à la chaîne",
+    "www.tvsubtitles.net",
+    "merci.",
+    "sous-titres",
+}
+
+
+def _transcription_vraisemblable(texte):
+    """
+    True si le texte transcrit semble être une vraie parole captée, False
+    s'il correspond à une hallucination Whisper connue sur audio silencieux
+    (voir PHRASES_HALLUCINEES_WHISPER ci-dessus). Comparaison insensible à
+    la casse/ponctuation de fin, pas de correspondance floue -- un faux
+    négatif (vraie phrase qui ressemble à une hallucination) est jugé moins
+    grave qu'un faux positif (hallucination envoyée comme si l'étudiant
+    l'avait dite).
+    """
+    nettoye = texte.strip().lower().rstrip(".")
+    return nettoye not in PHRASES_HALLUCINEES_WHISPER
+
 
 @router.post("/audio-chat")
 async def uploader_audio_chat(
@@ -267,7 +302,7 @@ async def uploader_audio_chat(
         raise HTTPException(status_code=500, detail="Échec de la transcription, réessaie.")
 
     texte = (transcription.text or "").strip()
-    if not texte:
+    if not texte or not _transcription_vraisemblable(texte):
         raise HTTPException(status_code=400, detail="Rien n'a été compris, réessaie plus près du micro.")
 
     return {"texte": texte}
@@ -409,6 +444,12 @@ async def uploader_video_chat(
                     language="fr",
                 )
                 transcript = (transcription.text or "").strip()
+                # Même filtre que uploader_audio_chat -- une vidéo sans son
+                # exploitable (muette, piste corrompue) ne doit pas non
+                # plus produire une hallucination Whisper faisant croire
+                # qu'il y a un vrai contenu audio.
+                if transcript and not _transcription_vraisemblable(transcript):
+                    transcript = ""
         except Exception as e:
             # Pas bloquant : une vidéo sans son exploitable (muette, piste
             # audio corrompue) continue avec les frames seules.
