@@ -35,6 +35,11 @@ from core.generation_video import (
     statut_video as _statut_video,
     video_disponible,
 )
+from core.generation_3d import (
+    lancer_generation_3d as _lancer_generation_3d,
+    statut_modele_3d as _statut_modele_3d,
+    modele_3d_disponible,
+)
 from core.generation_images import generer_image as _generer_image, image_generation_disponible
 
 mcp_generation = FastMCP(
@@ -82,6 +87,43 @@ def exporter_donnees(nom: str, donnees: dict, format: str = "json") -> str:
         return _exporter_donnees(nom, donnees, format)
     except Exception:
         return "Erreur : l'export des données a échoué, réessaie."
+
+
+# Enregistré conditionnellement, gate par FAL_KEY (MEME cle que la
+# video, voir generation_3d.py). Meme flux en 2 outils que la video,
+# pour la meme raison (generation pas instantanee).
+if modele_3d_disponible():
+    @mcp_generation.tool()
+    def lancer_generation_3d(prompt: str) -> str:
+        """
+        Lance une génération de modèle 3D (.glb) à partir d'une
+        description textuelle. NE renvoie PAS le modèle immédiatement :
+        renvoie un identifiant à donner à consulter_statut_3d un peu
+        plus tard. Préviens l'étudiant que ça prend un peu de temps.
+        """
+        try:
+            resultat = _lancer_generation_3d(prompt)
+            return (
+                f"Génération 3D lancée (id: {resultat['request_id']}). "
+                f"Redemande le statut avec cet identifiant dans une minute ou deux."
+            )
+        except Exception:
+            return "Erreur : le lancement de la génération 3D a échoué, réessaie."
+
+    @mcp_generation.tool()
+    def consulter_statut_3d(request_id: str) -> str:
+        """
+        Consulte l'état d'une génération 3D lancée avec
+        lancer_generation_3d. Si terminée, renvoie l'URL publique du
+        fichier .glb.
+        """
+        try:
+            resultat = _statut_modele_3d(request_id)
+            if resultat["statut"] == "COMPLETED":
+                return f"Modèle 3D prêt : {resultat['url']}"
+            return f"Toujours en cours (statut : {resultat['statut']}), redemande un peu plus tard."
+        except Exception:
+            return "Erreur : impossible de récupérer le statut, vérifie l'identifiant."
 
 
 # Enregistré conditionnellement, gate par FAL_KEY (voir

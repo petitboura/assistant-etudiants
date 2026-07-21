@@ -80,6 +80,20 @@ génération prend 1 à 3 minutes. Le flux est donc en 2 outils separes
 (`lancer_generation_video` puis `consulter_statut_video`), jamais un
 seul outil qui bloquerait l'agent en pleine conversation.
 
+## 8. Modèles 3D
+
+Réutilise `FAL_KEY` (même clé que la vidéo, section 7) : si l'une est
+activée, l'autre l'est aussi automatiquement. ~0,225$/génération
+(Hunyuan3D, endpoint "Rapid"), bien plus raisonnable que la vidéo.
+Même flux en 2 temps (lancer/consulter) que la vidéo, pour la même
+raison (pas instantané).
+
+**Point à vérifier au premier vrai test** : le nom exact du champ
+contenant l'URL du fichier `.glb` dans la réponse de fal.ai n'a pas pu
+être confirmé à 100% par la documentation publique -- `generation_3d.py`
+essaie plusieurs noms probables, et si aucun ne correspond, l'erreur
+affichera la réponse brute pour ajuster en 1 ligne.
+
 ## Ce qui reste à faire ensuite (pas fait dans cette passe)
 
 - Frontend : `lib/api.ts` (fonctions d'appel des 3 routes
