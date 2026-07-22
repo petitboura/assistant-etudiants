@@ -49,6 +49,13 @@ def _url_generation(get_secret, user_id, agent_id):
     return f"http://localhost:{port}/mcp/generation"
 
 
+def _url_github(get_secret, user_id, agent_id):
+    # Même logique que _url_generation ci-dessus -- serveur MCP interne
+    # (core/serveur_mcp_github.py), pas un tiers externe.
+    port = os.environ.get("PORT", "8000")
+    return f"http://localhost:{port}/mcp/github"
+
+
 def _url_tavily(get_secret, user_id, agent_id):
     return f"https://mcp.tavily.com/mcp/?tavilyApiKey={get_secret('TAVILY_API_KEY')}"
 
@@ -85,6 +92,15 @@ SERVEURS_MCP = [
         # outils exposés sont tous surs, aucun n'est dans OUTILS_SENSIBLES.
     },
     {
+        "nom": "github",
+        "url_builder": _url_github,
+        # explorer_depot_github et lire_fichier_depot_github sont sans
+        # risque (lecture seule). modifier_fichier_depot_github ÉCRIT
+        # réellement sur un dépôt -> dans OUTILS_SENSIBLES plus bas,
+        # donc TOUJOURS interrompu pour confirmation avant exécution,
+        # quel que soit le mode (direct ou branche+PR).
+    },
+    {
         "nom": "notion",
         "url_builder": _url_notion,
         "headers_builder": _headers_notion,
@@ -119,4 +135,10 @@ OUTILS_SENSIBLES = {
     "notion-create-view",
     "notion-update-view",
     "notion-create-attachment",
+    # ÉCRIT réellement sur un dépôt GitHub (voir
+    # core/serveur_mcp_github.py, modifier_fichier_depot_github) --
+    # TOUJOURS interrompu pour confirmation, que ce soit en mode "direct"
+    # (commit sur la branche de base) ou "branche_pr" (nouvelle branche +
+    # Pull Request). Aucun des deux modes n'est silencieux.
+    "modifier_fichier_depot_github",
 }

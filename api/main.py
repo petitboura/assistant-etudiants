@@ -53,6 +53,11 @@ app = FastAPI(title="Djiguigne API", version="0.1.0", lifespan=_lifespan)
 # le point d'entree final est bien /mcp/generation, sans /mcp en trop.
 app.mount("/mcp/generation", mcp_generation.streamable_http_app())
 
+# Serveur MCP interne (exploration/lecture/écriture GitHub) : voir
+# core/serveur_mcp_github.py, monté de la même façon que "generation"
+# ci-dessus. registre_outils.py l'enregistre sous le nom "github".
+app.mount("/mcp/github", mcp_github.streamable_http_app())
+
 # Domaines autorisés à appeler cette API. "http://localhost:3000" est le
 # port par defaut de `npm run dev` en Next.js, a garder tant que le
 # frontend n'est pas deploye. A completer avec le vrai domaine une fois

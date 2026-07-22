@@ -714,6 +714,16 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
         "Passe TOUJOURS ces deux valeurs exactement telles quelles à chercher_fichier, "
         "ne les invente jamais."
     )
+    system_final += (
+        "\n\nEXPLORATION GITHUB : tu as accès à explorer_depot_github (arborescence "
+        "complète d'un dépôt), lire_fichier_depot_github (contenu d'un fichier précis), "
+        "et modifier_fichier_depot_github (ÉCRIT un changement -- ne l'appelle QUE si "
+        "la personne demande explicitement une modification, jamais de ta propre "
+        "initiative). Ces trois outils prennent un paramètre user_id : passe "
+        f"TOUJOURS {f'\"{user_id}\"' if user_id else 'une chaîne vide (personne non connectée)'} "
+        "exactement tel quel, ne l'invente jamais. Les dépôts privés ne sont "
+        "accessibles que si cette personne a connecté son propre compte GitHub."
+    )
 
     # Contexte système "date/heure actuelle" (2026-07-20) : sans ça, le
     # modèle ne sait pas qu'on est en 2026 et peut situer les événements
