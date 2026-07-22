@@ -18,10 +18,11 @@ import logging
 import tempfile
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, supabase, get_secret
+from api.journal import journaliser
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "indexers"))
@@ -109,7 +110,7 @@ class AgentCree(BaseModel):
 
 
 @router.post("", response_model=AgentCree, status_code=201)
-def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_courant)):
+def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depends(utilisateur_courant)):
     if not payload.nom.strip():
         raise HTTPException(status_code=422, detail="Le nom de l'agent est obligatoire.")
     if not payload.posture_generale.strip() and not payload.limites_globales.strip():
@@ -261,6 +262,15 @@ def creer_agent(payload: CreerAgentPayload, utilisateur=Depends(utilisateur_cour
     if not url_base:
         logging.error("URL_RETOUR_APP absent : impossible de construire le lien complet de l'agent.")
 
+    journaliser(
+        action="agent.cree",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"nom": payload.nom.strip(), "categorie_id": payload.categorie_id},
+        request=request,
+    )
+
     return AgentCree(id=agent_id, nom=payload.nom.strip(), lien=lien)
 
 
@@ -345,6 +355,7 @@ class MettreAJourVitrinePayload(BaseModel):
 def mettre_a_jour_vitrine(
     agent_id: str,
     payload: MettreAJourVitrinePayload,
+    request: Request,
     utilisateur=Depends(utilisateur_courant),
 ):
     """
@@ -398,6 +409,16 @@ def mettre_a_jour_vitrine(
         )
 
     ligne.update(mise_a_jour)
+
+    journaliser(
+        action="agent.vitrine.modifiee",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"champs_modifies": sorted(mise_a_jour.keys())},
+        request=request,
+    )
+
     _ui_config = ligne.get("ui_config") or {}
     return AgentDetailPublic(
         id=ligne["id"],
@@ -553,6 +574,7 @@ class ModifierAgentPayload(BaseModel):
 def modifier_agent(
     agent_id: str,
     payload: ModifierAgentPayload,
+    request: Request,
     utilisateur=Depends(utilisateur_courant),
 ):
     """
@@ -757,6 +779,19 @@ def modifier_agent(
             detail="Impossible de modifier l'agent (erreur technique). Réessaie dans un instant.",
         )
 
+    # Journalisé avec la LISTE des champs modifiés, pas leur contenu (le
+    # system_prompt notamment peut être long/sensible) : suffisant pour
+    # répondre à "qui a changé quoi sur cet agent, quand", sans dupliquer
+    # tout le contenu dans le journal d'audit.
+    journaliser(
+        action="agent.modifie",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"champs_modifies": sorted(mise_a_jour.keys())},
+        request=request,
+    )
+
     # Réindexation du texte libre : best-effort, même choix que la
     # création (indexer_texte remplace toujours les anciens chunks pour
     # ce nom_fichier, voir supprimer_chunks_existants — pas de doublons
@@ -789,6 +824,7 @@ def modifier_agent(
 @router.post("/{agent_id}/documents", status_code=201)
 async def uploader_document(
     agent_id: str,
+    request: Request,
     fichier: UploadFile = File(...),
     utilisateur=Depends(utilisateur_courant),
 ):
@@ -856,6 +892,15 @@ async def uploader_document(
         except OSError:
             pass
 
+    journaliser(
+        action="document.ajoute",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"nom_stockage": nom_stockage, "nom_original": nom_original},
+        request=request,
+    )
+
     return {"nom": nom_original, "statut": "indexé"}
 
 
@@ -906,7 +951,7 @@ def lister_documents(agent_id: str, utilisateur=Depends(utilisateur_courant)):
 
 
 @router.delete("/{agent_id}/documents/{nom_stockage}", status_code=204)
-def supprimer_document(agent_id: str, nom_stockage: str, utilisateur=Depends(utilisateur_courant)):
+def supprimer_document(agent_id: str, nom_stockage: str, request: Request, utilisateur=Depends(utilisateur_courant)):
     """
     Ajouté le 2026-07-12, même contexte. Vérifie que `nom_stockage`
     commence bien par `{agent_id}__` (pas juste que l'agent appartient à
@@ -944,6 +989,15 @@ def supprimer_document(agent_id: str, nom_stockage: str, utilisateur=Depends(uti
         logging.error(f"ERREUR suppression document {nom_stockage} (agent_id={agent_id}) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de supprimer ce document.")
 
+    journaliser(
+        action="document.supprime",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"nom_stockage": nom_stockage},
+        request=request,
+    )
+
 
 class NoterAgentPayload(BaseModel):
     # Classe manquante : provoquait un NameError au chargement du module,
@@ -955,7 +1009,7 @@ class NoterAgentPayload(BaseModel):
 
 
 @router.post("/{agent_id}/rating", status_code=204)
-def noter_agent(agent_id: str, payload: NoterAgentPayload, utilisateur=Depends(utilisateur_courant)):
+def noter_agent(agent_id: str, payload: NoterAgentPayload, request: Request, utilisateur=Depends(utilisateur_courant)):
     """
     Note un agent de 1 à 5 (table `agent_ratings`, voir PIVOT_SOCIAL.md :
     contrainte unique `(agent_id, user_id)` — un utilisateur note un agent
@@ -979,6 +1033,15 @@ def noter_agent(agent_id: str, payload: NoterAgentPayload, utilisateur=Depends(u
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (upsert note agent={agent_id}, user={utilisateur.id}) : {e}")
         raise HTTPException(status_code=500, detail="Impossible d'enregistrer la note pour le moment.")
+
+    journaliser(
+        action="agent.note",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"note": payload.note},
+        request=request,
+    )
 
 
 class NoteAgregee(BaseModel):
@@ -1180,14 +1243,14 @@ def supprimer_agent_completement(agent_id: str):
 
 
 @router.delete("/{agent_id}", status_code=204)
-def supprimer_agent(agent_id: str, utilisateur=Depends(utilisateur_courant)):
+def supprimer_agent(agent_id: str, request: Request, utilisateur=Depends(utilisateur_courant)):
     """
     "Supprimer un agent" dans la zone de danger de Mon espace (demande
     Bourama, 2026-07-15). Propriétaire uniquement -- même vérification que
     tous les autres endpoints d'écriture sur un agent.
     """
     try:
-        res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
+        res = supabase.table("agents").select("owner_id, nom").eq("id", agent_id).maybe_single().execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant suppression complète) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de supprimer cet agent pour le moment.")
@@ -1202,3 +1265,14 @@ def supprimer_agent(agent_id: str, utilisateur=Depends(utilisateur_courant)):
     except Exception as e:
         logging.error(f"ERREUR suppression complète agent={agent_id} : {e}")
         raise HTTPException(status_code=500, detail="Impossible de supprimer cet agent pour le moment.")
+
+    # Journalisé après coup (pas avant) : on ne veut pas d'entrée
+    # "agent.supprime" dans le journal si la suppression a en fait échoué.
+    journaliser(
+        action="agent.supprime",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"nom": res.data.get("nom")},
+        request=request,
+    )
