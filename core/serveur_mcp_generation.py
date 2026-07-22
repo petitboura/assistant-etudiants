@@ -11,12 +11,9 @@ touchés". Ce fichier-ci EST le nouveau serveur qu'on enregistre là-bas,
 au même titre que Wolfram/Tavily/Notion, sauf qu'il tourne chez nous au
 lieu d'être hébergé par un tiers.
 
-Génération d'image (generer_image) n'est exposée QUE si
-TOGETHER_API_KEY est configurée (voir generation_images.py,
-image_generation_disponible()) : tant que Bourama n'a pas les moyens de
-payer Together AI, l'agent ne voit tout simplement pas cet outil dans la
-liste -- pas de risque qu'il essaie de l'appeler et échoue en pleine
-conversation avec un étudiant.
+Génération d'image (generer_image) est TOUJOURS active maintenant
+(Pollinations en repli gratuit, Together AI en amélioration payante
+optionnelle -- voir generation_images.py, mis à jour le 21/07/2026).
 """
 
 from mcp.server.fastmcp import FastMCP
@@ -220,20 +217,19 @@ if signature_disponible():
             return "Erreur : impossible de récupérer le statut, vérifie l'identifiant."
 
 
-# Enregistré conditionnellement (pas de decorateur @mcp_generation.tool()
-# direct) : image_generation_disponible() est vérifiée à l'IMPORT de ce
-# module, une seule fois au démarrage du process, pas à chaque requête --
-# cohérent avec le fait qu'ajouter la clé Together AI nécessite de toute
-# façon un redéploiement Railway (donc un nouveau démarrage du process).
-if image_generation_disponible():
-    @mcp_generation.tool()
-    def generer_image(prompt: str) -> str:
-        """
-        Génère une image à partir d'une description textuelle (Flux
-        Schnell / Together AI). Renvoie l'URL publique de l'image
-        générée.
-        """
-        try:
-            return _generer_image(prompt)
-        except Exception:
-            return "Erreur : la génération de l'image a échoué, réessaie."
+# Toujours actif : Pollinations (gratuit, sans clé) par défaut, bascule
+# automatique vers Together AI (payant, meilleure qualité) si
+# TOGETHER_API_KEY est configurée -- voir generation_images.py. Plus de
+# condition ici, contrairement à la signature/audio/vidéo/3D qui, eux,
+# n'ont pas d'équivalent gratuit connu.
+@mcp_generation.tool()
+def generer_image(prompt: str) -> str:
+    """
+    Génère une image à partir d'une description textuelle. Renvoie
+    l'URL publique de l'image générée.
+    """
+    try:
+        return _generer_image(prompt)
+    except Exception:
+        return "Erreur : la génération de l'image a échoué, réessaie."
+

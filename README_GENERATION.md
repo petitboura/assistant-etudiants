@@ -29,15 +29,17 @@ cairo, GDK-Pixbuf), pas seulement du package Python. Sur Railway
 (`pip install weasyprint --break-system-packages` puis un essai simple)
 avant de déployer, pour isoler l'erreur si ça casse.
 
-## 4. Génération d'images (payant, en attente de budget)
+## 4. Génération d'images (ACTIF DÈS MAINTENANT, gratuit par défaut)
 
-Ajoute simplement `TOGETHER_API_KEY` dans les variables d'environnement
-Railway. Rien d'autre à changer : `image_generation_disponible()`
-(core/generation_images.py) la détecte automatiquement au prochain
-démarrage du process, et l'outil `generer_image` apparaît alors tout
-seul dans la liste proposée à l'agent, plus le bouton frontend cesse de
-renvoyer "pas encore disponible" (une fois le frontend branché --
-prochaine étape, pas encore fait).
+Depuis le 21/07/2026 : Pollinations.ai (gratuit, sans clé) est utilisé
+par défaut, donc `generer_image` fonctionne déjà, sans rien à
+configurer. Si tu ajoutes `TOGETHER_API_KEY` plus tard (~0,003$/image),
+le code bascule automatiquement vers Together AI (meilleure qualité/
+fiabilité), sans rien à changer dans le code.
+
+**Non testé en conditions réelles** (Pollinations n'était pas
+accessible depuis l'environnement de développement, restriction de
+bac à sable) : à vérifier au premier vrai test, comme d'habitude.
 
 ## 5. Signature électronique (gratuit jusqu'à 5/mois, aucune urgence budget)
 
