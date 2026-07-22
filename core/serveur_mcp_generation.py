@@ -23,6 +23,7 @@ from mcp.server.fastmcp import FastMCP
 
 from core.generation_documents import generer_pdf_depuis_markdown
 from core.generation_code import generer_zip_depuis_fichiers
+from core.generation_archives import generer_bundle as _generer_bundle
 from core.generation_donnees import exporter_donnees as _exporter_donnees
 from core.generation_signature import (
     envoyer_pour_signature as _envoyer_pour_signature,
@@ -41,6 +42,10 @@ from core.generation_3d import (
     modele_3d_disponible,
 )
 from core.generation_images import generer_image as _generer_image, image_generation_disponible
+from core.generation_site import (
+    deployer_site as _deployer_site,
+    site_deploiement_disponible,
+)
 
 mcp_generation = FastMCP(
     name="generation",
@@ -74,6 +79,41 @@ def generer_code(nom_projet: str, fichiers: dict) -> str:
         return generer_zip_depuis_fichiers(nom_projet, fichiers)
     except Exception:
         return "Erreur : la génération de l'archive a échoué, réessaie."
+
+
+@mcp_generation.tool()
+def generer_site_zip(nom_projet: str, fichiers: dict) -> str:
+    """
+    Génère une archive .zip téléchargeable d'un site web statique
+    (HTML/CSS/JS). `fichiers` est un dictionnaire {chemin: contenu}, ex.
+    {"index.html": "<html>...</html>", "style.css": "body {...}"}.
+    À utiliser quand l'utilisateur veut le code source pour l'héberger
+    lui-même ailleurs, plutôt qu'un lien en ligne (voir deployer_site
+    pour ce second cas). Renvoie l'URL publique du .zip.
+    """
+    try:
+        return generer_zip_depuis_fichiers(nom_projet, fichiers)
+    except Exception:
+        return "Erreur : la génération du site (zip) a échoué, réessaie."
+
+
+@mcp_generation.tool()
+def generer_bundle(nom_projet: str, elements: list) -> str:
+    """
+    Regroupe plusieurs fichiers hétérogènes (déjà générés ailleurs, ou
+    fournis en brut) en une seule archive .zip téléchargeable.
+    `elements` est une liste de dictionnaires, chacun avec "chemin" (le
+    nom du fichier dans le zip) et soit "url" (URL publique d'un fichier
+    déjà généré, ex. par generer_document ou generer_code), soit
+    "contenu" (texte fourni directement). Ex. :
+    [{"chemin": "rapport.pdf", "url": "https://..."},
+     {"chemin": "donnees.csv", "contenu": "a,b\\n1,2"}]
+    Renvoie l'URL publique du .zip.
+    """
+    try:
+        return _generer_bundle(nom_projet, elements)
+    except Exception:
+        return "Erreur : la génération du bundle a échoué, réessaie."
 
 
 @mcp_generation.tool()
@@ -237,3 +277,24 @@ if image_generation_disponible():
             return _generer_image(prompt)
         except Exception:
             return "Erreur : la génération de l'image a échoué, réessaie."
+
+
+# Enregistré conditionnellement, gate par VERCEL_API_TOKEN (voir
+# generation_site.py). generer_site_zip (juste au-dessus, non
+# conditionnel) reste toujours disponible pour le cas "code seul" :
+# seul ce second outil, le déploiement en ligne, dépend de la clé.
+if site_deploiement_disponible():
+    @mcp_generation.tool()
+    def deployer_site(nom_projet: str, fichiers: dict) -> str:
+        """
+        Déploie un site web statique (HTML/CSS/JS) en ligne sur Vercel
+        et renvoie l'URL publique directement utilisable. À utiliser
+        quand l'utilisateur veut un lien en ligne plutôt que le code
+        source (voir generer_site_zip pour ce second cas). `fichiers`
+        est un dictionnaire {chemin: contenu}, ex.
+        {"index.html": "<html>...</html>"}.
+        """
+        try:
+            return _deployer_site(nom_projet, fichiers)
+        except Exception:
+            return "Erreur : le déploiement du site a échoué, réessaie."
