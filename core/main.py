@@ -143,13 +143,158 @@ def _extraire_id_youtube(url):
     return match.group(1) if match else None
 
 
-def _lire_url(url):
+# Connecteur GitHub -- lien public collé dans le message par l'utilisateur
+# (ou dépôt privé si connecté via OAuth, voir connexions/oauth_generique.py).
+# Quatre formes de lien reconnues :
+# - fichier précis : github.com/user/repo/blob/branche/chemin/fichier.py
+# - dossier : github.com/user/repo/tree/branche/chemin -> liste NON
+#   récursive du contenu à ce niveau (noms + type fichier/dossier), pas le
+#   contenu des fichiers -- lire un dossier entier en profondeur est un
+#   chantier à part (stratégie de sélection/troncature des fichiers).
+# - branche seule : github.com/user/repo/tree/branche -> README de CETTE
+#   branche précise (pas forcément la branche par défaut du dépôt).
+# - dépôt entier : github.com/user/repo (sans /tree/ ni /blob/) -> README
+#   de la branche par défaut.
+REGEX_GITHUB_FICHIER = re.compile(
+    r"github\.com/([\w.-]+)/([\w.-]+)/blob/([\w.\-/%]+?)/([^/\s]+\.\w+)"
+)
+REGEX_GITHUB_ARBORESCENCE = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/tree/([\w.\-/%]+)")
+REGEX_GITHUB_DEPOT = re.compile(r"github\.com/([\w.-]+)/([\w.-]+?)/?(?:\s|$)")
+
+
+def _lire_github(url, user_id=None):
     """
-    Récupère le contenu textuel d'un lien collé dans le message. Deux cas :
+    Récupère le contenu d'un lien GitHub collé dans le message. Deux
+    formats reconnus (fichier précis ou dépôt entier), et TROIS niveaux
+    d'authentification possibles pour chacun, du plus au moins privilégié :
+    1. Token OAuth de L'ÉTUDIANT/ENSEIGNANT connecté (voir
+       connexions/oauth_generique.py, obtenir_token_valide("github", ...))
+       -- seul niveau donnant accès aux dépôts PRIVÉS. Ajouté le
+       2026-07-22 : nécessite que la personne ait connecté son compte
+       GitHub ET qu'une GitHub OAuth App existe (GITHUB_CLIENT_ID/SECRET
+       sur Railway) -- voir connexions/oauth_generique.py pour la config.
+    2. GITHUB_TOKEN de la plateforme (voir plus bas) -- dépôts publics
+       uniquement, mais lève la limite de 60 à 5000 requêtes/heure.
+    3. Non authentifié -- dépôts publics, 60 requêtes/heure PARTAGÉES
+       entre tous les utilisateurs (confirmé limitant en test réel).
+    """
+    token_utilisateur = None
+    if user_id:
+        try:
+            from connexions.oauth_generique import obtenir_token_valide
+            token_utilisateur = obtenir_token_valide("github", user_id)
+        except Exception as e:
+            logging.error(f"ERREUR LECTURE TOKEN GITHUB (user {user_id}) : {e}")
+
+    m_fichier = REGEX_GITHUB_FICHIER.search(url)
+    if m_fichier:
+        utilisateur, depot, branche_et_chemin_partiel, nom_fichier = m_fichier.groups()
+        chemin_complet = f"{branche_et_chemin_partiel}/{nom_fichier}"
+        # Le premier segment de chemin_complet est la branche (main,
+        # master...), le reste est le chemin réel dans le dépôt.
+        segments = chemin_complet.split("/", 1)
+        if len(segments) != 2:
+            return None
+        branche, chemin_fichier = segments
+        raw_url = f"https://raw.githubusercontent.com/{utilisateur}/{depot}/{branche}/{chemin_fichier}"
+        # raw.githubusercontent.com accepte un Authorization: Bearer pour
+        # les dépôts privés (comportement GitHub, pas garanti stable dans
+        # le temps -- à revalider si ce point casse un jour).
+        headers = {"Authorization": f"Bearer {token_utilisateur}"} if token_utilisateur else {}
+        try:
+            reponse = requests.get(raw_url, timeout=10, headers=headers)
+            if reponse.status_code != 200:
+                logging.warning(f"LECTURE GITHUB ECHOUEE (fichier, statut {reponse.status_code}) : {raw_url}")
+                return None
+            return reponse.text[:LONGUEUR_MAX_TEXTE_URL]
+        except Exception as e:
+            logging.error(f"ERREUR LECTURE GITHUB (fichier) {raw_url} : {e}")
+            return None
+
+    m_arbo = REGEX_GITHUB_ARBORESCENCE.search(url)
+    if m_arbo:
+        utilisateur, depot, reste = m_arbo.groups()
+        segments = reste.split("/", 1)
+        branche = segments[0]
+        chemin_dossier = segments[1] if len(segments) > 1 else None
+        headers_auth = {"Authorization": f"Bearer {token_utilisateur}"} if token_utilisateur else {}
+
+        if chemin_dossier:
+            # Lien de dossier : liste NON récursive du contenu à ce
+            # niveau (noms + type), pas le contenu des fichiers -- lire un
+            # dossier entier en profondeur nécessiterait une stratégie de
+            # sélection/troncature, hors de portée ici.
+            api_url = f"https://api.github.com/repos/{utilisateur}/{depot}/contents/{chemin_dossier}?ref={branche}"
+            try:
+                reponse = requests.get(api_url, timeout=10, headers=headers_auth)
+                if reponse.status_code != 200:
+                    logging.warning(f"LECTURE GITHUB ECHOUEE (dossier, statut {reponse.status_code}) : {api_url}")
+                    return None
+                elements = reponse.json()
+                if not isinstance(elements, list):
+                    # L'API renvoie un objet (pas une liste) si le chemin
+                    # pointe en fait vers un fichier, pas un dossier.
+                    return None
+                lignes = [
+                    f"- {e['name']} ({'dossier' if e['type'] == 'dir' else 'fichier'})"
+                    for e in elements
+                ]
+                return f"Contenu du dossier {chemin_dossier} (branche {branche}) :\n" + "\n".join(lignes)
+            except Exception as e:
+                logging.error(f"ERREUR LECTURE GITHUB (dossier) {api_url} : {e}")
+                return None
+        else:
+            # Lien de branche seule : README de CETTE branche précise,
+            # pas forcément la branche par défaut du dépôt.
+            api_url = f"https://api.github.com/repos/{utilisateur}/{depot}/readme?ref={branche}"
+            headers = {"Accept": "application/vnd.github.raw+json", **headers_auth}
+            try:
+                reponse = requests.get(api_url, timeout=10, headers=headers)
+                if reponse.status_code != 200:
+                    logging.warning(f"LECTURE GITHUB ECHOUEE (branche, statut {reponse.status_code}) : {api_url}")
+                    return None
+                return reponse.text[:LONGUEUR_MAX_TEXTE_URL]
+            except Exception as e:
+                logging.error(f"ERREUR LECTURE GITHUB (branche) {api_url} : {e}")
+                return None
+
+    m_depot = REGEX_GITHUB_DEPOT.search(url)
+    if m_depot:
+        utilisateur, depot = m_depot.groups()
+        api_url = f"https://api.github.com/repos/{utilisateur}/{depot}/readme"
+        headers = {"Accept": "application/vnd.github.raw+json"}
+        # Priorité : token de la personne connectée (dépôts privés) >
+        # GITHUB_TOKEN de la plateforme (dépôts publics, quota levé) >
+        # non authentifié (dépôts publics, quota serré). Voir docstring.
+        token_github = token_utilisateur or get_secret("GITHUB_TOKEN")
+        if token_github:
+            headers["Authorization"] = f"Bearer {token_github}"
+        try:
+            reponse = requests.get(api_url, timeout=10, headers=headers)
+            if reponse.status_code != 200:
+                logging.warning(f"LECTURE GITHUB ECHOUEE (dépôt, statut {reponse.status_code}) : {api_url}")
+                return None
+            return reponse.text[:LONGUEUR_MAX_TEXTE_URL]
+        except Exception as e:
+            logging.error(f"ERREUR LECTURE GITHUB (dépôt) {api_url} : {e}")
+            return None
+
+    return None
+
+
+def _lire_url(url, user_id=None):
+    """
+    Récupère le contenu textuel d'un lien collé dans le message. Trois cas :
     - YouTube (vidéo) : transcript via youtube-transcript-api, pas de
       scraping HTML -- c'est notre seule "entrée vidéo" pour l'instant,
       limitée aux vidéos YouTube sous-titrées (voir note plus bas, pas de
       vrai traitement vidéo/image par frame).
+    - GitHub (fichier ou dépôt) : contenu brut du fichier ou README du
+      dépôt, voir _lire_github. `user_id` permet d'utiliser le token
+      OAuth de la personne connectée si elle a lié son compte GitHub
+      (voir connexions/oauth_generique.py) -- seul moyen de lire un dépôt
+      PRIVÉ ; sans connexion, uniquement les dépôts publics (voir
+      _lire_github pour le détail des 3 niveaux d'authentification).
     - Page web générique : extraction via trafilatura (garde le texte
       utile, jette nav/pubs/footer).
     Retourne None si l'extraction échoue (lien mort, page protégée, vidéo
@@ -181,6 +326,17 @@ def _lire_url(url):
             logging.error(f"ERREUR TRANSCRIPT YOUTUBE ({url}): {e}")
             return None
 
+    if "github.com" in url:
+        # Avant le fallback trafilatura générique : un lien GitHub scrapé
+        # comme une page HTML normale donnerait la navigation/sidebar de
+        # l'interface GitHub, pas le vrai contenu du fichier/README.
+        contenu_github = _lire_github(url, user_id)
+        if contenu_github:
+            return contenu_github
+        # Si _lire_github échoue (dépôt privé, format de lien non
+        # reconnu...), on retombe sur trafilatura plutôt que d'abandonner
+        # -- au moins la page HTML publique GitHub reste lisible.
+
     try:
         import trafilatura
         # BUG corrigé le 2026-07-20 : trafilatura 2.1.0 n'a pas de paramètre
@@ -211,7 +367,7 @@ def _lire_url(url):
         return None
 
 
-def _enrichir_message_avec_urls(message):
+def _enrichir_message_avec_urls(message, user_id=None):
     """
     Détecte les liens collés dans le message utilisateur, récupère leur
     contenu, et l'ajoute en contexte APRÈS le message original (jamais à la
@@ -220,6 +376,10 @@ def _enrichir_message_avec_urls(message):
     enrichissement) reste ce qui est sauvegardé dans l'historique -- voir
     l'appel à _sauvegarder_echange dans chat(), qui reçoit toujours
     message_utilisateur brut, jamais message_pour_modele.
+
+    `user_id` (2026-07-22) : transmis à _lire_url -> _lire_github pour
+    utiliser le token GitHub de la personne si elle a connecté son compte
+    (accès aux dépôts privés) -- voir connexions/oauth_generique.py.
     """
     urls = REGEX_URL.findall(message)
     if not urls:
@@ -229,7 +389,7 @@ def _enrichir_message_avec_urls(message):
 
     blocs = []
     for url in urls[:3]:  # au plus 3 liens par message, pour le temps de réponse
-        contenu = _lire_url(url)
+        contenu = _lire_url(url, user_id)
         if contenu:
             blocs.append(f"[Contenu de {url}]\n{contenu}")
 
@@ -545,13 +705,22 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
     system_final += INSTRUCTIONS_FORMATS_AFFICHAGE
     system_final += REGLE_CONTEXTE_INVISIBLE
+    system_final += (
+        "\n\nBIBLIOTHÈQUE DE FICHIERS : tu as accès à l'outil chercher_fichier pour "
+        "retrouver un fichier (image, PDF, audio, vidéo...) déjà uploadé par la "
+        "plateforme, par le créateur de cet agent, ou par cet utilisateur dans une "
+        f"conversation passée. Ton agent_id est \"{agent_id}\". L'user_id de la "
+        f"personne actuelle est {f'\"{user_id}\"' if user_id else 'absent (non connectée)'}. "
+        "Passe TOUJOURS ces deux valeurs exactement telles quelles à chercher_fichier, "
+        "ne les invente jamais."
+    )
 
     # Contexte système "date/heure actuelle" (2026-07-20) : sans ça, le
     # modèle ne sait pas qu'on est en 2026 et peut situer les événements
     # récents n'importe où par rapport à sa coupure d'entraînement.
     #
     # Fuseau horaire (corrigé 2026-07-20) : PAS figé sur Tunis -- Djiguignè
-    # est un projet panafricain (voir Maame), rien ne dit que l'étudiant
+    # est un projet panafricain (voir Maame), rien ne dit que l'utilisateur
     # est à Tunis. `fuseau_horaire` vient du navigateur
     # (Intl.DateTimeFormat().resolvedOptions().timeZone, voir
     # ChatIA.tsx:envoyerMessage), pas d'une valeur choisie côté serveur.
@@ -1083,14 +1252,14 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
 
     if localisation and localisation.get("latitude") is not None and localisation.get("longitude") is not None:
         # Contexte "système/environnement" (2026-07-20) : position GPS
-        # transmise explicitement par l'étudiant (bouton dédié côté
+        # transmise explicitement par l'utilisateur (bouton dédié côté
         # frontend, jamais automatique/silencieux -- voir BarreDeSaisie.tsx
         # et la permission navigateur navigator.geolocation). Ajoutée en
         # fin de prompt système, jamais comme un fait affirmé par
-        # l'étudiant lui-même.
+        # l'utilisateur lui-même.
         system_final += (
             "\n\nContexte de localisation (fourni par le navigateur de "
-            "l'étudiant, à utiliser seulement si pertinent pour la "
+            "l'utilisateur, à utiliser seulement si pertinent pour la "
             f"question) : latitude {localisation['latitude']}, "
             f"longitude {localisation['longitude']}."
         )
@@ -1099,7 +1268,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     # ICI, sur le message pour le modèle uniquement -- message_utilisateur
     # (brut, sans le contenu des liens) reste ce qui est sauvegardé dans
     # l'historique via _sauvegarder_echange plus bas.
-    message_pour_modele = _enrichir_message_avec_urls(message_utilisateur)
+    message_pour_modele = _enrichir_message_avec_urls(message_utilisateur, user_id)
 
     messages_base = [{"role": "system", "content": system_final}]
     messages_base += historique

@@ -19,7 +19,7 @@ import tempfile
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, supabase, get_secret
@@ -30,6 +30,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "indexers"))
 from creation_agent import generer_id_depuis_nom, extraire_id_notion, composer_system_prompt  # noqa: E402
 from index_documents import indexer_texte, indexer_document, supprimer_chunks_existants  # noqa: E402
 from storage import upload_document, list_documents, delete_document, get_document_url  # noqa: E402
+from bibliotheque_fichiers import enregistrer_fichier, lister_fichiers, supprimer_fichier  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
@@ -1023,6 +1024,159 @@ def supprimer_document(agent_id: str, nom_stockage: str, request: Request, utili
         cible_type="agent",
         cible_id=agent_id,
         details={"nom_stockage": nom_stockage},
+        request=request,
+    )
+
+
+TYPES_BIBLIOTHEQUE_AUTORISES = {
+    "application/pdf",
+    "image/jpeg", "image/png", "image/webp",
+    "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4",
+    "video/mp4", "video/webm", "video/quicktime",
+}
+TAILLE_MAX_BIBLIOTHEQUE_OCTETS = 50 * 1024 * 1024  # 50 Mo
+
+
+@router.post("/{agent_id}/bibliotheque", status_code=201)
+async def uploader_fichier_bibliotheque(
+    agent_id: str,
+    request: Request,
+    fichier: UploadFile = File(...),
+    titre: str = Form(None),
+    description: str = Form(None),
+    utilisateur=Depends(utilisateur_courant),
+):
+    """
+    Bibliothèque du créateur pour CET agent (niveau="agent", voir
+    core/bibliotheque_fichiers.py) : n'importe quel type de fichier
+    (image/audio/vidéo/PDF...), avec une description donnée par le
+    créateur pour que l'IA sache le retrouver via chercher_fichier
+    -- le titre est optionnel (juste un intitulé court), c'est la
+    description qui compte vraiment pour la recherche (2026-07-22,
+    demande de Bourama : la description prime sur le titre).
+
+    Cas particulier du PDF : en plus d'être stocké brut dans la
+    bibliothèque (comme tout le reste), il est AUSSI vectorisé dans le
+    circuit RAG existant (indexer_document), exactement comme le faisait
+    déjà POST /{agent_id}/documents ci-dessus -- cette route ne remplace
+    pas l'ancienne (toujours utilisée par le frontend existant), elle
+    généralise le même geste à tous les types de fichiers.
+    """
+    if not (titre or "").strip() and not (description or "").strip():
+        raise HTTPException(status_code=400, detail="Donne au moins une description ou un titre.")
+
+    if fichier.content_type not in TYPES_BIBLIOTHEQUE_AUTORISES:
+        raise HTTPException(status_code=400, detail="Type de fichier non supporté.")
+
+    try:
+        res = (
+            supabase.table("agents")
+            .select("id, owner_id")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant upload bibliothèque) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible d'ajouter ce fichier pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+    if res.data["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    contenu = await fichier.read()
+    if len(contenu) == 0:
+        raise HTTPException(status_code=400, detail="Fichier vide.")
+    if len(contenu) > TAILLE_MAX_BIBLIOTHEQUE_OCTETS:
+        raise HTTPException(status_code=400, detail="Fichier trop lourd (50 Mo max).")
+
+    nom_original = fichier.filename or "fichier"
+
+    if fichier.content_type == "application/pdf":
+        nom_stockage_rag = f"{agent_id}__{nom_original}"
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(contenu)
+            chemin_temp = tmp.name
+        try:
+            upload_document(chemin_temp, nom_stockage_rag)
+            indexer_document(chemin_temp, nom_stockage_rag, agent_id)
+        except Exception as e:
+            logging.error(f"ERREUR vectorisation PDF bibliothèque (agent_id={agent_id}, fichier={nom_original}) : {e}")
+            raise HTTPException(status_code=500, detail=f"« {nom_original} » n'a pas pu être vectorisé.")
+        finally:
+            try:
+                os.remove(chemin_temp)
+            except OSError:
+                pass
+
+    description_finale = (
+        f"{titre.strip()} — {description.strip()}" if (titre or "").strip() and (description or "").strip()
+        else (description or titre or "").strip()
+    )
+
+    try:
+        ligne = enregistrer_fichier(
+            contenu=contenu,
+            nom_fichier=nom_original,
+            type_mime=fichier.content_type,
+            niveau="agent",
+            uploade_par=utilisateur.id,
+            agent_id=agent_id,
+            description=description_finale,
+        )
+    except Exception:
+        raise HTTPException(status_code=500, detail="Fichier vectorisé mais échec du stockage en bibliothèque.")
+
+    journaliser(
+        action="bibliotheque.ajoute",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"description": description_finale, "type_mime": fichier.content_type},
+        request=request,
+    )
+
+    return ligne
+
+
+@router.get("/{agent_id}/bibliotheque")
+def lister_bibliotheque(agent_id: str, utilisateur=Depends(utilisateur_courant)):
+    try:
+        res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant liste bibliothèque) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de lister la bibliothèque pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+    if res.data["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    return lister_fichiers("agent", agent_id=agent_id)
+
+
+@router.delete("/{agent_id}/bibliotheque/{fichier_id}", status_code=204)
+def supprimer_fichier_bibliotheque(agent_id: str, fichier_id: str, request: Request, utilisateur=Depends(utilisateur_courant)):
+    try:
+        res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant suppression bibliothèque) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de supprimer ce fichier pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+    if res.data["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    supprimer_fichier(fichier_id)
+
+    journaliser(
+        action="bibliotheque.supprime",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"fichier_id": fichier_id},
         request=request,
     )
 
