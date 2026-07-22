@@ -27,6 +27,7 @@ from api.chat import router as chat_router
 from api.feedback import router as feedback_router
 from api.generation import router as generation_router
 from core.serveur_mcp_generation import mcp_generation
+from core.serveur_mcp_github import mcp_github
 
 logging.basicConfig(level=logging.INFO)
 
@@ -38,7 +39,7 @@ async def _lifespan(app: FastAPI):
     # besoin de tourner pendant toute la durée de vie du process, sinon
     # streamable_http_app() renvoie une erreur "Task group is not
     # initialized" au premier appel d'outil.
-    async with mcp_generation.session_manager.run():
+    async with mcp_generation.session_manager.run(), mcp_github.session_manager.run():
         yield
 
 
