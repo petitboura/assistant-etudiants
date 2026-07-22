@@ -15,11 +15,12 @@ forme), pas une simple substitution de colonne dans la requête.
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
 from api.agents import supprimer_agent_completement
+from api.journal import journaliser
 from creation_agent import generer_id_depuis_nom
 
 logging.basicConfig(level=logging.INFO)
@@ -141,7 +142,7 @@ class MettreAJourProfilPayload(BaseModel):
 
 @router.patch("/me", response_model=ProfilPublic)
 def mettre_a_jour_mon_profil(
-    payload: MettreAJourProfilPayload, utilisateur=Depends(utilisateur_courant)
+    payload: MettreAJourProfilPayload, request: Request, utilisateur=Depends(utilisateur_courant)
 ):
     """
     Crée ou met à jour le profil de l'utilisateur courant. Upsert, pas un
@@ -263,6 +264,15 @@ def mettre_a_jour_mon_profil(
             status_code=500, detail="Profil mis à jour mais impossible de le relire pour confirmation."
         )
 
+    journaliser(
+        action="profil.modifie",
+        user_id=utilisateur.id,
+        cible_type="profile",
+        cible_id=utilisateur.id,
+        details={"champs_modifies": [c for c in ("nom_affiche", "bio", "avatar_url") if c in ligne]},
+        request=request,
+    )
+
     resultat = res.data or ligne
     return ProfilPublic(
         user_id=resultat["user_id"],
@@ -273,7 +283,7 @@ def mettre_a_jour_mon_profil(
 
 
 @router.delete("/me", status_code=204)
-def supprimer_mon_compte(utilisateur=Depends(utilisateur_courant)):
+def supprimer_mon_compte(request: Request, utilisateur=Depends(utilisateur_courant)):
     """
     "Supprimer mon compte" dans la zone de danger de Mon espace (demande
     Bourama, 2026-07-15). Purge dans l'ordre : chaque agent possédé (via
@@ -332,6 +342,20 @@ def supprimer_mon_compte(utilisateur=Depends(utilisateur_courant)):
         supabase.table("profiles").delete().eq("user_id", user_id).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (suppression profil, compte {user_id}) : {e}")
+
+    # Journalisé avant la suppression Auth elle-même (pas après) : une fois
+    # le compte supprimé, journal_actions.user_id passe à NULL (ON DELETE
+    # SET NULL) -- cible_id (non lié par contrainte) garde la trace de qui
+    # a été supprimé, mais autant capturer l'e-mail pendant qu'il est
+    # encore disponible sur `utilisateur`.
+    journaliser(
+        action="compte.supprime",
+        user_id=user_id,
+        cible_type="profile",
+        cible_id=user_id,
+        details={"email": getattr(utilisateur, "email", None)},
+        request=request,
+    )
 
     try:
         supabase.auth.admin.delete_user(user_id)

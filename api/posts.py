@@ -19,10 +19,11 @@ Règles par type (définies avec Bourama le 2026-07-15) :
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, supabase
+from api.journal import journaliser
 
 logging.basicConfig(level=logging.INFO)
 
@@ -71,7 +72,7 @@ def _resoudre_profils(user_ids: List[str]) -> dict:
 
 
 @router.post("", response_model=Post, status_code=201)
-def creer_post(payload: PostCree, utilisateur=Depends(utilisateur_courant)):
+def creer_post(payload: PostCree, request: Request, utilisateur=Depends(utilisateur_courant)):
     if payload.type not in TYPES_VALIDES:
         raise HTTPException(status_code=422, detail="Type de publication invalide.")
 
@@ -129,6 +130,16 @@ def creer_post(payload: PostCree, utilisateur=Depends(utilisateur_courant)):
         raise HTTPException(status_code=500, detail="La publication n'a pas pu être créée (erreur technique).")
 
     ligne = res.data[0]
+
+    journaliser(
+        action="post.publie",
+        user_id=utilisateur.id,
+        cible_type="post",
+        cible_id=str(ligne["id"]),
+        details={"type": payload.type, "titre": titre},
+        request=request,
+    )
+
     profils = _resoudre_profils([utilisateur.id])
     profil = profils.get(utilisateur.id, {})
 
@@ -198,14 +209,14 @@ def lister_posts(
 
 
 @router.delete("/{post_id}", status_code=204)
-def supprimer_post(post_id: int, utilisateur=Depends(utilisateur_courant)):
+def supprimer_post(post_id: int, request: Request, utilisateur=Depends(utilisateur_courant)):
     """
     Sert notamment à "Supprimer une histoire" dans la zone de danger de
     Mon espace, mais générique pour les 3 types (même logique de
     propriété partout).
     """
     try:
-        res = supabase.table("posts").select("user_id").eq("id", post_id).maybe_single().execute()
+        res = supabase.table("posts").select("user_id, type").eq("id", post_id).maybe_single().execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture post {post_id} avant suppression) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de supprimer cette publication pour le moment.")
@@ -220,3 +231,12 @@ def supprimer_post(post_id: int, utilisateur=Depends(utilisateur_courant)):
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (suppression post {post_id}) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de supprimer cette publication pour le moment.")
+
+    journaliser(
+        action="post.supprime",
+        user_id=utilisateur.id,
+        cible_type="post",
+        cible_id=str(post_id),
+        details={"type": res.data.get("type")},
+        request=request,
+    )

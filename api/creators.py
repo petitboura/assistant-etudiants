@@ -11,13 +11,14 @@ deux ressources différentes dans un seul fichier déjà long.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from typing import List, Optional
 
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
+from api.journal import journaliser
 
 logging.basicConfig(level=logging.INFO)
 
@@ -155,7 +156,7 @@ def obtenir_etat_follow(creator_id: str, utilisateur=Depends(utilisateur_optionn
 
 
 @router.post("/{creator_id}/follow", status_code=204)
-def suivre_createur(creator_id: str, utilisateur=Depends(utilisateur_courant)):
+def suivre_createur(creator_id: str, request: Request, utilisateur=Depends(utilisateur_courant)):
     """
     Suit un créateur (table `follows`, contrainte unique
     `(follower_id, creator_id)` — voir PIVOT_SOCIAL.md, section "Modèle
@@ -177,9 +178,17 @@ def suivre_createur(creator_id: str, utilisateur=Depends(utilisateur_courant)):
         )
         raise HTTPException(status_code=500, detail="Impossible de suivre ce créateur pour le moment.")
 
+    journaliser(
+        action="follow",
+        user_id=utilisateur.id,
+        cible_type="profile",
+        cible_id=creator_id,
+        request=request,
+    )
+
 
 @router.delete("/{creator_id}/follow", status_code=204)
-def ne_plus_suivre_createur(creator_id: str, utilisateur=Depends(utilisateur_courant)):
+def ne_plus_suivre_createur(creator_id: str, request: Request, utilisateur=Depends(utilisateur_courant)):
     """
     Retire un follow existant. Idempotent aussi : ne pas suivre quelqu'un
     puis appeler ce endpoint ne renvoie pas d'erreur, `delete()` sur une
@@ -198,3 +207,11 @@ def ne_plus_suivre_createur(creator_id: str, utilisateur=Depends(utilisateur_cou
             f"ERREUR SUPABASE (delete follow follower={utilisateur.id}, creator={creator_id}) : {e}"
         )
         raise HTTPException(status_code=500, detail="Impossible de retirer ce follow pour le moment.")
+
+    journaliser(
+        action="unfollow",
+        user_id=utilisateur.id,
+        cible_type="profile",
+        cible_id=creator_id,
+        request=request,
+    )
