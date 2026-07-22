@@ -132,13 +132,96 @@ def _extraire_id_youtube(url):
     return match.group(1) if match else None
 
 
+# Connecteur GitHub (2026-07-22) -- version "simple" : lien public collé
+# dans le message, PAS de connexion au compte GitHub de l'étudiant/
+# enseignant (ça, c'est la version OAuth, un vrai projet à part avec
+# une GitHub OAuth App à créer manuellement -- voir discussion avec
+# Bourama). Deux formes de lien reconnues :
+# - fichier précis : github.com/user/repo/blob/branche/chemin/fichier.py
+# - dépôt entier : github.com/user/repo (sans /blob/) -> on lit le README
+REGEX_GITHUB_FICHIER = re.compile(
+    r"github\.com/([\w.-]+)/([\w.-]+)/blob/([\w.\-/%]+?)/([^/\s]+\.\w+)"
+)
+REGEX_GITHUB_DEPOT = re.compile(r"github\.com/([\w.-]+)/([\w.-]+?)/?(?:\s|$)")
+
+
+def _lire_github(url):
+    """
+    Récupère le contenu d'un lien GitHub PUBLIC collé dans le message --
+    pas d'authentification, donc rien de privé n'est accessible ici (voir
+    version OAuth prévue séparément pour ça). Deux cas :
+    - lien vers un fichier précis (.../blob/branche/chemin) -> contenu
+      brut du fichier, via raw.githubusercontent.com (pas l'API GitHub,
+      pas de limite de taux aussi stricte pour du contenu brut public).
+    - lien vers un dépôt (github.com/user/repo) -> le README, via l'API
+      GitHub (endpoint /readme, contenu décodé depuis base64).
+    Retourne None si le lien ne correspond à aucun des deux formats, ou si
+    la requête échoue (dépôt privé/inexistant, fichier introuvable...).
+    """
+    m_fichier = REGEX_GITHUB_FICHIER.search(url)
+    if m_fichier:
+        utilisateur, depot, branche_et_chemin_partiel, nom_fichier = m_fichier.groups()
+        chemin_complet = f"{branche_et_chemin_partiel}/{nom_fichier}"
+        # Le premier segment de chemin_complet est la branche (main,
+        # master...), le reste est le chemin réel dans le dépôt.
+        segments = chemin_complet.split("/", 1)
+        if len(segments) != 2:
+            return None
+        branche, chemin_fichier = segments
+        raw_url = f"https://raw.githubusercontent.com/{utilisateur}/{depot}/{branche}/{chemin_fichier}"
+        try:
+            reponse = requests.get(raw_url, timeout=10)
+            if reponse.status_code != 200:
+                logging.warning(f"LECTURE GITHUB ECHOUEE (fichier, statut {reponse.status_code}) : {raw_url}")
+                return None
+            return reponse.text[:LONGUEUR_MAX_TEXTE_URL]
+        except Exception as e:
+            logging.error(f"ERREUR LECTURE GITHUB (fichier) {raw_url} : {e}")
+            return None
+
+    m_depot = REGEX_GITHUB_DEPOT.search(url)
+    if m_depot:
+        utilisateur, depot = m_depot.groups()
+        api_url = f"https://api.github.com/repos/{utilisateur}/{depot}/readme"
+        headers = {"Accept": "application/vnd.github.raw+json"}
+        # Token optionnel (2026-07-22) : l'API GitHub NON authentifiée est
+        # plafonnée à 60 requêtes/heure PAR IP -- confirmé en testant en
+        # conditions réelles (limite atteinte en quelques appels). Cette
+        # limite serait partagée entre TOUS les étudiants utilisant ce
+        # lien en même temps sur Railway -- inutilisable en pratique sans
+        # token. Un simple classic token GitHub avec scope `public_repo`
+        # (ou fine-grained, lecture seule, repos publics) fait passer la
+        # limite à 5000/heure. Ajouter GITHUB_TOKEN dans les variables
+        # d'environnement Railway pour l'activer -- fonctionne aussi sans
+        # (juste plus fragile en usage multi-étudiants simultané).
+        token_github = get_secret("GITHUB_TOKEN")
+        if token_github:
+            headers["Authorization"] = f"Bearer {token_github}"
+        try:
+            reponse = requests.get(api_url, timeout=10, headers=headers)
+            if reponse.status_code != 200:
+                logging.warning(f"LECTURE GITHUB ECHOUEE (dépôt, statut {reponse.status_code}) : {api_url}")
+                return None
+            return reponse.text[:LONGUEUR_MAX_TEXTE_URL]
+        except Exception as e:
+            logging.error(f"ERREUR LECTURE GITHUB (dépôt) {api_url} : {e}")
+            return None
+
+    return None
+
+
 def _lire_url(url):
     """
-    Récupère le contenu textuel d'un lien collé dans le message. Deux cas :
+    Récupère le contenu textuel d'un lien collé dans le message. Trois cas :
     - YouTube (vidéo) : transcript via youtube-transcript-api, pas de
       scraping HTML -- c'est notre seule "entrée vidéo" pour l'instant,
       limitée aux vidéos YouTube sous-titrées (voir note plus bas, pas de
       vrai traitement vidéo/image par frame).
+    - GitHub public (fichier ou dépôt) : contenu brut du fichier ou README
+      du dépôt, voir _lire_github. Version "simple" du connecteur GitHub
+      (2026-07-22) -- lien public collé, PAS de connexion au compte
+      GitHub de l'étudiant/enseignant (repos privés). Cette dernière est
+      un vrai projet à part (GitHub OAuth App à créer manuellement).
     - Page web générique : extraction via trafilatura (garde le texte
       utile, jette nav/pubs/footer).
     Retourne None si l'extraction échoue (lien mort, page protégée, vidéo
@@ -169,6 +252,17 @@ def _lire_url(url):
         except Exception as e:
             logging.error(f"ERREUR TRANSCRIPT YOUTUBE ({url}): {e}")
             return None
+
+    if "github.com" in url:
+        # Avant le fallback trafilatura générique : un lien GitHub scrapé
+        # comme une page HTML normale donnerait la navigation/sidebar de
+        # l'interface GitHub, pas le vrai contenu du fichier/README.
+        contenu_github = _lire_github(url)
+        if contenu_github:
+            return contenu_github
+        # Si _lire_github échoue (dépôt privé, format de lien non
+        # reconnu...), on retombe sur trafilatura plutôt que d'abandonner
+        # -- au moins la page HTML publique GitHub reste lisible.
 
     try:
         import trafilatura
