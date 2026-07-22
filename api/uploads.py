@@ -161,7 +161,18 @@ def _extraire_texte_docx(contenu_bytes):
     import docx
 
     document = docx.Document(io.BytesIO(contenu_bytes))
-    return "\n".join(p.text for p in document.paragraphs)
+    morceaux = [p.text for p in document.paragraphs]
+
+    # BUG corrigé le 2026-07-21 : les tableaux Word n'étaient jamais lus
+    # (seuls document.paragraphs l'étaient) -- confirmé en test réel avec
+    # un tableau de scores, dont aucune valeur ne remontait au modèle.
+    # python-docx n'inclut pas les cellules de tableau dans .paragraphs,
+    # il faut parcourir document.tables séparément.
+    for table in document.tables:
+        for ligne in table.rows:
+            morceaux.append("\t".join(cellule.text for cellule in ligne.cells))
+
+    return "\n".join(morceaux)
 
 
 def _extraire_texte_xlsx(contenu_bytes):
