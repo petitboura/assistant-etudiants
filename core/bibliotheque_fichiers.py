@@ -133,3 +133,37 @@ def chercher_fichiers(recherche: str, agent_id: str = None, user_id: str = None,
     ordre_priorite = {"utilisateur": 0, "agent": 1, "plateforme": 2}
     fichiers.sort(key=lambda f: ordre_priorite[f["niveau"]])
     return fichiers
+
+
+def lister_fichiers(niveau: str, agent_id: str = None, user_id: str = None) -> list:
+    """
+    Liste exhaustive (pas une recherche par mot-clé) des fichiers d'un
+    niveau précis -- utilisé pour l'écran de gestion du créateur
+    ("ma bibliothèque pour cet agent"), pas par l'IA en conversation.
+    """
+    requete = supabase.table("fichiers_uploades").select("*").eq("niveau", niveau)
+    if agent_id:
+        requete = requete.eq("agent_id", agent_id)
+    if user_id:
+        requete = requete.eq("user_id", user_id)
+    return requete.order("created_at", desc=True).execute().data
+
+
+def supprimer_fichier(fichier_id: str) -> None:
+    """
+    Supprime un fichier de la bibliothèque : ligne en base ET objet
+    Storage. Ne lève pas d'erreur si l'objet Storage est déjà absent
+    (suppression déjà faite ailleurs, ou incohérence mineure) -- seule
+    la suppression de la ligne en base est considérée critique.
+    """
+    ligne = supabase.table("fichiers_uploades").select("chemin_stockage").eq("id", fichier_id).execute()
+    if not ligne.data:
+        return
+
+    chemin_stockage = ligne.data[0]["chemin_stockage"]
+    try:
+        supabase.storage.from_(BUCKET).remove([chemin_stockage])
+    except Exception as e:
+        logging.warning(f"Suppression Storage bibliothèque échouée ({chemin_stockage}), ligne supprimée quand même : {e}")
+
+    supabase.table("fichiers_uploades").delete().eq("id", fichier_id).execute()
