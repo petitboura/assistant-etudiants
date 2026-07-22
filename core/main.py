@@ -57,6 +57,17 @@ AGENT_ID_PAR_DEFAUT = "tutorat-maths"
 SEUIL_RESUME_MESSAGES = 20
 MODELE_RESUME = "llama-3.3-70b-versatile"  # rapide, pas besoin de raisonnement pour resumer
 
+# Profil utilisateur dynamique par agent (2026-07-21, voir
+# agents.profil_utilisateur_schema et _mettre_a_jour_profil_utilisateur_si_besoin
+# plus bas). Seuil plus bas que SEUIL_RESUME_MESSAGES : contrairement au
+# resume memoire (qui compte TOUS les messages de l'etudiant, tous agents
+# confondus), celui-ci compte seulement les messages avec CET agent -- ils
+# s'accumulent donc plus lentement, un seuil identique mettrait
+# potentiellement des semaines a se declencher pour un agent utilise
+# occasionnellement.
+SEUIL_PROFIL_MESSAGES = 10
+MODELE_PROFIL = "llama-3.3-70b-versatile"
+
 # D'apres la doc Groq (console.groq.com/docs/reasoning), le parametre
 # reasoning_effort n'est reconnu que par certains modeles (GPT-OSS 20B/120B,
 # Qwen 3). Les autres modeles de GROQ_FALLBACKS (ex: llama-3.3-70b-versatile,
@@ -264,6 +275,164 @@ def _charger_resume_memoire(user_id):
         return ""
 
 
+def _charger_schema_profil(agent_id):
+    """
+    Renvoie la liste de champs définie par le créateur pour SON agent
+    (agents.profil_utilisateur_schema, voir ChampProfilUtilisateur côté
+    api/agents.py). Liste vide = fonctionnalité désactivée pour cet
+    agent -- aucun profil n'est ni chargé ni construit dans ce cas.
+    """
+    if not agent_id:
+        return []
+    try:
+        res = (
+            supabase.table("agents")
+            .select("profil_utilisateur_schema")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+        return (res.data or {}).get("profil_utilisateur_schema") or []
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture profil_utilisateur_schema agent={agent_id}) : {e}")
+        return []
+
+
+def _charger_profil_utilisateur(agent_id, user_id):
+    """
+    Profil dynamique déjà rempli pour cette paire (agent, utilisateur
+    connecté) -- table agent_user_profiles. Utilisateurs connectés
+    uniquement (décision du 2026-07-21 : aucun moyen fiable de
+    reconnaître un visiteur anonyme d'une session à l'autre). Renvoie {}
+    si non connecté, agent sans schéma défini, ou rien d'enregistré
+    encore.
+    """
+    if not user_id or not agent_id:
+        return {}
+    try:
+        res = (
+            supabase.table("agent_user_profiles")
+            .select("donnees")
+            .eq("agent_id", agent_id)
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        return (res.data or {}).get("donnees") or {}
+    except Exception as e:
+        logging.error(
+            f"ERREUR SUPABASE (lecture agent_user_profiles agent={agent_id}, user={user_id}) : {e}"
+        )
+        return {}
+
+
+def _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id):
+    """
+    Pendant du profil dynamique à _mettre_a_jour_resume_si_besoin
+    ci-dessous, mais scopé à un seul agent (pas tous agents confondus) et
+    guidé par un schéma défini par le créateur plutôt que par un résumé
+    libre. Ne fait rien si : utilisateur non connecté, agent sans schéma
+    défini (profil_utilisateur_schema vide -- cas par défaut, aucun coût
+    ajouté pour les agents qui n'utilisent pas cette fonctionnalité), ou
+    pas encore assez de nouveaux messages avec CET agent.
+
+    Contrairement à _mettre_a_jour_resume_si_besoin, ne purge PAS les
+    messages bruts de `conversations` -- ce n'est pas son rôle (le résumé
+    mémoire s'en charge déjà, tous agents confondus) ; lire les mêmes
+    lignes deux fois pour deux mécanismes différents ne pose aucun
+    problème tant qu'aucun des deux n'écrit sur les données de l'autre.
+    Ne bloque jamais la réponse à l'utilisateur : toute erreur est juste
+    loguée, jamais remontée à l'appelant.
+    """
+    if not user_id or not agent_id:
+        return
+    schema = _charger_schema_profil(agent_id)
+    if not schema:
+        return
+    try:
+        messages = (
+            supabase.table("conversations")
+            .select("role, content, created_at")
+            .eq("user_id", user_id)
+            .eq("agent_id", agent_id)
+            .order("created_at", desc=True)
+            .limit(SEUIL_PROFIL_MESSAGES)
+            .execute()
+        ).data or []
+
+        if len(messages) < SEUIL_PROFIL_MESSAGES:
+            return  # pas encore assez de matière avec CET agent
+
+        profil_actuel = _charger_profil_utilisateur(agent_id, user_id)
+        messages_recents = "\n".join(
+            f"{'Utilisateur' if m['role'] == 'user' else 'Assistant'} : {m['content']}"
+            for m in reversed(messages)
+        )
+        champs_desc = "\n".join(
+            f"- {c['nom']} : {c.get('description') or '(pas de description)'}" for c in schema
+        )
+
+        prompt_profil = (
+            "Tu extrais des informations factuelles sur un utilisateur à partir d'une "
+            "conversation, selon un schéma précis défini par le créateur de cet agent. "
+            "Réponds UNIQUEMENT avec un objet JSON dont les clés sont EXACTEMENT les "
+            "noms de champs ci-dessous (aucune clé en plus, aucune clé en moins). Pour "
+            "chaque champ, indique la valeur si elle est clairement déductible de la "
+            "conversation, sinon reprends la valeur déjà connue (fournie ci-dessous), "
+            "sinon mets une chaîne vide. N'invente rien, ne devine pas au-delà de ce qui "
+            "est dit ou clairement impliqué.\n\n"
+            f"Champs à extraire :\n{champs_desc}\n\n"
+            f"Valeurs déjà connues (à conserver si rien de nouveau) :\n"
+            f"{json.dumps(profil_actuel, ensure_ascii=False) if profil_actuel else '(aucune)'}\n\n"
+            f"Conversation à analyser :\n{messages_recents}"
+        )
+
+        client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
+        completion = client_groq.chat.completions.create(
+            model=MODELE_PROFIL,
+            messages=[{"role": "user", "content": prompt_profil}],
+            response_format={"type": "json_object"},
+            max_completion_tokens=None,
+            timeout=DELAI_MAX_PAR_APPEL,
+        )
+        brut = completion.choices[0].message.content.strip()
+
+        try:
+            extrait = json.loads(brut)
+        except json.JSONDecodeError:
+            logging.error(
+                f"ERREUR profil utilisateur : réponse non-JSON du modèle "
+                f"(agent={agent_id}, user={user_id}) : {brut[:200]!r}"
+            )
+            return
+
+        if not isinstance(extrait, dict):
+            return
+
+        # Ne garde que les clés du schéma défini (le modèle peut halluciner
+        # des clés en plus malgré la consigne) et jette les valeurs vides
+        # pour ne pas écraser une ancienne valeur connue par du vide.
+        noms_valides = {c["nom"] for c in schema}
+        nouveau_profil = dict(profil_actuel)
+        for cle, valeur in extrait.items():
+            if cle in noms_valides and valeur:
+                nouveau_profil[cle] = valeur
+
+        supabase.table("agent_user_profiles").upsert(
+            {
+                "agent_id": agent_id,
+                "user_id": user_id,
+                "donnees": nouveau_profil,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+            on_conflict="agent_id,user_id",
+        ).execute()
+
+        logging.info(f"Profil utilisateur mis à jour pour agent={agent_id}, user={user_id}.")
+    except Exception as e:
+        logging.error(f"ERREUR mise à jour profil utilisateur (agent={agent_id}, user={user_id}) : {e}")
+
+
 INSTRUCTIONS_LONGUEUR_REPONSE = {
     # Migration Next.js (voir MIGRATION_CHAT_VERS_NEXTJS.md, section 3.3) :
     # sélecteur Courte/Moyenne/Longue dans la barre de saisie, modifiable
@@ -347,15 +516,27 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     system_prompt = get_system_prompt(agent_id)
     candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
     resume_memoire = _charger_resume_memoire(user_id)
+    profil_utilisateur = _charger_profil_utilisateur(agent_id, user_id)
 
     instructions = "".join(f"\n{c['contenu']}\n" for c in candidats.get("prompts", []))
     contexte_docs = "".join(f"\n{c['contenu']}\n" for c in candidats.get("documents", []))
 
-    system_final = system_prompt
+    # get_system_prompt peut renvoyer None (agent sans notion_page_id ni
+    # system_prompt renseigné ET aucun prompt jamais mis en cache avec
+    # succès) -- repli sur "" pour ne pas planter les += qui suivent,
+    # certains inconditionnels (bug repéré le 2026-07-21, jamais déclenché
+    # en pratique jusqu'ici mais bien réel pour un agent mal configuré).
+    system_final = system_prompt or ""
     if resume_memoire:
         system_final += (
             "\n\nCONTEXTE DES SESSIONS PRÉCÉDENTES AVEC CET ÉTUDIANT (résumé, à utiliser "
             f"pour personnaliser ta réponse, ne jamais le réciter tel quel) :\n{resume_memoire}"
+        )
+    if profil_utilisateur:
+        system_final += (
+            "\n\nPROFIL CONNU DE CET UTILISATEUR (rempli automatiquement au fil des "
+            "conversations, à utiliser pour personnaliser ta réponse, ne jamais le "
+            f"réciter tel quel) :\n{json.dumps(profil_utilisateur, ensure_ascii=False)}"
         )
     if instructions:
         system_final += f"\n\n{instructions}"
@@ -391,8 +572,9 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     system_final += f"\n\nNous sommes le {date_fr} (fuseau : {fuseau.key if hasattr(fuseau, 'key') else 'UTC'})."
 
     logging.info(
-        f"Prompt système construit -> base_notion:{len(system_prompt)} caractères, "
+        f"Prompt système construit -> base_notion:{len(system_prompt or '')} caractères, "
         f"memoire:{'oui' if resume_memoire else 'NON'}, "
+        f"profil_utilisateur:{'oui' if profil_utilisateur else 'NON'}, "
         f"instructions:{'oui' if instructions else 'NON'}, "
         f"contexte_docs:{'oui' if contexte_docs else 'NON'}"
     )
@@ -972,6 +1154,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
             if ids_historique:
                 yield {"type": "meta", **ids_historique}
             _mettre_a_jour_resume_si_besoin(user_id)
+            _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id)
         except Exception as e:
             logging.error(f"ERREUR GEMINI (image): {e}")
             if not reponse_accumulee:
@@ -1008,6 +1191,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
             if ids_historique:
                 yield {"type": "meta", **ids_historique}
             _mettre_a_jour_resume_si_besoin(user_id)
+            _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id)
             return
         except Exception as e:
             if not _est_timeout(e):
@@ -1039,6 +1223,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 if ids_historique:
                     yield {"type": "meta", **ids_historique}
                 _mettre_a_jour_resume_si_besoin(user_id)
+                _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id)
                 return
             except Exception as e:
                 if not _est_timeout(e):
@@ -1073,6 +1258,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
             if ids_historique:
                 yield {"type": "meta", **ids_historique}
             _mettre_a_jour_resume_si_besoin(user_id)
+            _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id)
             return
         except Exception as e:
             if not _est_timeout(e):
