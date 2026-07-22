@@ -1,19 +1,25 @@
 """
-Synthèse vocale (TTS) via Groq / Orpheus (Canopy Labs).
+Synthèse vocale (TTS) -- DEUX fournisseurs, même logique que
+generation_images.py (Pollinations/Together) :
 
-Particularité par rapport à generation_images.py et
-generation_signature.py : la clé nécessaire (GROQ_API_KEY) existe DÉJÀ
-dans ce projet, utilisée pour le chat lui-même. Gater cette
-fonctionnalité par "la clé existe" ne marcherait donc pas -- elle
-existerait toujours. Le gate est un interrupteur dédié,
-AUDIO_TTS_ACTIF, qui doit être mis explicitement à "true" par Bourama :
-la présence de GROQ_API_KEY pour le chat n'implique PAS un budget ou un
-accord pour générer de l'audio en plus.
+1. Kokoro-82M via Hugging Face (router.huggingface.co), GRATUIT :
+   nécessite un compte Hugging Face (gratuit, sans carte bancaire) et
+   un token (HF_API_TOKEN) -- pas totalement "sans rien" comme
+   Pollinations pour les images, mais gratuit. Modèle open-source
+   (Apache 2.0), qualité proche d'ElevenLabs selon TTS Arena. Utilisé
+   PAR DÉFAUT si HF_API_TOKEN est configurée.
 
-Modèle utilisé : canopylabs/orpheus-v1-english (statut "Preview" chez
-Groq en date du 20/07/2026 -- à surveiller si Groq le fait évoluer).
-~22$/million de caractères, à comparer aux ~0,003$/image pour donner un
-ordre de grandeur du budget avant d'activer.
+2. Groq / Orpheus, payant (~22$/million de caractères) : utilisé
+   UNIQUEMENT si AUDIO_TTS_ACTIF="true" ET GROQ_API_KEY présente
+   (déjà là pour le chat, mais gatée par un interrupteur dédié -- voir
+   ancienne version de ce fichier). Meilleure latence/fiabilité pour
+   un usage à volume.
+
+Si aucune des deux clés n'est configurée : indisponible, comme avant.
+
+NON TESTÉ EN CONDITIONS RÉELLES pour le chemin Hugging Face (domaine
+non accessible depuis l'environnement de développement, 21/07/2026) --
+à vérifier au premier vrai test.
 """
 
 import logging
@@ -25,7 +31,8 @@ import requests
 from api.auth import supabase
 
 BUCKET = "generations"
-MODELE = "canopylabs/orpheus-v1-english"
+MODELE_GROQ = "canopylabs/orpheus-v1-english"
+MODELE_HF = "hexgrad/Kokoro-82M"
 VOIX_PAR_DEFAUT = "austin"
 
 
@@ -37,43 +44,62 @@ def _get_secret(cle):
         return os.environ.get(cle)
 
 
-def audio_disponible() -> bool:
-    """
-    Contrairement aux autres modules generation_*.py : vérifie un
-    interrupteur dédié (AUDIO_TTS_ACTIF="true"), PAS seulement la
-    présence de GROQ_API_KEY (qui existe déjà pour le chat, donc ne
-    peut pas servir de gate ici).
-    """
+def _groq_actif() -> bool:
     interrupteur = (_get_secret("AUDIO_TTS_ACTIF") or "").strip().lower() == "true"
     return interrupteur and bool(_get_secret("GROQ_API_KEY"))
 
 
-def generer_audio(texte: str, voix: str = VOIX_PAR_DEFAUT) -> str:
-    """
-    Convertit du texte en audio (.wav) via Groq/Orpheus, uploade dans
-    Supabase Storage, renvoie l'URL publique.
+def audio_disponible() -> bool:
+    return bool(_get_secret("HF_API_TOKEN")) or _groq_actif()
 
-    `texte` peut inclure des indications vocales entre crochets (ex:
-    "[cheerful] Bienvenue !") supportées nativement par Orpheus.
-    """
-    cle = _get_secret("GROQ_API_KEY")
-    if not audio_disponible():
-        raise RuntimeError(
-            "Génération audio indisponible : AUDIO_TTS_ACTIF n'est pas activé, "
-            "ou GROQ_API_KEY absente."
-        )
 
+def _generer_via_huggingface(texte: str) -> bytes:
+    token = _get_secret("HF_API_TOKEN")
     reponse = requests.post(
-        "https://api.groq.com/openai/v1/audio/speech",
-        headers={"Authorization": f"Bearer {cle}", "Content-Type": "application/json"},
-        json={"model": MODELE, "input": texte, "voice": voix, "response_format": "wav"},
+        f"https://router.huggingface.co/hf-inference/models/{MODELE_HF}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"text_inputs": texte},
         timeout=60,
     )
     reponse.raise_for_status()
+    return reponse.content
+
+
+def _generer_via_groq(texte: str, voix: str) -> bytes:
+    cle = _get_secret("GROQ_API_KEY")
+    reponse = requests.post(
+        "https://api.groq.com/openai/v1/audio/speech",
+        headers={"Authorization": f"Bearer {cle}", "Content-Type": "application/json"},
+        json={"model": MODELE_GROQ, "input": texte, "voice": voix, "response_format": "wav"},
+        timeout=60,
+    )
+    reponse.raise_for_status()
+    return reponse.content
+
+
+def generer_audio(texte: str, voix: str = VOIX_PAR_DEFAUT) -> str:
+    """
+    Utilise Groq/Orpheus si explicitement activé (AUDIO_TTS_ACTIF=true,
+    payant, meilleure latence), sinon Hugging Face/Kokoro (gratuit,
+    nécessite juste HF_API_TOKEN). Uploade dans Supabase Storage,
+    renvoie l'URL publique.
+
+    `voix` n'est utilisé que par le chemin Groq -- Kokoro utilise sa
+    propre voix par défaut côté Hugging Face.
+    """
+    if _groq_actif():
+        audio_bytes = _generer_via_groq(texte, voix)
+    elif _get_secret("HF_API_TOKEN"):
+        audio_bytes = _generer_via_huggingface(texte)
+    else:
+        raise RuntimeError(
+            "Génération audio indisponible : ni HF_API_TOKEN (gratuit) ni "
+            "AUDIO_TTS_ACTIF+GROQ_API_KEY (payant) ne sont configurés."
+        )
 
     chemin = f"audio/{uuid.uuid4()}.wav"
     try:
-        supabase.storage.from_(BUCKET).upload(chemin, reponse.content, {"content-type": "audio/wav"})
+        supabase.storage.from_(BUCKET).upload(chemin, audio_bytes, {"content-type": "audio/wav"})
     except Exception as e:
         logging.error(f"ERREUR SUPABASE STORAGE (upload audio {chemin}) : {e}")
         raise

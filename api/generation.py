@@ -215,14 +215,9 @@ def generer_audio_route(demande: DemandeAudio, utilisateur=Depends(utilisateur_c
 
 @router.post("/image", response_model=ReponseGeneration)
 def generer_image_route(demande: DemandeImage, utilisateur=Depends(utilisateur_courant)):
-    if not image_generation_disponible():
-        # 503 (pas 500) : signale explicitement au frontend "fonctionnalité
-        # pas encore activée", à distinguer d'une vraie panne -- voir
-        # BarreDeSaisie.tsx pour l'affichage "bientôt disponible" attendu.
-        raise HTTPException(
-            status_code=503,
-            detail="La génération d'image n'est pas encore activée sur cette plateforme.",
-        )
+    # Plus de check "disponible" ici : generer_image() gère elle-même le
+    # choix Pollinations (gratuit)/Together AI (payant) en interne, voir
+    # generation_images.py. Toujours actif.
     try:
         url = generer_image(demande.prompt)
     except Exception as e:

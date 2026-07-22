@@ -29,15 +29,17 @@ cairo, GDK-Pixbuf), pas seulement du package Python. Sur Railway
 (`pip install weasyprint --break-system-packages` puis un essai simple)
 avant de déployer, pour isoler l'erreur si ça casse.
 
-## 4. Génération d'images (payant, en attente de budget)
+## 4. Génération d'images (ACTIF DÈS MAINTENANT, gratuit par défaut)
 
-Ajoute simplement `TOGETHER_API_KEY` dans les variables d'environnement
-Railway. Rien d'autre à changer : `image_generation_disponible()`
-(core/generation_images.py) la détecte automatiquement au prochain
-démarrage du process, et l'outil `generer_image` apparaît alors tout
-seul dans la liste proposée à l'agent, plus le bouton frontend cesse de
-renvoyer "pas encore disponible" (une fois le frontend branché --
-prochaine étape, pas encore fait).
+Depuis le 21/07/2026 : Pollinations.ai (gratuit, sans clé) est utilisé
+par défaut, donc `generer_image` fonctionne déjà, sans rien à
+configurer. Si tu ajoutes `TOGETHER_API_KEY` plus tard (~0,003$/image),
+le code bascule automatiquement vers Together AI (meilleure qualité/
+fiabilité), sans rien à changer dans le code.
+
+**Non testé en conditions réelles** (Pollinations n'était pas
+accessible depuis l'environnement de développement, restriction de
+bac à sable) : à vérifier au premier vrai test, comme d'habitude.
 
 ## 5. Signature électronique (gratuit jusqu'à 5/mois, aucune urgence budget)
 
@@ -50,22 +52,23 @@ maintenant :
 Même détection automatique que pour Together AI (`signature_disponible()`
 dans core/generation_signature.py).
 
-## 6. Audio / synthèse vocale (via Groq, clé déjà présente -- interrupteur séparé)
+## 6. Audio / synthèse vocale (Kokoro gratuit par défaut, Groq payant en option)
 
-Contrairement aux autres fonctionnalités, `GROQ_API_KEY` existe déjà
-dans ce projet (utilisée pour le chat). Le gate n'est donc PAS la
-présence de la clé, mais un interrupteur dédié à ajouter dans les
-variables d'environnement Railway :
+Depuis le 21/07/2026, deux chemins possibles :
 
-```
-AUDIO_TTS_ACTIF=true
-```
+**Gratuit (par défaut si configuré)** : Kokoro-82M via Hugging Face.
+1. Crée un compte gratuit sur huggingface.co (aucune carte bancaire)
+2. Génère un token : Settings -> Access Tokens -> New token
+3. Ajoute `HF_API_TOKEN` dans les variables d'environnement Railway
 
-Tant que cette variable n'existe pas (ou vaut autre chose que "true"),
-`audio_disponible()` (core/generation_audio.py) renvoie False, même si
-GROQ_API_KEY est déjà là pour le chat. Coût indicatif : ~22$/million de
-caractères (modèle Orpheus, statut "Preview" chez Groq au 20/07/2026),
-à comparer aux ~0,003$/image pour Together AI.
+**Payant (optionnel, meilleure latence)** : Groq/Orpheus, ~22$/million
+de caractères. Ajoute `AUDIO_TTS_ACTIF=true` (GROQ_API_KEY existe déjà
+pour le chat). Si les deux sont configurés, Groq est utilisé en
+priorité (meilleure fiabilité), Hugging Face reste le repli.
+
+**Non testé en conditions réelles** pour le chemin Hugging Face (accès
+au domaine bloqué depuis l'environnement de développement) : à
+vérifier au premier vrai test.
 
 ## 7. Vidéo (le plus cher de loin -- à activer en dernier)
 
