@@ -181,9 +181,20 @@ def _lire_url(url):
         # de trafilatura reste raisonnable, pas besoin de le personnaliser.
         telechargement = trafilatura.fetch_url(url)
         if not telechargement:
+            # Échec SILENCIEUX auparavant (aucun log) -- cas exact vécu le
+            # 2026-07-20 : impossible de distinguer depuis les logs si le
+            # lien a été bloqué (ex: 429, comme YouTube l'a fait à Claude
+            # directement lors du diagnostic), jamais tenté, ou un autre
+            # souci. trafilatura n'expose pas le code HTTP ici (fetch_url
+            # avale l'erreur en interne), donc on log au moins le fait
+            # qu'un téléchargement a été tenté et a échoué.
+            logging.warning(f"LECTURE URL ECHOUEE (telechargement vide, ex: bloqué/429/timeout) : {url}")
             return None
         texte = trafilatura.extract(telechargement)
-        return texte[:LONGUEUR_MAX_TEXTE_URL] if texte else None
+        if not texte:
+            logging.warning(f"LECTURE URL ECHOUEE (page téléchargée mais aucun texte extrait, ex: page vide/JS-only) : {url}")
+            return None
+        return texte[:LONGUEUR_MAX_TEXTE_URL]
     except Exception as e:
         logging.error(f"ERREUR LECTURE URL ({url}): {e}")
         return None
@@ -203,6 +214,8 @@ def _enrichir_message_avec_urls(message):
     if not urls:
         return message
 
+    logging.info(f"LIEN(S) DETECTE(S) DANS LE MESSAGE : {urls[:3]}")
+
     blocs = []
     for url in urls[:3]:  # au plus 3 liens par message, pour le temps de réponse
         contenu = _lire_url(url)
@@ -210,6 +223,7 @@ def _enrichir_message_avec_urls(message):
             blocs.append(f"[Contenu de {url}]\n{contenu}")
 
     if not blocs:
+        logging.warning(f"AUCUN LIEN EXPLOITE sur {len(urls[:3])} détecté(s) -- message envoyé sans enrichissement : {urls[:3]}")
         return message
 
     return message + "\n\n" + "\n\n".join(blocs)
@@ -292,7 +306,11 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "- ```carte avec un JSON {\"lat\": ..., \"lng\": ..., \"label\"?: \"...\"} pour "
     "localiser un lieu (tu connais les coordonnées des lieux courants).\n"
     "- ```widget ou ```html avec du HTML/CSS/JS complet et autonome pour un mini-outil "
-    "interactif (calculateur, formulaire, mini-jeu).\n"
+    "interactif (calculateur, formulaire, mini-jeu). Le fond est déjà sombre par défaut "
+    "(assorti au reste de l'interface) : ne redéfinis PAS un fond clair/blanc pour tout "
+    "le widget sauf besoin réel, et si tu le fais, redéfinis AUSSI la couleur du texte en "
+    "conséquence -- sinon le texte clair hérité du thème sombre devient illisible sur fond "
+    "clair (repéré en test réel : carte blanche avec texte quasi invisible).\n"
     "RÈGLE ABSOLUE, sans exception : n'utilise JAMAIS ![alt](url) (image markdown) "
     "avec une URL que tu inventes ou que tu crois plausible sans l'avoir obtenue "
     "d'un outil réel dans cette conversation. N'invente jamais non plus une "
