@@ -52,23 +52,23 @@ maintenant :
 Même détection automatique que pour Together AI (`signature_disponible()`
 dans core/generation_signature.py).
 
-## 6. Audio / synthèse vocale (Kokoro gratuit par défaut, Groq payant en option)
+## 6. Audio / synthèse vocale (speecht5_tts gratuit par défaut, Groq payant en option)
 
-Depuis le 21/07/2026, deux chemins possibles :
+Depuis le 21/07/2026 (corrigé le 22/07/2026 après un premier échec en
+test réel avec Kokoro, qui n'est pas déployé sur l'infra Hugging Face),
+deux chemins possibles :
 
-**Gratuit (par défaut si configuré)** : Kokoro-82M via Hugging Face.
+**Gratuit (par défaut si configuré)** : microsoft/speecht5_tts via
+Hugging Face -- le modèle que HF documente eux-mêmes comme exemple
+officiel pour leur infra gratuite (donc confirmé fonctionnel).
 1. Crée un compte gratuit sur huggingface.co (aucune carte bancaire)
 2. Génère un token : Settings -> Access Tokens -> New token
 3. Ajoute `HF_API_TOKEN` dans les variables d'environnement Railway
 
-**Payant (optionnel, meilleure latence)** : Groq/Orpheus, ~22$/million
-de caractères. Ajoute `AUDIO_TTS_ACTIF=true` (GROQ_API_KEY existe déjà
-pour le chat). Si les deux sont configurés, Groq est utilisé en
-priorité (meilleure fiabilité), Hugging Face reste le repli.
-
-**Non testé en conditions réelles** pour le chemin Hugging Face (accès
-au domaine bloqué depuis l'environnement de développement) : à
-vérifier au premier vrai test.
+**Payant (optionnel, meilleure latence/qualité)** : Groq/Orpheus, ~22$/
+million de caractères. Ajoute `AUDIO_TTS_ACTIF=true` (GROQ_API_KEY
+existe déjà pour le chat). Si les deux sont configurés, Groq est
+utilisé en priorité, Hugging Face reste le repli.
 
 ## 7. Vidéo (le plus cher de loin -- à activer en dernier)
 
