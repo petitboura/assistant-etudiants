@@ -2,12 +2,18 @@
 Synthèse vocale (TTS) -- DEUX fournisseurs, même logique que
 generation_images.py (Pollinations/Together) :
 
-1. Kokoro-82M via Hugging Face (router.huggingface.co), GRATUIT :
-   nécessite un compte Hugging Face (gratuit, sans carte bancaire) et
-   un token (HF_API_TOKEN) -- pas totalement "sans rien" comme
-   Pollinations pour les images, mais gratuit. Modèle open-source
-   (Apache 2.0), qualité proche d'ElevenLabs selon TTS Arena. Utilisé
-   PAR DÉFAUT si HF_API_TOKEN est configurée.
+1. microsoft/speecht5_tts via Hugging Face (router.huggingface.co),
+   GRATUIT : nécessite un compte Hugging Face (gratuit, sans carte
+   bancaire) et un token (HF_API_TOKEN). Utilisé PAR DÉFAUT si
+   HF_API_TOKEN est configurée.
+
+   CORRECTIF du 22/07/2026 : le plan initial utilisait Kokoro-82M, qui
+   a échoué en test réel avec une erreur 403 -- Kokoro n'est en fait
+   PAS déployé sur l'infrastructure d'inférence de Hugging Face (ni
+   gratuite ni payante), voir la doc HF/discussions communautaires.
+   speecht5_tts est le modèle que HF documente eux-mêmes comme exemple
+   officiel pour hf-inference (donc confirmé "warm"/servi), qualité
+   moindre que Kokoro mais réellement fonctionnel.
 
 2. Groq / Orpheus, payant (~22$/million de caractères) : utilisé
    UNIQUEMENT si AUDIO_TTS_ACTIF="true" ET GROQ_API_KEY présente
@@ -16,10 +22,6 @@ generation_images.py (Pollinations/Together) :
    un usage à volume.
 
 Si aucune des deux clés n'est configurée : indisponible, comme avant.
-
-NON TESTÉ EN CONDITIONS RÉELLES pour le chemin Hugging Face (domaine
-non accessible depuis l'environnement de développement, 21/07/2026) --
-à vérifier au premier vrai test.
 """
 
 import logging
@@ -32,7 +34,7 @@ from api.auth import supabase
 
 BUCKET = "generations"
 MODELE_GROQ = "canopylabs/orpheus-v1-english"
-MODELE_HF = "hexgrad/Kokoro-82M"
+MODELE_HF = "microsoft/speecht5_tts"
 VOIX_PAR_DEFAUT = "austin"
 
 
@@ -80,12 +82,12 @@ def _generer_via_groq(texte: str, voix: str) -> bytes:
 def generer_audio(texte: str, voix: str = VOIX_PAR_DEFAUT) -> str:
     """
     Utilise Groq/Orpheus si explicitement activé (AUDIO_TTS_ACTIF=true,
-    payant, meilleure latence), sinon Hugging Face/Kokoro (gratuit,
-    nécessite juste HF_API_TOKEN). Uploade dans Supabase Storage,
-    renvoie l'URL publique.
+    payant, meilleure latence), sinon Hugging Face/speecht5_tts
+    (gratuit, nécessite juste HF_API_TOKEN). Uploade dans Supabase
+    Storage, renvoie l'URL publique.
 
-    `voix` n'est utilisé que par le chemin Groq -- Kokoro utilise sa
-    propre voix par défaut côté Hugging Face.
+    `voix` n'est utilisé que par le chemin Groq -- speecht5_tts utilise
+    sa propre voix par défaut côté Hugging Face.
     """
     if _groq_actif():
         audio_bytes = _generer_via_groq(texte, voix)
