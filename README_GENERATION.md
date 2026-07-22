@@ -52,22 +52,23 @@ maintenant :
 Même détection automatique que pour Together AI (`signature_disponible()`
 dans core/generation_signature.py).
 
-## 6. Audio / synthèse vocale (via Groq, clé déjà présente -- interrupteur séparé)
+## 6. Audio / synthèse vocale (Kokoro gratuit par défaut, Groq payant en option)
 
-Contrairement aux autres fonctionnalités, `GROQ_API_KEY` existe déjà
-dans ce projet (utilisée pour le chat). Le gate n'est donc PAS la
-présence de la clé, mais un interrupteur dédié à ajouter dans les
-variables d'environnement Railway :
+Depuis le 21/07/2026, deux chemins possibles :
 
-```
-AUDIO_TTS_ACTIF=true
-```
+**Gratuit (par défaut si configuré)** : Kokoro-82M via Hugging Face.
+1. Crée un compte gratuit sur huggingface.co (aucune carte bancaire)
+2. Génère un token : Settings -> Access Tokens -> New token
+3. Ajoute `HF_API_TOKEN` dans les variables d'environnement Railway
 
-Tant que cette variable n'existe pas (ou vaut autre chose que "true"),
-`audio_disponible()` (core/generation_audio.py) renvoie False, même si
-GROQ_API_KEY est déjà là pour le chat. Coût indicatif : ~22$/million de
-caractères (modèle Orpheus, statut "Preview" chez Groq au 20/07/2026),
-à comparer aux ~0,003$/image pour Together AI.
+**Payant (optionnel, meilleure latence)** : Groq/Orpheus, ~22$/million
+de caractères. Ajoute `AUDIO_TTS_ACTIF=true` (GROQ_API_KEY existe déjà
+pour le chat). Si les deux sont configurés, Groq est utilisé en
+priorité (meilleure fiabilité), Hugging Face reste le repli.
+
+**Non testé en conditions réelles** pour le chemin Hugging Face (accès
+au domaine bloqué depuis l'environnement de développement) : à
+vérifier au premier vrai test.
 
 ## 7. Vidéo (le plus cher de loin -- à activer en dernier)
 
