@@ -16,9 +16,10 @@ import os
 import sys
 import logging
 import tempfile
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, supabase, get_secret
@@ -29,6 +30,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "indexers"))
 from creation_agent import generer_id_depuis_nom, extraire_id_notion, composer_system_prompt  # noqa: E402
 from index_documents import indexer_texte, indexer_document, supprimer_chunks_existants  # noqa: E402
 from storage import upload_document, list_documents, delete_document, get_document_url  # noqa: E402
+from bibliotheque_fichiers import enregistrer_fichier, lister_fichiers, supprimer_fichier  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
@@ -38,6 +40,20 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 class LigneComportement(BaseModel):
     type_requete: str = ""
     comportement: str = ""
+
+
+class ChampProfilUtilisateur(BaseModel):
+    """
+    Un champ du profil dynamique que le créateur veut suivre chez les
+    personnes qui parlent à SON agent (demande Bourama, 2026-07-21) --
+    pas un schéma imposé pour toute la plateforme : chaque agent a le
+    sien, vide par défaut (fonctionnalité désactivée tant qu'aucun champ
+    n'est défini). `description` guide le modèle lors de l'extraction
+    automatique (voir _mettre_a_jour_profil_utilisateur_si_besoin dans
+    core/main.py) : plus elle est précise, meilleure est l'extraction.
+    """
+    nom: str
+    description: str = ""
 
 
 class UiConfig(BaseModel):
@@ -101,6 +117,9 @@ class CreerAgentPayload(BaseModel):
     # ne pas laisser un agent sans aucun sous-titre si le créateur ne
     # remplit pas ce nouveau champ.
     sous_titre: str = ""
+    # Profil utilisateur dynamique par agent (2026-07-21) : vide par défaut,
+    # voir ChampProfilUtilisateur.
+    profil_utilisateur_schema: List[ChampProfilUtilisateur] = Field(default_factory=list)
 
 
 class AgentCree(BaseModel):
@@ -215,6 +234,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         "image_vitrine_url": payload.image_vitrine_url,
         "description": payload.description.strip(),
         "categorie_id": payload.categorie_id,
+        "profil_utilisateur_schema": [c.model_dump() for c in payload.profil_utilisateur_schema],
         # Colonne ajoutée le 2026-07-12 (Bourama : le formulaire de
         # modification doit contenir tous les champs de la création).
         # composer_system_prompt() fusionne ces champs puis les jette —
@@ -481,6 +501,7 @@ class AgentEditable(BaseModel):
     placeholder_saisie: str = "Pose ta question..."
     actif: bool = True
     categorie_id: Optional[str] = None
+    profil_utilisateur_schema: List[ChampProfilUtilisateur] = Field(default_factory=list)
 
 
 @router.get("/{agent_id}/edition", response_model=AgentEditable)
@@ -499,7 +520,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id, categorie_id"
+                "actif, owner_id, categorie_id, profil_utilisateur_schema"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -535,6 +556,9 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         ),
         actif=ligne.get("actif", True),
         categorie_id=ligne.get("categorie_id"),
+        profil_utilisateur_schema=[
+            ChampProfilUtilisateur(**c) for c in (ligne.get("profil_utilisateur_schema") or [])
+        ],
     )
 
 
@@ -568,6 +592,7 @@ class ModifierAgentPayload(BaseModel):
     description: Optional[str] = None
     actif: Optional[bool] = None
     categorie_id: Optional[str] = None
+    profil_utilisateur_schema: Optional[List[ChampProfilUtilisateur]] = None
 
 
 @router.patch("/{agent_id}", response_model=AgentEditable)
@@ -593,7 +618,7 @@ def modifier_agent(
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id, categorie_id"
+                "actif, owner_id, categorie_id, profil_utilisateur_schema"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -743,6 +768,10 @@ def modifier_agent(
         mise_a_jour["image_vitrine_url"] = payload.image_vitrine_url
     if payload.description is not None:
         mise_a_jour["description"] = payload.description.strip()
+    if payload.profil_utilisateur_schema is not None:
+        mise_a_jour["profil_utilisateur_schema"] = [
+            c.model_dump() for c in payload.profil_utilisateur_schema
+        ]
     if payload.actif is not None:
         mise_a_jour["actif"] = payload.actif
     if payload.categorie_id is not None:
@@ -995,6 +1024,159 @@ def supprimer_document(agent_id: str, nom_stockage: str, request: Request, utili
         cible_type="agent",
         cible_id=agent_id,
         details={"nom_stockage": nom_stockage},
+        request=request,
+    )
+
+
+TYPES_BIBLIOTHEQUE_AUTORISES = {
+    "application/pdf",
+    "image/jpeg", "image/png", "image/webp",
+    "audio/mpeg", "audio/wav", "audio/ogg", "audio/mp4",
+    "video/mp4", "video/webm", "video/quicktime",
+}
+TAILLE_MAX_BIBLIOTHEQUE_OCTETS = 50 * 1024 * 1024  # 50 Mo
+
+
+@router.post("/{agent_id}/bibliotheque", status_code=201)
+async def uploader_fichier_bibliotheque(
+    agent_id: str,
+    request: Request,
+    fichier: UploadFile = File(...),
+    titre: str = Form(None),
+    description: str = Form(None),
+    utilisateur=Depends(utilisateur_courant),
+):
+    """
+    Bibliothèque du créateur pour CET agent (niveau="agent", voir
+    core/bibliotheque_fichiers.py) : n'importe quel type de fichier
+    (image/audio/vidéo/PDF...), avec une description donnée par le
+    créateur pour que l'IA sache le retrouver via chercher_fichier
+    -- le titre est optionnel (juste un intitulé court), c'est la
+    description qui compte vraiment pour la recherche (2026-07-22,
+    demande de Bourama : la description prime sur le titre).
+
+    Cas particulier du PDF : en plus d'être stocké brut dans la
+    bibliothèque (comme tout le reste), il est AUSSI vectorisé dans le
+    circuit RAG existant (indexer_document), exactement comme le faisait
+    déjà POST /{agent_id}/documents ci-dessus -- cette route ne remplace
+    pas l'ancienne (toujours utilisée par le frontend existant), elle
+    généralise le même geste à tous les types de fichiers.
+    """
+    if not (titre or "").strip() and not (description or "").strip():
+        raise HTTPException(status_code=400, detail="Donne au moins une description ou un titre.")
+
+    if fichier.content_type not in TYPES_BIBLIOTHEQUE_AUTORISES:
+        raise HTTPException(status_code=400, detail="Type de fichier non supporté.")
+
+    try:
+        res = (
+            supabase.table("agents")
+            .select("id, owner_id")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant upload bibliothèque) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible d'ajouter ce fichier pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+    if res.data["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    contenu = await fichier.read()
+    if len(contenu) == 0:
+        raise HTTPException(status_code=400, detail="Fichier vide.")
+    if len(contenu) > TAILLE_MAX_BIBLIOTHEQUE_OCTETS:
+        raise HTTPException(status_code=400, detail="Fichier trop lourd (50 Mo max).")
+
+    nom_original = fichier.filename or "fichier"
+
+    if fichier.content_type == "application/pdf":
+        nom_stockage_rag = f"{agent_id}__{nom_original}"
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(contenu)
+            chemin_temp = tmp.name
+        try:
+            upload_document(chemin_temp, nom_stockage_rag)
+            indexer_document(chemin_temp, nom_stockage_rag, agent_id)
+        except Exception as e:
+            logging.error(f"ERREUR vectorisation PDF bibliothèque (agent_id={agent_id}, fichier={nom_original}) : {e}")
+            raise HTTPException(status_code=500, detail=f"« {nom_original} » n'a pas pu être vectorisé.")
+        finally:
+            try:
+                os.remove(chemin_temp)
+            except OSError:
+                pass
+
+    description_finale = (
+        f"{titre.strip()} — {description.strip()}" if (titre or "").strip() and (description or "").strip()
+        else (description or titre or "").strip()
+    )
+
+    try:
+        ligne = enregistrer_fichier(
+            contenu=contenu,
+            nom_fichier=nom_original,
+            type_mime=fichier.content_type,
+            niveau="agent",
+            uploade_par=utilisateur.id,
+            agent_id=agent_id,
+            description=description_finale,
+        )
+    except Exception:
+        raise HTTPException(status_code=500, detail="Fichier vectorisé mais échec du stockage en bibliothèque.")
+
+    journaliser(
+        action="bibliotheque.ajoute",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"description": description_finale, "type_mime": fichier.content_type},
+        request=request,
+    )
+
+    return ligne
+
+
+@router.get("/{agent_id}/bibliotheque")
+def lister_bibliotheque(agent_id: str, utilisateur=Depends(utilisateur_courant)):
+    try:
+        res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant liste bibliothèque) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de lister la bibliothèque pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+    if res.data["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    return lister_fichiers("agent", agent_id=agent_id)
+
+
+@router.delete("/{agent_id}/bibliotheque/{fichier_id}", status_code=204)
+def supprimer_fichier_bibliotheque(agent_id: str, fichier_id: str, request: Request, utilisateur=Depends(utilisateur_courant)):
+    try:
+        res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant suppression bibliothèque) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de supprimer ce fichier pour le moment.")
+
+    if not res or not res.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+    if res.data["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    supprimer_fichier(fichier_id)
+
+    journaliser(
+        action="bibliotheque.supprime",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"fichier_id": fichier_id},
         request=request,
     )
 
@@ -1274,5 +1456,150 @@ def supprimer_agent(agent_id: str, request: Request, utilisateur=Depends(utilisa
         cible_type="agent",
         cible_id=agent_id,
         details={"nom": res.data.get("nom")},
+        request=request,
+    )
+
+
+class MonProfilAgent(BaseModel):
+    """
+    Vue du profil dynamique CÔTÉ UTILISATEUR FINAL (pas le créateur) :
+    quels champs cet agent suit (`champs`, défini par le créateur, lecture
+    seule ici) et ce qui a été retenu sur MOI par cet agent (`donnees`,
+    modifiable). Ne pas confondre avec AgentEditable/api/profiles.py qui
+    concernent le créateur -- voir clarification du 2026-07-21.
+    """
+    champs: List[ChampProfilUtilisateur]
+    donnees: dict
+
+
+class ModifierMonProfilPayload(BaseModel):
+    donnees: dict
+
+
+@router.get("/{agent_id}/mon-profil", response_model=MonProfilAgent)
+def obtenir_mon_profil(agent_id: str, utilisateur=Depends(utilisateur_courant)):
+    """
+    Ajouté le 2026-07-21 (demande Bourama : l'utilisateur final doit
+    pouvoir voir/modifier ce que l'IA a retenu sur lui, pas seulement le
+    créateur qui définit le schéma). Aucune vérification de propriété :
+    n'importe quel utilisateur connecté peut voir SON PROPRE profil pour
+    n'importe quel agent, ça ne concerne que lui.
+    """
+    try:
+        res_agent = (
+            supabase.table("agents")
+            .select("profil_utilisateur_schema")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture schéma profil agent={agent_id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger le profil pour le moment.")
+
+    if not res_agent or not res_agent.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+
+    champs = res_agent.data.get("profil_utilisateur_schema") or []
+
+    try:
+        res_profil = (
+            supabase.table("agent_user_profiles")
+            .select("donnees")
+            .eq("agent_id", agent_id)
+            .eq("user_id", utilisateur.id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(
+            f"ERREUR SUPABASE (lecture agent_user_profiles agent={agent_id}, user={utilisateur.id}) : {e}"
+        )
+        raise HTTPException(status_code=500, detail="Impossible de charger le profil pour le moment.")
+
+    donnees = (res_profil.data or {}).get("donnees") or {} if res_profil else {}
+
+    return MonProfilAgent(
+        champs=[ChampProfilUtilisateur(**c) for c in champs],
+        donnees=donnees,
+    )
+
+
+@router.patch("/{agent_id}/mon-profil", status_code=204)
+def modifier_mon_profil(
+    agent_id: str, payload: ModifierMonProfilPayload, request: Request, utilisateur=Depends(utilisateur_courant)
+):
+    """
+    Correction manuelle par l'utilisateur (l'IA s'est trompée, ou il veut
+    préciser lui-même sans attendre l'extraction automatique). Ne garde
+    que les clés présentes dans le schéma défini par le créateur -- pas
+    de valeurs arbitraires en base, même écrites par l'utilisateur
+    lui-même (le créateur reste seul décisionnaire de CE QUI est suivi,
+    pas de CE QUE ça vaut).
+    """
+    try:
+        res_agent = (
+            supabase.table("agents")
+            .select("profil_utilisateur_schema")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture schéma profil agent={agent_id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le profil pour le moment.")
+
+    if not res_agent or not res_agent.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+
+    noms_valides = {c["nom"] for c in (res_agent.data.get("profil_utilisateur_schema") or [])}
+    donnees_filtrees = {k: v for k, v in payload.donnees.items() if k in noms_valides}
+
+    try:
+        supabase.table("agent_user_profiles").upsert(
+            {
+                "agent_id": agent_id,
+                "user_id": utilisateur.id,
+                "donnees": donnees_filtrees,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+            on_conflict="agent_id,user_id",
+        ).execute()
+    except Exception as e:
+        logging.error(
+            f"ERREUR SUPABASE (upsert agent_user_profiles agent={agent_id}, user={utilisateur.id}) : {e}"
+        )
+        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le profil pour le moment.")
+
+    journaliser(
+        action="profil_utilisateur.modifie_par_user",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        request=request,
+    )
+
+
+@router.delete("/{agent_id}/mon-profil", status_code=204)
+def effacer_mon_profil(agent_id: str, request: Request, utilisateur=Depends(utilisateur_courant)):
+    """
+    Remet le profil à zéro pour cet agent (pas de suppression de compte,
+    juste "oublie ce que tu sais de moi sur cet agent précis").
+    """
+    try:
+        supabase.table("agent_user_profiles").delete().eq("agent_id", agent_id).eq(
+            "user_id", utilisateur.id
+        ).execute()
+    except Exception as e:
+        logging.error(
+            f"ERREUR SUPABASE (delete agent_user_profiles agent={agent_id}, user={utilisateur.id}) : {e}"
+        )
+        raise HTTPException(status_code=500, detail="Impossible d'effacer le profil pour le moment.")
+
+    journaliser(
+        action="profil_utilisateur.efface_par_user",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
         request=request,
     )

@@ -17,12 +17,16 @@ import logging
 import uuid
 import base64
 import os
+import sys
 import subprocess
 import tempfile
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from api.auth import supabase, utilisateur_courant, get_secret
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
+from bibliotheque_fichiers import enregistrer_fichier, indexer_fichier_existant  # noqa: E402
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
@@ -127,6 +131,28 @@ async def uploader_image_chat(
         raise HTTPException(status_code=500, detail="Échec de l'upload, réessaie.")
 
     url = supabase.storage.from_(BUCKET).get_public_url(chemin)
+
+    # Persistance bibliothèque (2026-07-22, demande de Bourama : un
+    # fichier uploadé par un utilisateur en chat ne doit plus être
+    # "utilisé une fois puis perdu" -- l'IA doit pouvoir le retrouver
+    # plus tard via chercher_fichier). Best-effort : un souci d'indexation
+    # ne doit jamais empêcher l'upload lui-même de réussir (Gemini a déjà
+    # ce dont il a besoin, l'url, à ce stade).
+    try:
+        indexer_fichier_existant(
+            url_publique=url,
+            chemin_stockage=chemin,
+            nom_fichier=fichier.filename or "image.jpg",
+            type_mime=fichier.content_type,
+            niveau="utilisateur",
+            uploade_par=utilisateur.id,
+            user_id=utilisateur.id,
+            description="Image envoyée en conversation",
+            taille_octets=len(contenu),
+        )
+    except Exception as e:
+        logging.warning(f"Indexation bibliothèque échouée pour image chat {chemin} (upload OK quand même) : {e}")
+
     return {"url": url}
 
 
@@ -234,6 +260,25 @@ async def uploader_document_chat(
     tronque = len(texte) > LONGUEUR_MAX_TEXTE_EXTRAIT
     if tronque:
         texte = texte[:LONGUEUR_MAX_TEXTE_EXTRAIT]
+
+    # Persistance bibliothèque (2026-07-22) : contrairement à avant, le
+    # document original est maintenant gardé (pas seulement son texte
+    # extrait), pour que l'IA puisse le retrouver et le redonner plus
+    # tard via chercher_fichier. Best-effort : un souci ici ne doit
+    # jamais faire échouer la réponse (le texte extrait reste le besoin
+    # principal de cet endpoint).
+    try:
+        enregistrer_fichier(
+            contenu=contenu,
+            nom_fichier=fichier.filename or f"document.{extension}",
+            type_mime=fichier.content_type,
+            niveau="utilisateur",
+            uploade_par=utilisateur.id,
+            user_id=utilisateur.id,
+            description="Document envoyé en conversation",
+        )
+    except Exception as e:
+        logging.warning(f"Indexation bibliothèque échouée pour document chat {fichier.filename} (extraction OK quand même) : {e}")
 
     return {"texte": texte, "tronque": tronque}
 

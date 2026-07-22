@@ -72,6 +72,14 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SECRET)
 # service qui suit le standard OAuth 2.0 + PKCE avec client fixe.
 # client_id/client_secret sont lus depuis Railway au nom indiqué, pas
 # codés en dur ici.
+#
+# "token_headers" (optionnel, ajouté 2026-07-22 pour GitHub) : en-têtes
+# additionnels envoyés SEULEMENT lors de l'échange/rafraîchissement de
+# token (pas sur l'URL d'autorisation). Nécessaire pour GitHub, dont le
+# endpoint de token répond en `application/x-www-form-urlencoded` par
+# défaut au lieu de JSON -- `reponse.json()` plus bas planterait sans
+# `Accept: application/json`. Absent (comme pour les autres services) ->
+# aucun en-tête supplémentaire, comportement inchangé.
 SERVICES = {
     # Exemple à dupliquer/adapter pour un vrai service, ex. Slack :
     # "slack": {
@@ -81,6 +89,33 @@ SERVICES = {
     #     "client_secret_env": "SLACK_CLIENT_SECRET",
     #     "scopes": "channels:read chat:write",
     # },
+    # GitHub (2026-07-22) -- nécessite une GitHub OAuth App créée
+    # manuellement (https://github.com/settings/developers), avec comme
+    # callback URL la valeur de URL_RETOUR_APP. Scope "repo" pour lire
+    # aussi les dépôts privés (lecture seule côté usage -- le scope
+    # GitHub "repo" est plus large que la lecture seule à proprement
+    # parler, GitHub n'a pas de scope "repo:read" séparé pour les dépôts
+    # privés classiques).
+    #
+    # PIÈGE CONNU (à surveiller, pas corrigé ici) : une GitHub OAuth App
+    # SANS l'option "Enable token expiration" activée dans ses paramètres
+    # émet des tokens qui n'expirent JAMAIS, sans `expires_in` ni
+    # `refresh_token` dans la réponse. `finaliser_connexion` ci-dessus
+    # suppose alors `expires_in=3600` (valeur par défaut du .get()) --
+    # la connexion GitHub semblerait donc "expirée" au bout d'1h alors
+    # que le token réel reste valide indéfiniment, et `_rafraichir`
+    # échouerait (pas de refresh_token stocké), forçant une reconnexion
+    # inutile. Pour un comportement cohérent avec le reste de ce système
+    # (tokens courts + refresh), activer "Enable token expiration" dans
+    # les paramètres de l'app GitHub -- sinon prévoir ce comportement.
+    "github": {
+        "authorization_endpoint": "https://github.com/login/oauth/authorize",
+        "token_endpoint": "https://github.com/login/oauth/access_token",
+        "client_id_env": "GITHUB_CLIENT_ID",
+        "client_secret_env": "GITHUB_CLIENT_SECRET",
+        "scopes": "repo",
+        "token_headers": {"Accept": "application/json"},
+    },
 }
 
 
@@ -181,7 +216,9 @@ def finaliser_connexion(service, code, state):
         if client_secret:
             corps["client_secret"] = client_secret
 
-        reponse = httpx.post(config["token_endpoint"], data=corps, timeout=10)
+        reponse = httpx.post(
+            config["token_endpoint"], data=corps, timeout=10, headers=config.get("token_headers")
+        )
         reponse.raise_for_status()
         tokens = reponse.json()
     except Exception as e:
@@ -223,7 +260,9 @@ def _rafraichir(service, config, connexion):
         if client_secret:
             corps["client_secret"] = client_secret
 
-        reponse = httpx.post(config["token_endpoint"], data=corps, timeout=10)
+        reponse = httpx.post(
+            config["token_endpoint"], data=corps, timeout=10, headers=config.get("token_headers")
+        )
         reponse.raise_for_status()
         tokens = reponse.json()
     except Exception as e:
