@@ -15,10 +15,11 @@ convention que api/notifications.py).
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
+from api.journal import journaliser
 
 logging.basicConfig(level=logging.INFO)
 
@@ -63,7 +64,7 @@ class MiseAJour(BaseModel):
 
 @router.post("", response_model=MiseAJour, status_code=201)
 def publier_mise_a_jour(
-    agent_id: str, payload: MiseAJourCreee, utilisateur=Depends(utilisateur_courant)
+    agent_id: str, payload: MiseAJourCreee, request: Request, utilisateur=Depends(utilisateur_courant)
 ):
     """
     Publie une mise à jour (propriétaire de l'agent uniquement). L'insertion
@@ -93,6 +94,16 @@ def publier_mise_a_jour(
         raise HTTPException(status_code=500, detail="La mise à jour n'a pas pu être créée (erreur technique).")
 
     ligne = res.data[0]
+
+    journaliser(
+        action="update.publie",
+        user_id=utilisateur.id,
+        cible_type="agent_update",
+        cible_id=str(ligne["id"]),
+        details={"agent_id": agent_id, "titre": titre},
+        request=request,
+    )
+
     return MiseAJour(
         id=ligne["id"],
         agent_id=ligne["agent_id"],
