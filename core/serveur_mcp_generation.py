@@ -71,15 +71,17 @@ def generer_document(titre: str, contenu_markdown: str) -> str:
 @mcp_generation.tool()
 def generer_code(nom_projet: str, fichiers: dict) -> str:
     """
-    Génère une archive .zip téléchargeable à partir d'un ou plusieurs
-    fichiers de code. `fichiers` est un dictionnaire {chemin: contenu},
-    ex. {"main.py": "print('hello')"}. Renvoie l'URL publique du .zip.
+    Génère un fichier de code téléchargeable à partir d'un ou plusieurs
+    fichiers. `fichiers` est un dictionnaire {chemin: contenu}, ex.
+    {"main.py": "print('hello')"}. Un seul fichier -> renvoie directement
+    ce fichier (pas de zip). Plusieurs fichiers -> archive .zip. Renvoie
+    l'URL publique du fichier ou de l'archive.
     """
     try:
         return generer_zip_depuis_fichiers(nom_projet, fichiers)
     except Exception as e:
         logging.error(f"ERREUR outil generation : {e}")
-        return "Erreur : la génération de l'archive a échoué, réessaie."
+        return "Erreur : la génération du fichier a échoué, réessaie."
 
 
 @mcp_generation.tool()
@@ -90,7 +92,8 @@ def generer_site_zip(nom_projet: str, fichiers: dict) -> str:
     {"index.html": "<html>...</html>", "style.css": "body {...}"}.
     À utiliser quand l'utilisateur veut le code source pour l'héberger
     lui-même ailleurs, plutôt qu'un lien en ligne (voir deployer_site
-    pour ce second cas). Renvoie l'URL publique du .zip.
+    pour ce second cas). Un seul fichier -> renvoyé directement (pas de
+    zip) ; plusieurs -> archive .zip. Renvoie l'URL publique.
     """
     try:
         return generer_zip_depuis_fichiers(nom_projet, fichiers)
