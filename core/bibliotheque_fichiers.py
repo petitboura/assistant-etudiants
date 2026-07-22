@@ -91,6 +91,44 @@ def enregistrer_fichier(
     return insertion.data[0]
 
 
+def indexer_fichier_existant(
+    url_publique: str,
+    chemin_stockage: str,
+    nom_fichier: str,
+    type_mime: str,
+    niveau: str,
+    uploade_par: str,
+    agent_id: str = None,
+    user_id: str = None,
+    description: str = None,
+    taille_octets: int = None,
+) -> dict:
+    """
+    Indexe dans fichiers_uploades un fichier DÉJÀ stocké ailleurs (ex.
+    bucket images-publiques pour les images de chat) -- évite un second
+    upload redondant vers le bucket "bibliotheque" quand le fichier
+    existe déjà quelque part avec une URL publique utilisable.
+    """
+    try:
+        insertion = supabase.table("fichiers_uploades").insert({
+            "niveau": niveau,
+            "agent_id": agent_id,
+            "user_id": user_id,
+            "uploade_par": uploade_par,
+            "chemin_stockage": chemin_stockage,
+            "url_publique": url_publique,
+            "nom_fichier": nom_fichier,
+            "type_mime": type_mime,
+            "description": description,
+            "taille_octets": taille_octets,
+        }).execute()
+    except Exception as e:
+        logging.error(f"ERREUR ECRITURE fichiers_uploades (indexation {chemin_stockage}) : {e}")
+        raise
+
+    return insertion.data[0]
+
+
 def chercher_fichiers(recherche: str, agent_id: str = None, user_id: str = None, limite: int = 10) -> list:
     """
     Cherche des fichiers accessibles dans le contexte courant (agent_id

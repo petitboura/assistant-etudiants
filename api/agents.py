@@ -1014,14 +1014,18 @@ async def uploader_fichier_bibliotheque(
     agent_id: str,
     request: Request,
     fichier: UploadFile = File(...),
-    titre: str = Form(...),
+    titre: str = Form(None),
+    description: str = Form(None),
     utilisateur=Depends(utilisateur_courant),
 ):
     """
     Bibliothèque du créateur pour CET agent (niveau="agent", voir
     core/bibliotheque_fichiers.py) : n'importe quel type de fichier
-    (image/audio/vidéo/PDF...), avec un titre donné par le créateur pour
-    que l'IA sache le retrouver via chercher_fichier.
+    (image/audio/vidéo/PDF...), avec une description donnée par le
+    créateur pour que l'IA sache le retrouver via chercher_fichier
+    -- le titre est optionnel (juste un intitulé court), c'est la
+    description qui compte vraiment pour la recherche (2026-07-22,
+    demande de Bourama : la description prime sur le titre).
 
     Cas particulier du PDF : en plus d'être stocké brut dans la
     bibliothèque (comme tout le reste), il est AUSSI vectorisé dans le
@@ -1030,6 +1034,9 @@ async def uploader_fichier_bibliotheque(
     pas l'ancienne (toujours utilisée par le frontend existant), elle
     généralise le même geste à tous les types de fichiers.
     """
+    if not (titre or "").strip() and not (description or "").strip():
+        raise HTTPException(status_code=400, detail="Donne au moins une description ou un titre.")
+
     if fichier.content_type not in TYPES_BIBLIOTHEQUE_AUTORISES:
         raise HTTPException(status_code=400, detail="Type de fichier non supporté.")
 
@@ -1075,6 +1082,11 @@ async def uploader_fichier_bibliotheque(
             except OSError:
                 pass
 
+    description_finale = (
+        f"{titre.strip()} — {description.strip()}" if (titre or "").strip() and (description or "").strip()
+        else (description or titre or "").strip()
+    )
+
     try:
         ligne = enregistrer_fichier(
             contenu=contenu,
@@ -1083,7 +1095,7 @@ async def uploader_fichier_bibliotheque(
             niveau="agent",
             uploade_par=utilisateur.id,
             agent_id=agent_id,
-            description=titre,
+            description=description_finale,
         )
     except Exception:
         raise HTTPException(status_code=500, detail="Fichier vectorisé mais échec du stockage en bibliothèque.")
@@ -1093,7 +1105,7 @@ async def uploader_fichier_bibliotheque(
         user_id=utilisateur.id,
         cible_type="agent",
         cible_id=agent_id,
-        details={"titre": titre, "type_mime": fichier.content_type},
+        details={"description": description_finale, "type_mime": fichier.content_type},
         request=request,
     )
 
