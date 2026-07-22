@@ -16,6 +16,8 @@ Génération d'image (generer_image) est TOUJOURS active maintenant
 optionnelle -- voir generation_images.py, mis à jour le 21/07/2026).
 """
 
+import logging
+
 from mcp.server.fastmcp import FastMCP
 
 from core.generation_documents import generer_pdf_depuis_markdown
@@ -61,7 +63,8 @@ def generer_document(titre: str, contenu_markdown: str) -> str:
     """
     try:
         return generer_pdf_depuis_markdown(titre, contenu_markdown)
-    except Exception:
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : la génération du document a échoué, réessaie."
 
 
@@ -74,7 +77,8 @@ def generer_code(nom_projet: str, fichiers: dict) -> str:
     """
     try:
         return generer_zip_depuis_fichiers(nom_projet, fichiers)
-    except Exception:
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : la génération de l'archive a échoué, réessaie."
 
 
@@ -90,7 +94,8 @@ def generer_site_zip(nom_projet: str, fichiers: dict) -> str:
     """
     try:
         return generer_zip_depuis_fichiers(nom_projet, fichiers)
-    except Exception:
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : la génération du site (zip) a échoué, réessaie."
 
 
@@ -109,7 +114,8 @@ def generer_bundle(nom_projet: str, elements: list) -> str:
     """
     try:
         return _generer_bundle(nom_projet, elements)
-    except Exception:
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : la génération du bundle a échoué, réessaie."
 
 
@@ -122,7 +128,8 @@ def exporter_donnees(nom: str, donnees: dict, format: str = "json") -> str:
     """
     try:
         return _exporter_donnees(nom, donnees, format)
-    except Exception:
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : l'export des données a échoué, réessaie."
 
 
@@ -144,7 +151,8 @@ if modele_3d_disponible():
                 f"Génération 3D lancée (id: {resultat['request_id']}). "
                 f"Redemande le statut avec cet identifiant dans une minute ou deux."
             )
-        except Exception:
+        except Exception as e:
+            logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : le lancement de la génération 3D a échoué, réessaie."
 
     @mcp_generation.tool()
@@ -159,7 +167,8 @@ if modele_3d_disponible():
             if resultat["statut"] == "COMPLETED":
                 return f"Modèle 3D prêt : {resultat['url']}"
             return f"Toujours en cours (statut : {resultat['statut']}), redemande un peu plus tard."
-        except Exception:
+        except Exception as e:
+            logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : impossible de récupérer le statut, vérifie l'identifiant."
 
 
@@ -185,7 +194,8 @@ if video_disponible():
                 f"Génération lancée (id: {resultat['request_id']}). "
                 f"Ça prend 1 à 3 minutes -- redemande le statut avec cet identifiant un peu plus tard."
             )
-        except Exception:
+        except Exception as e:
+            logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : le lancement de la génération vidéo a échoué, réessaie."
 
     @mcp_generation.tool()
@@ -200,7 +210,8 @@ if video_disponible():
             if resultat["statut"] == "COMPLETED":
                 return f"Vidéo prête : {resultat['url']}"
             return f"Toujours en cours (statut : {resultat['statut']}), redemande dans une minute."
-        except Exception:
+        except Exception as e:
+            logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : impossible de récupérer le statut, vérifie l'identifiant."
 
 
@@ -219,7 +230,8 @@ if audio_disponible():
         """
         try:
             return _generer_audio(texte, voix)
-        except Exception:
+        except Exception as e:
+            logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : la génération audio a échoué, réessaie."
 
 
@@ -242,7 +254,8 @@ if signature_disponible():
                 f"Demande de signature envoyée (id: {resultat['signature_request_id']}, "
                 f"statut: {resultat['statut']}). Document : {resultat['url_document']}"
             )
-        except Exception:
+        except Exception as e:
+            logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : l'envoi pour signature a échoué, réessaie."
 
     @mcp_generation.tool()
@@ -253,7 +266,8 @@ if signature_disponible():
         """
         try:
             return str(_statut_signature(signature_request_id))
-        except Exception:
+        except Exception as e:
+            logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : impossible de récupérer le statut, vérifie l'identifiant."
 
 
@@ -270,7 +284,8 @@ def generer_image(prompt: str) -> str:
     """
     try:
         return _generer_image(prompt)
-    except Exception:
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : la génération de l'image a échoué, réessaie."
 
 
@@ -291,5 +306,6 @@ if site_deploiement_disponible():
         """
         try:
             return _deployer_site(nom_projet, fichiers)
-        except Exception:
+        except Exception as e:
+            logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : le déploiement du site a échoué, réessaie."
