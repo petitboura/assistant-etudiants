@@ -364,6 +364,15 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
     system_final += INSTRUCTIONS_FORMATS_AFFICHAGE
     system_final += REGLE_CONTEXTE_INVISIBLE
+    system_final += (
+        "\n\nBIBLIOTHÈQUE DE FICHIERS : tu as accès à l'outil chercher_fichier pour "
+        "retrouver un fichier (image, PDF, audio, vidéo...) déjà uploadé par la "
+        "plateforme, par le créateur de cet agent, ou par cet utilisateur dans une "
+        f"conversation passée. Ton agent_id est \"{agent_id}\". L'user_id de la "
+        f"personne actuelle est {f'\"{user_id}\"' if user_id else 'absent (non connectée)'}. "
+        "Passe TOUJOURS ces deux valeurs exactement telles quelles à chercher_fichier, "
+        "ne les invente jamais."
+    )
 
     # Contexte système "date/heure actuelle" (2026-07-20) : sans ça, le
     # modèle ne sait pas qu'on est en 2026 et peut situer les événements

@@ -45,6 +45,7 @@ from core.generation_site import (
     deployer_site as _deployer_site,
     site_deploiement_disponible,
 )
+from core.bibliotheque_fichiers import chercher_fichiers as _chercher_fichiers
 
 mcp_generation = FastMCP(
     name="generation",
@@ -82,6 +83,34 @@ def generer_code(nom_projet: str, fichiers: dict) -> str:
     except Exception as e:
         logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : la génération du fichier a échoué, réessaie."
+
+
+@mcp_generation.tool()
+def chercher_fichier(recherche: str, agent_id: str = None, user_id: str = None) -> str:
+    """
+    Cherche un fichier déjà uploadé (image, PDF, audio, vidéo, autre)
+    dans la bibliothèque -- uploadé soit par la plateforme (accessible à
+    tous les agents), soit par le créateur de CET agent, soit par CET
+    utilisateur lui-même dans une conversation passée. `recherche` est un
+    mot-clé (nom de fichier ou sujet). `agent_id` et `user_id` doivent
+    être exactement ceux donnés dans tes instructions système, pas
+    inventés. Renvoie la liste des fichiers trouvés (nom, url, niveau)
+    ou un message si rien n'est trouvé -- à toi ensuite d'inclure le
+    lien dans ta réponse (![...](url) pour une image, [...](url) sinon).
+    """
+    try:
+        resultats = _chercher_fichiers(recherche, agent_id=agent_id, user_id=user_id)
+    except Exception:
+        return "Erreur : la recherche de fichier a échoué, réessaie."
+
+    if not resultats:
+        return "Aucun fichier trouvé pour cette recherche."
+
+    return "\n".join(
+        f"- {f['nom_fichier']} ({f['niveau']}) : {f['url_publique']}"
+        + (f" -- {f['description']}" if f.get("description") else "")
+        for f in resultats
+    )
 
 
 @mcp_generation.tool()
