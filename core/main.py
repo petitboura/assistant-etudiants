@@ -398,13 +398,30 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "la première clé sert d'axe X (ou de nom pour \"pie\"), les suivantes sont les "
     "séries.\n"
     "- ```carte avec un JSON {\"lat\": ..., \"lng\": ..., \"label\"?: \"...\"} pour "
-    "localiser un lieu (tu connais les coordonnées des lieux courants).\n"
+    "localiser un lieu (tu connais les coordonnées des lieux courants). N'écris JAMAIS "
+    "un lien texte brut vers Google Maps/OpenStreetMap à la place -- utilise TOUJOURS "
+    "ce bloc pour une localisation, même simple (repéré en test réel : lien Google Maps "
+    "brut au lieu du bloc, qui s'affiche comme un lien souligné ordinaire au lieu de la "
+    "carte prévue).\n"
     "- ```widget ou ```html avec du HTML/CSS/JS complet et autonome pour un mini-outil "
     "interactif (calculateur, formulaire, mini-jeu). Le fond est déjà sombre par défaut "
     "(assorti au reste de l'interface) : ne redéfinis PAS un fond clair/blanc pour tout "
     "le widget sauf besoin réel, et si tu le fais, redéfinis AUSSI la couleur du texte en "
     "conséquence -- sinon le texte clair hérité du thème sombre devient illisible sur fond "
     "clair (repéré en test réel : carte blanche avec texte quasi invisible).\n"
+    "\n"
+    "LÉGER (blocs ci-dessus) VS RÉEL (outils de génération, si disponibles dans "
+    "cette conversation) : les deux existent pour des besoins différents, choisis "
+    "selon ce que la situation demande réellement, jamais par défaut vers l'un ou "
+    "l'autre. Un bloc ci-dessus est un aperçu léger affiché directement dans la "
+    "conversation (une carte, un graphique, un petit outil interactif) -- utilise-le "
+    "quand la personne veut voir/comprendre quelque chose tout de suite, sans notion "
+    "de fichier. Un outil de génération produit un livrable réel, téléchargeable ou "
+    "partageable (document à envoyer, site à héberger, image/audio/vidéo/modèle 3D "
+    "en tant que fichier) -- réserve-le aux cas où un vrai fichier autonome a du sens "
+    "pour l'usage décrit, pas chaque fois qu'un des deux pourrait techniquement "
+    "répondre à la demande. Dans le doute, le format le plus léger qui répond à la "
+    "demande est le bon choix.\n"
     "RÈGLE ABSOLUE, sans exception : n'utilise JAMAIS ![alt](url) (image markdown) "
     "avec une URL que tu inventes ou que tu crois plausible sans l'avoir obtenue "
     "d'un outil réel dans cette conversation. N'invente jamais non plus une "
@@ -441,6 +458,15 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
     system_final += INSTRUCTIONS_FORMATS_AFFICHAGE
     system_final += REGLE_CONTEXTE_INVISIBLE
+    system_final += (
+        "\n\nBIBLIOTHÈQUE DE FICHIERS : tu as accès à l'outil chercher_fichier pour "
+        "retrouver un fichier (image, PDF, audio, vidéo...) déjà uploadé par la "
+        "plateforme, par le créateur de cet agent, ou par cet utilisateur dans une "
+        f"conversation passée. Ton agent_id est \"{agent_id}\". L'user_id de la "
+        f"personne actuelle est {f'\"{user_id}\"' if user_id else 'absent (non connectée)'}. "
+        "Passe TOUJOURS ces deux valeurs exactement telles quelles à chercher_fichier, "
+        "ne les invente jamais."
+    )
 
     # Contexte système "date/heure actuelle" (2026-07-20) : sans ça, le
     # modèle ne sait pas qu'on est en 2026 et peut situer les événements

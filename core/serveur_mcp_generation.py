@@ -45,6 +45,7 @@ from core.generation_site import (
     deployer_site as _deployer_site,
     site_deploiement_disponible,
 )
+from core.bibliotheque_fichiers import chercher_fichiers as _chercher_fichiers
 
 mcp_generation = FastMCP(
     name="generation",
@@ -71,15 +72,45 @@ def generer_document(titre: str, contenu_markdown: str) -> str:
 @mcp_generation.tool()
 def generer_code(nom_projet: str, fichiers: dict) -> str:
     """
-    Génère une archive .zip téléchargeable à partir d'un ou plusieurs
-    fichiers de code. `fichiers` est un dictionnaire {chemin: contenu},
-    ex. {"main.py": "print('hello')"}. Renvoie l'URL publique du .zip.
+    Génère un fichier de code téléchargeable à partir d'un ou plusieurs
+    fichiers. `fichiers` est un dictionnaire {chemin: contenu}, ex.
+    {"main.py": "print('hello')"}. Un seul fichier -> renvoie directement
+    ce fichier (pas de zip). Plusieurs fichiers -> archive .zip. Renvoie
+    l'URL publique du fichier ou de l'archive.
     """
     try:
         return generer_zip_depuis_fichiers(nom_projet, fichiers)
     except Exception as e:
         logging.error(f"ERREUR outil generation : {e}")
-        return "Erreur : la génération de l'archive a échoué, réessaie."
+        return "Erreur : la génération du fichier a échoué, réessaie."
+
+
+@mcp_generation.tool()
+def chercher_fichier(recherche: str, agent_id: str = None, user_id: str = None) -> str:
+    """
+    Cherche un fichier déjà uploadé (image, PDF, audio, vidéo, autre)
+    dans la bibliothèque -- uploadé soit par la plateforme (accessible à
+    tous les agents), soit par le créateur de CET agent, soit par CET
+    utilisateur lui-même dans une conversation passée. `recherche` est un
+    mot-clé (nom de fichier ou sujet). `agent_id` et `user_id` doivent
+    être exactement ceux donnés dans tes instructions système, pas
+    inventés. Renvoie la liste des fichiers trouvés (nom, url, niveau)
+    ou un message si rien n'est trouvé -- à toi ensuite d'inclure le
+    lien dans ta réponse (![...](url) pour une image, [...](url) sinon).
+    """
+    try:
+        resultats = _chercher_fichiers(recherche, agent_id=agent_id, user_id=user_id)
+    except Exception:
+        return "Erreur : la recherche de fichier a échoué, réessaie."
+
+    if not resultats:
+        return "Aucun fichier trouvé pour cette recherche."
+
+    return "\n".join(
+        f"- {f['nom_fichier']} ({f['niveau']}) : {f['url_publique']}"
+        + (f" -- {f['description']}" if f.get("description") else "")
+        for f in resultats
+    )
 
 
 @mcp_generation.tool()
@@ -90,7 +121,8 @@ def generer_site_zip(nom_projet: str, fichiers: dict) -> str:
     {"index.html": "<html>...</html>", "style.css": "body {...}"}.
     À utiliser quand l'utilisateur veut le code source pour l'héberger
     lui-même ailleurs, plutôt qu'un lien en ligne (voir deployer_site
-    pour ce second cas). Renvoie l'URL publique du .zip.
+    pour ce second cas). Un seul fichier -> renvoyé directement (pas de
+    zip) ; plusieurs -> archive .zip. Renvoie l'URL publique.
     """
     try:
         return generer_zip_depuis_fichiers(nom_projet, fichiers)
