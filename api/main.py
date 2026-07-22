@@ -5,6 +5,7 @@ Voir api/PLAN.md pour la séquence complète et l'état d'avancement.
 Lancement local : uvicorn api.main:app --reload --port 8000
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from typing import List, Optional
@@ -21,14 +22,33 @@ from api.search import router as search_router
 from api.uploads import router as uploads_router
 from api.historique import router as historique_router
 from api.notifications import router as notifications_router
+from api.notifications_push import router as notifications_push_router
 from api.agent_updates import router as agent_updates_router
 from api.posts import router as posts_router
 from api.chat import router as chat_router
 from api.feedback import router as feedback_router
 from api.generation import router as generation_router
 from core.serveur_mcp_generation import mcp_generation
+from core.notifications_push import traiter_rappels_echus, notifications_push_disponible
 
 logging.basicConfig(level=logging.INFO)
+
+
+async def _boucle_planificateur_rappels():
+    # Vérifie les rappels arrivés à échéance toutes les 60s (voir
+    # core/notifications_push.py:traiter_rappels_echus). Tourne tant que
+    # le process vit -- pas de garantie de service externe (cron
+    # Railway, etc.), donc si le process redémarre, au pire un rappel
+    # est traité quelques secondes plus tard, jamais perdu (la ligne
+    # reste "envoye=false" en base tant qu'elle n'a pas été traitée).
+    while True:
+        try:
+            traites = traiter_rappels_echus()
+            if traites:
+                logging.info(f"Planificateur rappels : {traites} notification(s) envoyée(s).")
+        except Exception as e:
+            logging.error(f"ERREUR boucle planificateur rappels : {e}")
+        await asyncio.sleep(60)
 
 
 @asynccontextmanager
@@ -39,7 +59,12 @@ async def _lifespan(app: FastAPI):
     # streamable_http_app() renvoie une erreur "Task group is not
     # initialized" au premier appel d'outil.
     async with mcp_generation.session_manager.run():
+        tache_planificateur = None
+        if notifications_push_disponible():
+            tache_planificateur = asyncio.create_task(_boucle_planificateur_rappels())
         yield
+        if tache_planificateur:
+            tache_planificateur.cancel()
 
 
 app = FastAPI(title="Djiguigne API", version="0.1.0", lifespan=_lifespan)
@@ -92,6 +117,7 @@ app.include_router(posts_router)
 app.include_router(chat_router)
 app.include_router(feedback_router)
 app.include_router(generation_router)
+app.include_router(notifications_push_router)
 
 
 @app.get("/health")
