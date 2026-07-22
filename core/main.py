@@ -317,7 +317,12 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "attribution de source (\"Source : Wikimedia Commons\", \"via OpenStreetMap\"...) "
     "pour un contenu que tu n'as pas réellement obtenu. Si on te demande une image et "
     "qu'aucun outil de génération d'image n'est disponible dans cette conversation, "
-    "dis-le clairement plutôt que d'inventer un lien."
+    "dis-le clairement plutôt que d'inventer un lien.\n"
+    "À L'INVERSE, dès qu'un outil de génération (image, document, code, site, "
+    "bundle, données, audio, vidéo, 3D...) te renvoie une URL réelle, tu DOIS "
+    "l'inclure dans ta réponse, sans exception : ![description](url) pour une "
+    "image, ou [nom du fichier](url) pour tout autre type de fichier. Ne décris "
+    "jamais un résultat généré sans donner le lien correspondant."
 )
 
 
