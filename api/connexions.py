@@ -33,6 +33,31 @@ def statut_connexion(service: str, utilisateur=Depends(utilisateur_courant)):
     return {"connecte": est_connecte(service, utilisateur.id)}
 
 
+@router.get("/diagnostic/{service}")
+def diagnostic_config(service: str):
+    """
+    Diagnostic SANS secret exposé -- juste des booléens (présent/absent)
+    pour savoir si le process qui tourne réellement voit la config
+    attendue. Ajouté le 2026-07-23 après un premier vrai test en
+    production : le message "configuration manquante côté serveur" ne
+    dit pas LAQUELLE des deux valeurs manque, ni si Railway a bien
+    redéployé après l'ajout des variables. `URL_RETOUR_APP` n'est pas un
+    secret (juste une URL publique de callback) -- renvoyée en clair,
+    utile pour repérer une faute de frappe/un mauvais domaine.
+    """
+    from connexions.oauth_generique import SERVICES, URL_RETOUR, get_secret
+
+    config = SERVICES.get(service)
+    if not config:
+        return {"erreur": f"Service '{service}' inconnu dans SERVICES."}
+
+    return {
+        "client_id_present": bool(get_secret(config["client_id_env"])),
+        "client_secret_present": bool(get_secret(config.get("client_secret_env", ""))),
+        "url_retour_app": URL_RETOUR,
+    }
+
+
 @router.get("/{service}/demarrer")
 def demarrer(service: str, agent_id: str = "", utilisateur=Depends(utilisateur_courant)):
     url = demarrer_connexion(service, utilisateur.id, agent_id or None)
