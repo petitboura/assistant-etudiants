@@ -120,6 +120,13 @@ class CreerAgentPayload(BaseModel):
     # Profil utilisateur dynamique par agent (2026-07-21) : vide par défaut,
     # voir ChampProfilUtilisateur.
     profil_utilisateur_schema: List[ChampProfilUtilisateur] = Field(default_factory=list)
+    # Ajouté le 2026-07-23 (Bourama : "il doit être dans le formulaire de
+    # création, comme tous les autres [champs]") : droits de l'agent
+    # choisis DANS le même formulaire, envoyés avec le reste, pas
+    # configurés après coup. Categorie 1 (generation, par outil) et
+    # categories 2/3 (serveur entier) -- voir migration_droits_agents.sql.
+    outils_generation_choisis: List[str] = Field(default_factory=list)
+    serveurs_choisis: List[str] = Field(default_factory=list)
 
 
 class AgentCree(BaseModel):
@@ -268,6 +275,23 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
             status_code=500,
             detail="Impossible de créer l'agent (erreur technique). Réessaie dans un instant.",
         )
+
+    # Droits de l'agent (categorie 1 par outil, categories 2/3 par
+    # serveur), choisis dans le meme formulaire de creation. Best-effort :
+    # un souci ici ne doit pas annuler la creation de l'agent (deja
+    # inseree juste au-dessus), mais on logge fort pour ne pas rater un
+    # agent cree sans AUCUN droit par accident technique.
+    try:
+        if payload.outils_generation_choisis:
+            supabase.table("agents_outils_generation").insert(
+                [{"agent_id": agent_id, "nom_outil": n} for n in payload.outils_generation_choisis]
+            ).execute()
+        if payload.serveurs_choisis:
+            supabase.table("agents_serveurs").insert(
+                [{"agent_id": agent_id, "nom_serveur": n} for n in payload.serveurs_choisis]
+            ).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (insertion droits initiaux agent={agent_id}) : {e}")
 
     # Indexation du texte libre : best-effort, n'annule jamais la création
     # de l'agent (même choix que creer_agent.py) si elle échoue.
