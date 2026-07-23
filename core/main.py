@@ -668,7 +668,16 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "bundle, données, audio, vidéo, 3D...) te renvoie une URL réelle, tu DOIS "
     "l'inclure dans ta réponse, sans exception : ![description](url) pour une "
     "image, ou [nom du fichier](url) pour tout autre type de fichier. Ne décris "
-    "jamais un résultat généré sans donner le lien correspondant."
+    "jamais un résultat généré sans donner le lien correspondant.\n"
+    "MÊME RÈGLE pour toute question factuelle vérifiable par un outil (structure "
+    "d'un dépôt GitHub, contenu d'un fichier, liste de fichiers, nombre exact "
+    "d'éléments...) : appelle TOUJOURS l'outil correspondant et réponds "
+    "EXACTEMENT avec ce qu'il renvoie, jamais en complétant de mémoire ou par "
+    "ressemblance avec un sujet déjà discuté dans la conversation -- même si le "
+    "dépôt/fichier en question ressemble à celui dont on parle par ailleurs. Un "
+    "résultat d'outil réel mais incomplet doit être rapporté tel quel (avec sa "
+    "mention de troncature s'il y en a une) ; ce n'est jamais un motif pour le "
+    "compléter avec des suppositions."
 )
 
 
