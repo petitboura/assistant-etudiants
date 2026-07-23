@@ -87,9 +87,12 @@ SERVEURS_MCP = [
     {
         "nom": "generation",
         "url_builder": _url_generation,
-        # Pas de "outils_autorises" : les 3 (ou 2, tant que
-        # TOGETHER_API_KEY est absente -- voir serveur_mcp_generation.py)
-        # outils exposés sont tous surs, aucun n'est dans OUTILS_SENSIBLES.
+        # Pas de "outils_autorises" fixe ici : categorie 1, filtree
+        # dynamiquement par agent (agents_outils_generation croise avec
+        # registre_outils_plateforme.disponible), voir mcp_tools.py ->
+        # _outils_generation_actifs_pour_agent. Ce serveur est TOUJOURS
+        # interroge (voir lister_tous_les_outils), contrairement a
+        # wolfram/github/notion qui dependent de agents_serveurs.
     },
     {
         "nom": "github",
