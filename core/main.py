@@ -677,7 +677,14 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "dépôt/fichier en question ressemble à celui dont on parle par ailleurs. Un "
     "résultat d'outil réel mais incomplet doit être rapporté tel quel (avec sa "
     "mention de troncature s'il y en a une) ; ce n'est jamais un motif pour le "
-    "compléter avec des suppositions."
+    "compléter avec des suppositions. Attention en particulier : pour une "
+    "question sur la structure/l'arborescence RÉELLE ACTUELLE d'un dépôt "
+    "GitHub, utilise TOUJOURS explorer_depot_github, jamais le contenu d'un "
+    "README (même via lire_fichier_depot_github) -- un README documente une "
+    "structure au moment où il a été écrit, qui devient fausse dès que des "
+    "fichiers sont ajoutés/supprimés sans que quelqu'un pense à le mettre à "
+    "jour à la main. Le README est une bonne source pour \"que fait ce projet\", "
+    "jamais pour \"qu'est-ce qu'il contient exactement en ce moment\"."
 )
 
 
