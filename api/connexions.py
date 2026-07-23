@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant
-from connexions.oauth_generique import demarrer_connexion, est_connecte, etat_en_attente, finaliser_connexion
+from connexions.oauth_generique import demarrer_connexion, est_connecte, etat_en_attente, finaliser_connexion, get_secret
 
 router = APIRouter(prefix="/api/connexions", tags=["connexions"])
 
@@ -60,9 +60,41 @@ def diagnostic_config(service: str):
 
 @router.get("/{service}/demarrer")
 def demarrer(service: str, agent_id: str = "", utilisateur=Depends(utilisateur_courant)):
+    # Diagnostic précis (2026-07-23) : demarrer_connexion() ne renvoie que
+    # None sans dire pourquoi -- ici on vérifie nous-mêmes chaque pièce
+    # AVANT de l'appeler, pour remonter une erreur exploitable directement
+    # dans l'alerte du bouton (pas besoin d'ouvrir une URL de diagnostic
+    # séparée). Confirmé en test réel le 2026-07-23 : les 3 variables
+    # Railway sont bien présentes, donc si ce message apparaît encore,
+    # c'est très probablement que ce PROCESS-CI (peut-être un service
+    # Railway différent de celui où les variables ont été ajoutées) ne
+    # les voit pas -- pas un problème de configuration en soi.
+    from connexions.oauth_generique import SERVICES, URL_RETOUR
+
+    config = SERVICES.get(service)
+    if not config:
+        return {"url": None, "erreur": f"Service '{service}' inconnu côté serveur."}
+
+    client_id = get_secret(config["client_id_env"])
+    manques = []
+    if not client_id:
+        manques.append(config["client_id_env"])
+    if not URL_RETOUR:
+        manques.append("URL_RETOUR_APP")
+    if manques:
+        return {
+            "url": None,
+            "erreur": (
+                f"Connexion {service} indisponible : {', '.join(manques)} absent(e) du "
+                "PROCESS backend actuellement déployé (vérifie que ces variables sont bien "
+                "sur le même service Railway que celui-ci, et qu'un redéploiement a eu lieu "
+                "après leur ajout)."
+            ),
+        }
+
     url = demarrer_connexion(service, utilisateur.id, agent_id or None)
     if not url:
-        return {"url": None, "erreur": f"Connexion {service} indisponible (configuration manquante côté serveur)."}
+        return {"url": None, "erreur": f"Connexion {service} indisponible (erreur interne, voir logs Railway)."}
     return {"url": url}
 
 
