@@ -24,6 +24,24 @@ logging.basicConfig(level=logging.INFO)
 
 router = APIRouter(prefix="/api/agents/{agent_id}/droits", tags=["droits_agent"])
 
+# Registre brut, sans agent -- utilisé par le formulaire de CRÉATION
+# (l'agent n'existe pas encore, donc pas de "coche" possible, juste la
+# liste de ce qui est proposable). Route à part, hors du prefix
+# {agent_id} ci-dessus.
+router_registre = APIRouter(prefix="/api/registre-outils", tags=["droits_agent"])
+
+
+@router_registre.get("")
+def lire_registre_outils(utilisateur=Depends(utilisateur_courant)):
+    try:
+        res = supabase.table("registre_outils_plateforme").select("*").execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture registre_outils_plateforme) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger le registre pour le moment.")
+    generation = [l for l in (res.data or []) if l["categorie"] == 1]
+    serveurs = [l for l in (res.data or []) if l["categorie"] != 1]
+    return {"generation": generation, "serveurs": serveurs}
+
 
 def _verifier_proprietaire(agent_id: str, user_id: str):
     try:
