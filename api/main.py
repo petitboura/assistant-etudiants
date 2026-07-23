@@ -27,6 +27,7 @@ from api.chat import router as chat_router
 from api.feedback import router as feedback_router
 from api.generation import router as generation_router
 from api.memoire import router as memoire_router
+from api.connexions import router as connexions_router
 from core.serveur_mcp_generation import mcp_generation
 from core.serveur_mcp_github import mcp_github
 
@@ -100,6 +101,7 @@ app.include_router(chat_router)
 app.include_router(feedback_router)
 app.include_router(generation_router)
 app.include_router(memoire_router)
+app.include_router(connexions_router)
 
 
 @app.get("/health")
