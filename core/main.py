@@ -167,7 +167,7 @@ def _lire_github(url, user_id=None):
     Récupère le contenu d'un lien GitHub collé dans le message. Deux
     formats reconnus (fichier précis ou dépôt entier), et TROIS niveaux
     d'authentification possibles pour chacun, du plus au moins privilégié :
-    1. Token OAuth de L'ÉTUDIANT/ENSEIGNANT connecté (voir
+    1. Token OAuth de LA PERSONNE connectée (voir
        connexions/oauth_generique.py, obtenir_token_valide("github", ...))
        -- seul niveau donnant accès aux dépôts PRIVÉS. Ajouté le
        2026-07-22 : nécessite que la personne ait connecté son compte
@@ -668,7 +668,23 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "bundle, données, audio, vidéo, 3D...) te renvoie une URL réelle, tu DOIS "
     "l'inclure dans ta réponse, sans exception : ![description](url) pour une "
     "image, ou [nom du fichier](url) pour tout autre type de fichier. Ne décris "
-    "jamais un résultat généré sans donner le lien correspondant."
+    "jamais un résultat généré sans donner le lien correspondant.\n"
+    "MÊME RÈGLE pour toute question factuelle vérifiable par un outil (structure "
+    "d'un dépôt GitHub, contenu d'un fichier, liste de fichiers, nombre exact "
+    "d'éléments...) : appelle TOUJOURS l'outil correspondant et réponds "
+    "EXACTEMENT avec ce qu'il renvoie, jamais en complétant de mémoire ou par "
+    "ressemblance avec un sujet déjà discuté dans la conversation -- même si le "
+    "dépôt/fichier en question ressemble à celui dont on parle par ailleurs. Un "
+    "résultat d'outil réel mais incomplet doit être rapporté tel quel (avec sa "
+    "mention de troncature s'il y en a une) ; ce n'est jamais un motif pour le "
+    "compléter avec des suppositions. Attention en particulier : pour une "
+    "question sur la structure/l'arborescence RÉELLE ACTUELLE d'un dépôt "
+    "GitHub, utilise TOUJOURS explorer_depot_github, jamais le contenu d'un "
+    "README (même via lire_fichier_depot_github) -- un README documente une "
+    "structure au moment où il a été écrit, qui devient fausse dès que des "
+    "fichiers sont ajoutés/supprimés sans que quelqu'un pense à le mettre à "
+    "jour à la main. Le README est une bonne source pour \"que fait ce projet\", "
+    "jamais pour \"qu'est-ce qu'il contient exactement en ce moment\"."
 )
 
 
@@ -689,8 +705,14 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     system_final = system_prompt or ""
     if resume_memoire:
         system_final += (
-            "\n\nCONTEXTE DES SESSIONS PRÉCÉDENTES AVEC CET ÉTUDIANT (résumé, à utiliser "
-            f"pour personnaliser ta réponse, ne jamais le réciter tel quel) :\n{resume_memoire}"
+            "\n\nCONTEXTE DES SESSIONS PRÉCÉDENTES AVEC CETTE PERSONNE (résumé, à utiliser "
+            "pour personnaliser ta réponse -- son projet, ses préférences, ce qu'elle a déjà "
+            "expliqué -- MAIS ne jamais le réciter tel quel, et ne JAMAIS t'en servir comme "
+            "source de vérité pour un fait que tu peux vérifier maintenant avec un outil "
+            "(structure d'un dépôt, contenu d'un fichier, état actuel de quoi que ce soit). "
+            "Ce résumé peut décrire une situation ancienne, déjà changée depuis -- si un outil "
+            "existe pour vérifier l'état actuel d'une chose mentionnée ici, appelle-le, ne "
+            f"réponds jamais depuis ce résumé seul) :\n{resume_memoire}"
         )
     if profil_utilisateur:
         system_final += (
@@ -833,7 +855,7 @@ def _mettre_a_jour_resume_si_besoin(user_id):
     depuis le dernier resume, en regenere un condense (ancien resume + messages
     recents) via un modele Groq rapide, l'ecrit dans conversation_summaries, puis
     purge les messages bruts desormais condenses. Ne bloque jamais la reponse a
-    l'etudiant : toute erreur est juste loguee, jamais remontee a l'appelant.
+    la personne : toute erreur est juste loguee, jamais remontee a l'appelant.
 
     Compte unifie (juillet 2026) : scope par user_id seul, tous agents
     confondus. `agent_id` reste present dans `conversations` en tant que
@@ -858,16 +880,27 @@ def _mettre_a_jour_resume_si_besoin(user_id):
 
         ancien_resume = _charger_resume_memoire(user_id)
         messages_recents = "\n".join(
-            f"{'Étudiant' if m['role'] == 'user' else 'Assistant'} : {m['content']}"
+            f"{'Utilisateur' if m['role'] == 'user' else 'Assistant'} : {m['content']}"
             for m in reversed(messages)
         )
 
+        # Neutralisé le 2026-07-22 (Bourama : la plateforme n'est pas
+        # réservée aux étudiants, ce n'était que le point de départ du
+        # projet -- un ancien prompt ici forçait "niveau apparent" et
+        # "sujets de difficulté d'étudiant" sur N'IMPORTE QUELLE
+        # conversation, y compris des sessions de test technique sans
+        # aucun rapport avec l'école, produisant des résumés inventés/hors
+        # sujet). Ne présuppose plus rien sur qui est cette personne ni
+        # sur la nature de l'agent avec qui elle parle.
         prompt_resume = (
             "Condense ce qui suit en un résumé factuel et concis (5-8 lignes maximum) "
-            "du profil et de la progression de cet étudiant : ses sujets de difficulté "
-            "récurrents, son niveau apparent, les méthodes qui ont fonctionné pour lui. "
-            "Pas de politesse, pas de méta-commentaire, juste les faits utiles pour "
-            "personnaliser une future session.\n\n"
+            "de cette personne, utile pour personnaliser une future session avec elle : "
+            "ses centres d'intérêt ou sujets récurrents, ses préférences, le contexte "
+            "réellement présent dans les échanges. N'invente rien qui ne soit pas "
+            "clairement indiqué -- ne présuppose ni niveau scolaire, ni statut "
+            "d'étudiant, ni progression pédagogique si rien dans la conversation ne "
+            "l'indique explicitement. Pas de politesse, pas de méta-commentaire, "
+            "juste les faits utiles.\n\n"
         )
         if ancien_resume:
             prompt_resume += f"Résumé précédent :\n{ancien_resume}\n\n"
@@ -1025,7 +1058,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         completion = client_groq.chat.completions.create(
             model=modele,
             messages=messages_agent,
-            max_completion_tokens=1024,
+            max_completion_tokens=None,
             tools=outils_mcp if outils_mcp else None,
             stream=True,
             timeout=DELAI_MAX_PAR_APPEL,
@@ -1089,7 +1122,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
     completion = client_groq.chat.completions.create(
         model=modele,
         messages=messages_agent,
-        max_completion_tokens=1024,
+        max_completion_tokens=None,
         tools=outils_mcp if outils_mcp else None,
         stream=True,
         timeout=DELAI_MAX_PAR_APPEL,
@@ -1231,7 +1264,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
             resultat = appeler_outil(appel["name"], arguments, table_routage)
             yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
         else:
-            resultat = "Action annulée par l'étudiant : cet outil n'a pas été exécuté."
+            resultat = "Action annulée par l'utilisateur : cet outil n'a pas été exécuté."
             yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} annulée"}
 
         messages_agent.append({
@@ -1320,8 +1353,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 model=GOOGLE_MODEL,
                 contents=gemini_messages,
                 config=types.GenerateContentConfig(
-                    system_instruction=system_final,
-                    max_output_tokens=1024
+                    system_instruction=system_final
                 )
             )
             for chunk in response:
@@ -1424,8 +1456,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 model=GOOGLE_MODEL,
                 contents=gemini_messages,
                 config=types.GenerateContentConfig(
-                    system_instruction=system_final,
-                    max_output_tokens=1024
+                    system_instruction=system_final
                 )
             )
             for chunk in response:
