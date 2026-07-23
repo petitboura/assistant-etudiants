@@ -706,7 +706,13 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     if resume_memoire:
         system_final += (
             "\n\nCONTEXTE DES SESSIONS PRÉCÉDENTES AVEC CETTE PERSONNE (résumé, à utiliser "
-            f"pour personnaliser ta réponse, ne jamais le réciter tel quel) :\n{resume_memoire}"
+            "pour personnaliser ta réponse -- son projet, ses préférences, ce qu'elle a déjà "
+            "expliqué -- MAIS ne jamais le réciter tel quel, et ne JAMAIS t'en servir comme "
+            "source de vérité pour un fait que tu peux vérifier maintenant avec un outil "
+            "(structure d'un dépôt, contenu d'un fichier, état actuel de quoi que ce soit). "
+            "Ce résumé peut décrire une situation ancienne, déjà changée depuis -- si un outil "
+            "existe pour vérifier l'état actuel d'une chose mentionnée ici, appelle-le, ne "
+            f"réponds jamais depuis ce résumé seul) :\n{resume_memoire}"
         )
     if profil_utilisateur:
         system_final += (
