@@ -1058,7 +1058,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         completion = client_groq.chat.completions.create(
             model=modele,
             messages=messages_agent,
-            max_completion_tokens=1024,
+            max_completion_tokens=None,
             tools=outils_mcp if outils_mcp else None,
             stream=True,
             timeout=DELAI_MAX_PAR_APPEL,
@@ -1122,7 +1122,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
     completion = client_groq.chat.completions.create(
         model=modele,
         messages=messages_agent,
-        max_completion_tokens=1024,
+        max_completion_tokens=None,
         tools=outils_mcp if outils_mcp else None,
         stream=True,
         timeout=DELAI_MAX_PAR_APPEL,
@@ -1353,8 +1353,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 model=GOOGLE_MODEL,
                 contents=gemini_messages,
                 config=types.GenerateContentConfig(
-                    system_instruction=system_final,
-                    max_output_tokens=1024
+                    system_instruction=system_final
                 )
             )
             for chunk in response:
@@ -1457,8 +1456,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 model=GOOGLE_MODEL,
                 contents=gemini_messages,
                 config=types.GenerateContentConfig(
-                    system_instruction=system_final,
-                    max_output_tokens=1024
+                    system_instruction=system_final
                 )
             )
             for chunk in response:
