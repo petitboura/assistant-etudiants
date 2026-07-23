@@ -62,12 +62,19 @@ def _token_lecture(user_id):
 @mcp_github.tool()
 def explorer_depot_github(repo: str, branche: str = "", chemin_depart: str = "", user_id: str = "") -> str:
     """
-    Liste l'arborescence COMPLÈTE (récursive) d'un dépôt GitHub public ou
-    privé (si la personne est connectée à GitHub). `repo` au format
+    Liste l'arborescence COMPLÈTE (récursive, un seul appel API GitHub --
+    pas de git clone, voir docstring du module) d'un dépôt GitHub public
+    ou privé (si la personne est connectée à GitHub). `repo` au format
     "proprietaire/nom-du-depot". `branche` optionnelle (branche par
     défaut du dépôt si vide). `chemin_depart` optionnel pour ne lister
-    qu'un sous-dossier. Renvoie la liste des chemins avec leur type
-    (fichier/dossier), tronquée si le dépôt est très volumineux.
+    qu'un sous-dossier.
+
+    Renvoie TOUJOURS le nombre TOTAL exact de fichiers et de dossiers en
+    première ligne (calculé sur l'arborescence complète, jamais sur une
+    liste tronquée) -- si on te demande juste "combien de fichiers dans
+    ce dépôt", cette ligne suffit, pas besoin de compter la liste
+    toi-même. Le détail ligne par ligne, lui, PEUT être tronqué si le
+    dépôt est très volumineux (voir mention "TRONQUÉE").
     """
     token = _token_lecture(user_id or None)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -95,18 +102,44 @@ def explorer_depot_github(repo: str, branche: str = "", chemin_depart: str = "",
             return f"Impossible de lire l'arborescence (statut {arbo.status_code}) : {repo}"
 
         donnees = arbo.json()
-        entrees = donnees.get("tree", [])
+        entrees_completes = donnees.get("tree", [])
         if chemin_depart:
-            entrees = [e for e in entrees if e["path"].startswith(chemin_depart)]
+            entrees_completes = [e for e in entrees_completes if e["path"].startswith(chemin_depart)]
 
-        tronque = len(entrees) > TAILLE_MAX_ARBORESCENCE or donnees.get("truncated", False)
-        entrees = entrees[:TAILLE_MAX_ARBORESCENCE]
+        # Distinction importante : "truncated" venant de GitHub lui-même
+        # (dépôt extrêmement volumineux, >100k entrées ou >7 Mo de
+        # réponse) veut dire que même entrees_completes est incomplète --
+        # le total n'est alors qu'un minorant, pas un vrai total exact.
+        # Notre propre troncature d'AFFICHAGE (TAILLE_MAX_ARBORESCENCE),
+        # elle, n'affecte jamais le total puisqu'il est calculé avant.
+        truncature_github = donnees.get("truncated", False)
+        nb_fichiers = sum(1 for e in entrees_completes if e["type"] == "blob")
+        nb_dossiers = sum(1 for e in entrees_completes if e["type"] == "tree")
 
-        lignes = [f"- {e['path']} ({'dossier' if e['type'] == 'tree' else 'fichier'})" for e in entrees]
-        entete = f"Arborescence de {repo} (branche {branche})"
-        if tronque:
-            entete += f" -- TRONQUÉE aux {TAILLE_MAX_ARBORESCENCE} premières entrées, dépôt volumineux"
-        return entete + " :\n" + "\n".join(lignes)
+        tronque_affichage = len(entrees_completes) > TAILLE_MAX_ARBORESCENCE
+        entrees_affichees = entrees_completes[:TAILLE_MAX_ARBORESCENCE]
+
+        if truncature_github:
+            entete = (
+                f"{repo} (branche {branche}) -- dépôt extrêmement volumineux, "
+                f"GitHub lui-même limite la réponse : AU MOINS {nb_fichiers} fichiers, "
+                f"{nb_dossiers} dossiers (décompte partiel, pas le vrai total)."
+            )
+        else:
+            entete = (
+                f"{repo} (branche {branche}) -- TOTAL EXACT : {nb_fichiers} fichiers, "
+                f"{nb_dossiers} dossiers."
+            )
+        if tronque_affichage:
+            entete += (
+                f" Liste détaillée ci-dessous TRONQUÉE aux {TAILLE_MAX_ARBORESCENCE} "
+                "premières entrées (le total ci-dessus reste correct)."
+            )
+
+        lignes = [
+            f"- {e['path']} ({'dossier' if e['type'] == 'tree' else 'fichier'})" for e in entrees_affichees
+        ]
+        return entete + "\n\n" + "\n".join(lignes)
     except Exception as e:
         logging.error(f"ERREUR explorer_depot_github ({repo}) : {e}")
         return "Erreur : impossible d'explorer ce dépôt, réessaie."
