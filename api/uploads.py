@@ -334,9 +334,14 @@ async def uploader_audio_chat(
     utilisateur=Depends(utilisateur_courant),
 ):
     """
-    Transcrit un audio enregistré via BarreDeSaisie.tsx (dictée vocale,
-    MediaRecorder côté navigateur) avec whisper-large-v3 via Groq -- même
-    fournisseur que le cascade texte, pas de nouvelle clé API à gérer.
+    Transcrit un audio avec whisper-large-v3 via Groq (même fournisseur
+    que le cascade texte, pas de nouvelle clé API à gérer). Sert deux
+    cas : la dictée vocale (BarreDeSaisie.tsx, MediaRecorder côté
+    navigateur, toujours actif) et, préparé le 2026-07-22 pour un vrai
+    upload de fichier audio (mp3/wav/ogg/m4a) depuis le trombone -- pas
+    de vérification de content-type ici (un blob MediaRecorder n'a pas
+    toujours un type MIME standard), Whisper gère le format lui-même ou
+    échoue proprement.
     """
     from groq import Groq
 
@@ -360,6 +365,23 @@ async def uploader_audio_chat(
     texte = (transcription.text or "").strip()
     if not texte or not _transcription_vraisemblable(texte):
         raise HTTPException(status_code=400, detail="Rien n'a été compris, réessaie plus près du micro.")
+
+    # Persistance bibliothèque (2026-07-22) : même logique que
+    # image/document/vidéo. S'applique aussi bien à la dictée micro qu'à
+    # un futur vrai fichier audio uploadé -- best-effort, ne bloque jamais
+    # la réponse (le texte transcrit est déjà prêt).
+    try:
+        enregistrer_fichier(
+            contenu=contenu,
+            nom_fichier=fichier.filename or "audio.webm",
+            type_mime=fichier.content_type or "audio/webm",
+            niveau="utilisateur",
+            uploade_par=utilisateur.id,
+            user_id=utilisateur.id,
+            description="Audio envoyé en conversation",
+        )
+    except Exception as e:
+        logging.warning(f"Indexation bibliothèque échouée pour audio chat {fichier.filename} (transcription OK quand même) : {e}")
 
     return {"texte": texte}
 
@@ -521,6 +543,24 @@ async def uploader_video_chat(
             raise HTTPException(status_code=500, detail="Impossible d'analyser cette vidéo, réessaie.")
 
         frames_base64 = [base64.b64encode(f).decode("utf-8") for f in frames]
+
+        # Persistance bibliothèque (2026-07-22) : même correctif que pour
+        # les images/documents -- la vidéo originale était traitée puis
+        # jetée, jamais retrouvable ensuite. Best-effort : ne doit jamais
+        # faire échouer la réponse (transcript/frames sont déjà prêts).
+        try:
+            enregistrer_fichier(
+                contenu=contenu,
+                nom_fichier=fichier.filename or f"video.{extension}",
+                type_mime=fichier.content_type,
+                niveau="utilisateur",
+                uploade_par=utilisateur.id,
+                user_id=utilisateur.id,
+                description="Vidéo envoyée en conversation",
+            )
+        except Exception as e:
+            logging.warning(f"Indexation bibliothèque échouée pour vidéo chat {fichier.filename} (analyse OK quand même) : {e}")
+
         return {"transcript": transcript, "frames_base64": frames_base64}
     finally:
         if os.path.exists(chemin_video):

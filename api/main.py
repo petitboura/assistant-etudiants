@@ -28,8 +28,13 @@ from api.posts import router as posts_router
 from api.chat import router as chat_router
 from api.feedback import router as feedback_router
 from api.generation import router as generation_router
+from api.memoire import router as memoire_router
+from api.connexions import router as connexions_router
+from api.droits_agent import router as droits_agent_router
+from api.droits_agent import router_registre as registre_outils_router
 from core.serveur_mcp_generation import mcp_generation
 from core.notifications_push import traiter_rappels_echus, notifications_push_disponible
+from core.serveur_mcp_github import mcp_github
 
 logging.basicConfig(level=logging.INFO)
 
@@ -58,7 +63,7 @@ async def _lifespan(app: FastAPI):
     # besoin de tourner pendant toute la durée de vie du process, sinon
     # streamable_http_app() renvoie une erreur "Task group is not
     # initialized" au premier appel d'outil.
-    async with mcp_generation.session_manager.run():
+    async with mcp_generation.session_manager.run(), mcp_github.session_manager.run():
         tache_planificateur = None
         if notifications_push_disponible():
             tache_planificateur = asyncio.create_task(_boucle_planificateur_rappels())
@@ -75,6 +80,11 @@ app = FastAPI(title="Djiguigne API", version="0.1.0", lifespan=_lifespan)
 # streamable_http_path="/" (configuré dans le serveur lui-même) fait que
 # le point d'entree final est bien /mcp/generation, sans /mcp en trop.
 app.mount("/mcp/generation", mcp_generation.streamable_http_app())
+
+# Serveur MCP interne (exploration/lecture/écriture GitHub) : voir
+# core/serveur_mcp_github.py, monté de la même façon que "generation"
+# ci-dessus. registre_outils.py l'enregistre sous le nom "github".
+app.mount("/mcp/github", mcp_github.streamable_http_app())
 
 # Domaines autorisés à appeler cette API. "http://localhost:3000" est le
 # port par defaut de `npm run dev` en Next.js, a garder tant que le
@@ -118,6 +128,10 @@ app.include_router(chat_router)
 app.include_router(feedback_router)
 app.include_router(generation_router)
 app.include_router(notifications_push_router)
+app.include_router(memoire_router)
+app.include_router(connexions_router)
+app.include_router(droits_agent_router)
+app.include_router(registre_outils_router)
 
 
 @app.get("/health")

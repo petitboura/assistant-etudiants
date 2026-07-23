@@ -100,6 +100,7 @@ api/
 | `GOOGLE_API_KEY` | `core/embeddings.py`, `core/main.py` (secours Gemini) |
 | `NOTION_TOKEN` | `indexers/index_notion.py`, `connexions/notion.py` |
 | `TAVILY_API_KEY` | `core/registre_outils.py` (outil de recherche web) |
+| `GITHUB_TOKEN` (optionnel) | `core/main.py` (connecteur GitHub, lecture publique) -- sans lui, l'API GitHub non authentifiée est plafonnée à 60 requêtes/heure PAR IP, partagées entre tous les étudiants ; un classic token `public_repo` (lecture seule, repos publics) fait passer la limite à 5000/heure |
 | `URL_RETOUR_APP` | URL publique du déploiement, utilisée pour le retour OAuth Notion — à recalculer à chaque changement de domaine, pas à copier telle quelle d'un environnement à l'autre |
 
 Variables **obsolètes**, ignorées par le code actuel : `OPENROUTER_API_KEY`
