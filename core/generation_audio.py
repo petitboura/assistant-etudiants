@@ -77,7 +77,14 @@ def _generer_via_huggingface(texte: str) -> bytes:
         json={"inputs": texte},
         timeout=60,
     )
-    reponse.raise_for_status()
+    if reponse.status_code >= 400:
+        # raise_for_status() seul ne montre que "400 Bad Request", jamais
+        # le corps de la reponse -- exactement ce qui a fait tourner en
+        # rond le diagnostic les deux essais precedents (403 puis 400
+        # sans jamais voir le VRAI message d'erreur de Hugging Face).
+        raise RuntimeError(
+            f"Hugging Face a renvoyé {reponse.status_code} : {reponse.text[:500]}"
+        )
     return reponse.content
 
 
@@ -89,7 +96,8 @@ def _generer_via_groq(texte: str, voix: str) -> bytes:
         json={"model": MODELE_GROQ, "input": texte, "voice": voix, "response_format": "wav"},
         timeout=60,
     )
-    reponse.raise_for_status()
+    if reponse.status_code >= 400:
+        raise RuntimeError(f"Groq a renvoyé {reponse.status_code} : {reponse.text[:500]}")
     return reponse.content
 
 
