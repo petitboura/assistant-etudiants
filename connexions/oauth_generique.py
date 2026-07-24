@@ -53,6 +53,28 @@ from supabase import create_client
 MARGE_RAFRAICHISSEMENT = timedelta(minutes=5)
 
 
+def _calculer_expiration(tokens):
+    """
+    Corrigé le 2026-07-24 après un vrai test GitHub en production : avant
+    ce fix, l'absence de `expires_in` dans la réponse (ex. GitHub sans
+    "Enable token expiration" activé sur l'app OAuth -- comportement par
+    défaut) faisait supposer une expiration factice de 3600s. Le token
+    GitHub réel restait valide indéfiniment, mais après 1h le système
+    croyait devoir le rafraîchir, échouait (pas de refresh_token émis
+    dans ce cas), et la connexion semblait "morte" alors qu'elle ne
+    l'était pas -- symptôme observé : "Compte GitHub non connecté" pour
+    un compte pourtant bien connecté une heure plus tôt.
+
+    Si `expires_in` est présent (Notion, Google, et GitHub SI l'option
+    d'expiration est activée), comportement inchangé : expiration réelle
+    + rafraîchissement normal. Absent -> on traite le token comme valable
+    très longtemps (100 ans), au lieu de deviner une durée fausse.
+    """
+    if "expires_in" in tokens:
+        return datetime.now(timezone.utc) + timedelta(seconds=tokens["expires_in"])
+    return datetime.now(timezone.utc) + timedelta(days=365 * 100)
+
+
 def get_secret(key):
     try:
         import streamlit as st
@@ -225,7 +247,7 @@ def finaliser_connexion(service, code, state):
         logging.error(f"ERREUR ECHANGE CODE {service.upper()} : {e}")
         return False, f"Connexion {service} impossible (code invalide ou expiré)."
 
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=tokens.get("expires_in", 3600))
+    expires_at = _calculer_expiration(tokens)
 
     try:
         supabase.table("connexions_oauth").upsert({
@@ -269,7 +291,7 @@ def _rafraichir(service, config, connexion):
         logging.warning(f"Rafraîchissement {service} échoué pour user {connexion['user_id']} : {e}")
         return None
 
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=tokens.get("expires_in", 3600))
+    expires_at = _calculer_expiration(tokens)
 
     supabase.table("connexions_oauth").update({
         "access_token": tokens["access_token"],
