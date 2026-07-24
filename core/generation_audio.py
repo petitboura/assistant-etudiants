@@ -2,37 +2,33 @@
 Synthèse vocale (TTS) -- DEUX fournisseurs, même logique que
 generation_images.py (Pollinations/Together) :
 
-1. microsoft/speecht5_tts via Hugging Face (router.huggingface.co),
-   GRATUIT : nécessite un compte Hugging Face (gratuit, sans carte
-   bancaire) et un token (HF_API_TOKEN). Utilisé PAR DÉFAUT si
-   HF_API_TOKEN est configurée.
+1. Google Cloud Text-to-Speech, GRATUIT dans la limite de 4 millions de
+   caractères/mois (voix "Standard") -- un vrai palier gratuit permanent,
+   pas un essai limité dans le temps. Nécessite un projet Google Cloud
+   avec facturation activée (une carte bancaire à ajouter, mais jamais
+   débitée tant que le quota n'est pas dépassé) et une clé API.
+   Utilisé PAR DÉFAUT si GOOGLE_TTS_API_KEY est configurée.
 
-   CORRECTIF du 22/07/2026 : le plan initial utilisait Kokoro-82M, qui
-   a échoué en test réel avec une erreur 403 -- Kokoro n'est en fait
-   PAS déployé sur l'infrastructure d'inférence de Hugging Face (ni
-   gratuite ni payante), voir la doc HF/discussions communautaires.
-   speecht5_tts est le modèle que HF documente eux-mêmes comme exemple
-   officiel pour hf-inference (donc confirmé "warm"/servi), qualité
-   moindre que Kokoro mais réellement fonctionnel.
+   HISTORIQUE (22/07/2026) : deux tentatives précédentes via Hugging
+   Face (Kokoro-82M puis microsoft/speecht5_tts) ont toutes les deux
+   échoué en test réel -- "hf-inference" (l'infra gratuite de HF) a
+   réduit sa portée mi-2025 et ne sert plus fiablement de modèles TTS,
+   confirmé par erreur "Model not supported by provider hf-inference".
+   Abandonné au profit de Google Cloud TTS, qui a un vrai palier
+   gratuit documenté et une API stable.
 
-   AVERTISSEMENT (22/07/2026) : plusieurs utilisateurs signalent des
-   erreurs serveur ("Internal Server Error") récurrentes et non
-   résolues avec CE modèle précis sur l'infra Hugging Face (voir
-   huggingface.co/microsoft/speecht5_tts/discussions/46). Si ça échoue
-   encore après le fix du format de requête, ce n'est probablement pas
-   un bug de ce code mais une vraie limite de fiabilité côté HF -- dans
-   ce cas, basculer sur le chemin Groq (payant, AUDIO_TTS_ACTIF=true)
-   plutôt que de chercher un énième modèle gratuit.
+2. Groq / Orpheus, payant (~22$/million de caractères) : utilisé EN
+   PRIORITÉ si AUDIO_TTS_ACTIF="true" ET GROQ_API_KEY présente (déjà là
+   pour le chat, mais gatée par un interrupteur dédié). Meilleure
+   latence/qualité pour un usage à volume.
 
-2. Groq / Orpheus, payant (~22$/million de caractères) : utilisé
-   UNIQUEMENT si AUDIO_TTS_ACTIF="true" ET GROQ_API_KEY présente
-   (déjà là pour le chat, mais gatée par un interrupteur dédié -- voir
-   ancienne version de ce fichier). Meilleure latence/fiabilité pour
-   un usage à volume.
-
-Si aucune des deux clés n'est configurée : indisponible, comme avant.
+NON TESTÉ EN CONDITIONS RÉELLES pour le chemin Google Cloud (à
+confirmer au premier vrai test, comme d'habitude -- mais cette fois le
+format de requête est vérifié contre la documentation officielle
+Google, pas déduit d'un exemple possiblement obsolète).
 """
 
+import base64
 import logging
 import os
 import uuid
@@ -43,7 +39,6 @@ from api.auth import supabase
 
 BUCKET = "generations"
 MODELE_GROQ = "canopylabs/orpheus-v1-english"
-MODELE_HF = "microsoft/speecht5_tts"
 VOIX_PAR_DEFAUT = "austin"
 
 
@@ -61,31 +56,27 @@ def _groq_actif() -> bool:
 
 
 def audio_disponible() -> bool:
-    return bool(_get_secret("HF_API_TOKEN")) or _groq_actif()
+    return bool(_get_secret("GOOGLE_TTS_API_KEY")) or _groq_actif()
 
 
-def _generer_via_huggingface(texte: str) -> bytes:
-    # CORRECTIF du 22/07/2026 : "text_inputs" (première tentative)
-    # renvoyait 400 Bad Request. "inputs" est la clé standard utilisée
-    # par TOUS les pipelines d'inference Hugging Face (texte, image,
-    # audio...), pas seulement le TTS -- erreur de ma part, je m'étais
-    # fié à un exemple de code obsolète.
-    token = _get_secret("HF_API_TOKEN")
+def _generer_via_google(texte: str) -> bytes:
+    cle = _get_secret("GOOGLE_TTS_API_KEY")
     reponse = requests.post(
-        f"https://router.huggingface.co/hf-inference/models/{MODELE_HF}",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"inputs": texte},
-        timeout=60,
+        f"https://texttospeech.googleapis.com/v1/text:synthesize?key={cle}",
+        json={
+            "input": {"text": texte},
+            # Voix "Standard" (pas WaveNet/Neural2) : c'est précisément
+            # la catégorie couverte par le plus gros palier gratuit
+            # (4M caractères/mois) -- voir docstring en tête de fichier.
+            "voice": {"languageCode": "fr-FR", "name": "fr-FR-Standard-A"},
+            "audioConfig": {"audioEncoding": "MP3"},
+        },
+        timeout=30,
     )
     if reponse.status_code >= 400:
-        # raise_for_status() seul ne montre que "400 Bad Request", jamais
-        # le corps de la reponse -- exactement ce qui a fait tourner en
-        # rond le diagnostic les deux essais precedents (403 puis 400
-        # sans jamais voir le VRAI message d'erreur de Hugging Face).
-        raise RuntimeError(
-            f"Hugging Face a renvoyé {reponse.status_code} : {reponse.text[:500]}"
-        )
-    return reponse.content
+        raise RuntimeError(f"Google Cloud TTS a renvoyé {reponse.status_code} : {reponse.text[:500]}")
+    audio_base64 = reponse.json()["audioContent"]
+    return base64.b64decode(audio_base64)
 
 
 def _generer_via_groq(texte: str, voix: str) -> bytes:
@@ -104,26 +95,30 @@ def _generer_via_groq(texte: str, voix: str) -> bytes:
 def generer_audio(texte: str, voix: str = VOIX_PAR_DEFAUT) -> str:
     """
     Utilise Groq/Orpheus si explicitement activé (AUDIO_TTS_ACTIF=true,
-    payant, meilleure latence), sinon Hugging Face/speecht5_tts
-    (gratuit, nécessite juste HF_API_TOKEN). Uploade dans Supabase
-    Storage, renvoie l'URL publique.
+    payant, meilleure latence/qualité), sinon Google Cloud TTS (gratuit
+    jusqu'à 4M caractères/mois, nécessite GOOGLE_TTS_API_KEY). Uploade
+    dans Supabase Storage, renvoie l'URL publique.
 
-    `voix` n'est utilisé que par le chemin Groq -- speecht5_tts utilise
-    sa propre voix par défaut côté Hugging Face.
+    `voix` n'est utilisé que par le chemin Groq -- Google Cloud utilise
+    une voix française fixe côté code (voir _generer_via_google).
+    Le format de sortie diffère aussi (MP3 pour Google, WAV pour Groq) :
+    l'extension du fichier stocké s'adapte en conséquence.
     """
     if _groq_actif():
         audio_bytes = _generer_via_groq(texte, voix)
-    elif _get_secret("HF_API_TOKEN"):
-        audio_bytes = _generer_via_huggingface(texte)
+        extension, content_type = "wav", "audio/wav"
+    elif _get_secret("GOOGLE_TTS_API_KEY"):
+        audio_bytes = _generer_via_google(texte)
+        extension, content_type = "mp3", "audio/mpeg"
     else:
         raise RuntimeError(
-            "Génération audio indisponible : ni HF_API_TOKEN (gratuit) ni "
+            "Génération audio indisponible : ni GOOGLE_TTS_API_KEY (gratuit) ni "
             "AUDIO_TTS_ACTIF+GROQ_API_KEY (payant) ne sont configurés."
         )
 
-    chemin = f"audio/{uuid.uuid4()}.wav"
+    chemin = f"audio/{uuid.uuid4()}.{extension}"
     try:
-        supabase.storage.from_(BUCKET).upload(chemin, audio_bytes, {"content-type": "audio/wav"})
+        supabase.storage.from_(BUCKET).upload(chemin, audio_bytes, {"content-type": content_type})
     except Exception as e:
         logging.error(f"ERREUR SUPABASE STORAGE (upload audio {chemin}) : {e}")
         raise

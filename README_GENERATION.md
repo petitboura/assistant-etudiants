@@ -52,23 +52,27 @@ maintenant :
 Même détection automatique que pour Together AI (`signature_disponible()`
 dans core/generation_signature.py).
 
-## 6. Audio / synthèse vocale (speecht5_tts gratuit par défaut, Groq payant en option)
+## 6. Audio / synthèse vocale (Google Cloud TTS gratuit, Groq payant en option)
 
-Depuis le 21/07/2026 (corrigé le 22/07/2026 après un premier échec en
-test réel avec Kokoro, qui n'est pas déployé sur l'infra Hugging Face),
-deux chemins possibles :
+Historique complet dans core/generation_audio.py. Résumé : Hugging Face
+(deux modèles essayés, Kokoro puis speecht5_tts) a échoué à chaque
+tentative -- leur infra gratuite ne sert plus fiablement de modèles
+TTS depuis mi-2025. Remplacé le 22/07/2026 par Google Cloud TTS.
 
-**Gratuit (par défaut si configuré)** : microsoft/speecht5_tts via
-Hugging Face -- le modèle que HF documente eux-mêmes comme exemple
-officiel pour leur infra gratuite (donc confirmé fonctionnel).
-1. Crée un compte gratuit sur huggingface.co (aucune carte bancaire)
-2. Génère un token : Settings -> Access Tokens -> New token
-3. Ajoute `HF_API_TOKEN` dans les variables d'environnement Railway
+**Gratuit (par défaut si configuré)** : Google Cloud Text-to-Speech,
+4 millions de caractères/mois gratuits (voix "Standard"), un vrai
+palier permanent, pas un essai limité dans le temps.
+1. Crée un projet sur https://console.cloud.google.com
+2. Active la facturation (carte bancaire requise, mais jamais débitée
+   sous 4M caractères/mois) et active l'API "Cloud Text-to-Speech API"
+3. APIs & services -> Credentials -> Create credentials -> API key
+   -> restreins-la à "Cloud Text-to-Speech API" (plus sûr)
+4. Ajoute `GOOGLE_TTS_API_KEY` dans les variables d'environnement Railway
 
 **Payant (optionnel, meilleure latence/qualité)** : Groq/Orpheus, ~22$/
 million de caractères. Ajoute `AUDIO_TTS_ACTIF=true` (GROQ_API_KEY
 existe déjà pour le chat). Si les deux sont configurés, Groq est
-utilisé en priorité, Hugging Face reste le repli.
+utilisé en priorité, Google Cloud TTS reste le repli gratuit.
 
 ## 7. Vidéo (le plus cher de loin -- à activer en dernier)
 
