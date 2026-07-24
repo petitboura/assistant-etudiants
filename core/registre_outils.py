@@ -41,12 +41,16 @@ def _url_generation(get_secret, user_id, agent_id):
     # TOUJOURS le même process/port que celui qui répond à cette
     # requête (localhost, jamais un vrai domaine externe), donc pas
     # besoin de BACKEND_URL ici : on lit directement $PORT, la variable
-    # que Railway fournit et qu'uvicorn utilise pour écouter. Coder
-    # "8000" en dur ici serait faux dès que Railway attribue un autre
-    # port -- c'est exactement le bug qui a empêché l'outil de
-    # fonctionner au premier test (2026-07-20).
+    # que Railway fournit et qu'uvicorn utilise pour écouter.
+    #
+    # user_id/agent_id ajoutés en query params (2026-07-22) : nécessaire
+    # pour planifier_rappel (notifications push), le premier outil de ce
+    # serveur qui a besoin de savoir QUI l'appelle -- récupérés côté
+    # serveur via ctx.request_context.request.query_params (voir
+    # serveur_mcp_generation.py). Inoffensif pour les autres outils qui
+    # n'en ont pas besoin.
     port = os.environ.get("PORT", "8000")
-    return f"http://localhost:{port}/mcp/generation"
+    return f"http://localhost:{port}/mcp/generation?user_id={user_id}&agent_id={agent_id}"
 
 
 def _url_github(get_secret, user_id, agent_id):

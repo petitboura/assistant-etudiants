@@ -15,6 +15,15 @@ generation_images.py (Pollinations/Together) :
    officiel pour hf-inference (donc confirmé "warm"/servi), qualité
    moindre que Kokoro mais réellement fonctionnel.
 
+   AVERTISSEMENT (22/07/2026) : plusieurs utilisateurs signalent des
+   erreurs serveur ("Internal Server Error") récurrentes et non
+   résolues avec CE modèle précis sur l'infra Hugging Face (voir
+   huggingface.co/microsoft/speecht5_tts/discussions/46). Si ça échoue
+   encore après le fix du format de requête, ce n'est probablement pas
+   un bug de ce code mais une vraie limite de fiabilité côté HF -- dans
+   ce cas, basculer sur le chemin Groq (payant, AUDIO_TTS_ACTIF=true)
+   plutôt que de chercher un énième modèle gratuit.
+
 2. Groq / Orpheus, payant (~22$/million de caractères) : utilisé
    UNIQUEMENT si AUDIO_TTS_ACTIF="true" ET GROQ_API_KEY présente
    (déjà là pour le chat, mais gatée par un interrupteur dédié -- voir
@@ -56,14 +65,26 @@ def audio_disponible() -> bool:
 
 
 def _generer_via_huggingface(texte: str) -> bytes:
+    # CORRECTIF du 22/07/2026 : "text_inputs" (première tentative)
+    # renvoyait 400 Bad Request. "inputs" est la clé standard utilisée
+    # par TOUS les pipelines d'inference Hugging Face (texte, image,
+    # audio...), pas seulement le TTS -- erreur de ma part, je m'étais
+    # fié à un exemple de code obsolète.
     token = _get_secret("HF_API_TOKEN")
     reponse = requests.post(
         f"https://router.huggingface.co/hf-inference/models/{MODELE_HF}",
         headers={"Authorization": f"Bearer {token}"},
-        json={"text_inputs": texte},
+        json={"inputs": texte},
         timeout=60,
     )
-    reponse.raise_for_status()
+    if reponse.status_code >= 400:
+        # raise_for_status() seul ne montre que "400 Bad Request", jamais
+        # le corps de la reponse -- exactement ce qui a fait tourner en
+        # rond le diagnostic les deux essais precedents (403 puis 400
+        # sans jamais voir le VRAI message d'erreur de Hugging Face).
+        raise RuntimeError(
+            f"Hugging Face a renvoyé {reponse.status_code} : {reponse.text[:500]}"
+        )
     return reponse.content
 
 
@@ -75,7 +96,8 @@ def _generer_via_groq(texte: str, voix: str) -> bytes:
         json={"model": MODELE_GROQ, "input": texte, "voice": voix, "response_format": "wav"},
         timeout=60,
     )
-    reponse.raise_for_status()
+    if reponse.status_code >= 400:
+        raise RuntimeError(f"Groq a renvoyé {reponse.status_code} : {reponse.text[:500]}")
     return reponse.content
 
 

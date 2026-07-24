@@ -18,7 +18,7 @@ optionnelle -- voir generation_images.py, mis à jour le 21/07/2026).
 
 import logging
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 
 from core.generation_documents import generer_pdf_depuis_markdown
 from core.generation_code import generer_zip_depuis_fichiers
@@ -41,6 +41,10 @@ from core.generation_3d import (
     modele_3d_disponible,
 )
 from core.generation_images import generer_image as _generer_image, image_generation_disponible
+from core.notifications_push import (
+    planifier_rappel as _planifier_rappel,
+    notifications_push_disponible,
+)
 from core.generation_site import (
     deployer_site as _deployer_site,
     site_deploiement_disponible,
@@ -341,3 +345,33 @@ if site_deploiement_disponible():
         except Exception as e:
             logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : le déploiement du site a échoué, réessaie."
+
+
+# Enregistré conditionnellement, gate par les clés VAPID (voir
+# notifications_push.py). SEUL outil de ce fichier qui a besoin de
+# connaître l'identité de l'appelant (user_id/agent_id) : récupérés via
+# ctx.request_context.request.query_params, transmis dans l'URL par
+# _url_generation() (registre_outils.py). NON TESTÉ EN CONDITIONS
+# RÉELLES : si ça échoue au premier essai, vérifier en premier que
+# request_context.request est bien accessible dans ce mode
+# (stateless_http) -- c'est le point d'incertitude documenté ici.
+if notifications_push_disponible():
+    @mcp_generation.tool()
+    def planifier_rappel(contenu: str, dans_minutes: int, ctx: Context) -> str:
+        """
+        Planifie une notification push à envoyer à l'utilisateur après
+        un délai donné (ex: "préviens-moi dans 3 jours de réviser").
+        `contenu` est le texte de la notification, `dans_minutes` le
+        délai en minutes (ex: 4320 pour 3 jours).
+        """
+        try:
+            requete = ctx.request_context.request
+            user_id = requete.query_params.get("user_id")
+            agent_id = requete.query_params.get("agent_id")
+            if not user_id:
+                return "Erreur : impossible d'identifier l'utilisateur pour ce rappel."
+            _planifier_rappel(user_id, agent_id, contenu, dans_minutes)
+            return f"Rappel programmé dans {dans_minutes} minutes."
+        except Exception as e:
+            logging.error(f"ERREUR outil generation : {e}")
+            return "Erreur : la planification du rappel a échoué, réessaie."
