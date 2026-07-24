@@ -97,6 +97,9 @@ NOMS_OUTILS_LISIBLES = {
     "notion-fetch": "Lecture d'une page Notion",
     "notion-create-pages": "Création d'une page Notion",
     "notion-update-page": "Modification d'une page Notion",
+    "explorer_depot_github": "Exploration d'un dépôt GitHub",
+    "lire_fichier_depot_github": "Lecture d'un fichier GitHub",
+    "modifier_fichier_depot_github": "Modification d'un fichier GitHub",
 }
 
 
@@ -398,6 +401,24 @@ def _enrichir_message_avec_urls(message, user_id=None):
         return message
 
     return message + "\n\n" + "\n\n".join(blocs)
+
+
+def _nom_agent(agent_id):
+    """
+    Nom affiché de l'agent (ex. "Nucleos"), PAS l'agent_id technique --
+    utilisé pour que la confirmation d'une action sensible dise "Nucleos
+    va faire X" plutôt qu'une description générique de l'outil (demande
+    de Bourama, 2026-07-23 : le sujet de la phrase doit être l'agent,
+    peu importe l'outil concerné -- GitHub, Notion, ou un futur outil).
+    """
+    if not agent_id:
+        return None
+    try:
+        res = supabase.table("agents").select("nom").eq("id", agent_id).maybe_single().execute()
+        return (res.data or {}).get("nom")
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture nom agent={agent_id}) : {e}")
+        return None
 
 
 def _nom_lisible(nom_outil):
@@ -1016,7 +1037,7 @@ def _traiter_appels(appels, messages_agent, table_routage):
         raise _AttenteConfirmation(appels[index_sensible], appels[index_sensible + 1:])
 
 
-def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele=GROQ_PRIMARY, reasoning_effort=None):
+def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele=GROQ_PRIMARY, reasoning_effort=None, agent_nom=None):
     appel = attente.appel
     try:
         arguments_dict = json.loads(appel["arguments"] or "{}")
@@ -1026,6 +1047,13 @@ def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, 
         "type": "confirmation_requise",
         "nom_outil": appel["name"],
         "nom_lisible": _nom_lisible(appel["name"]),
+        # Message centré sur l'AGENT (2026-07-23) : "Nucleos va faire X",
+        # pas une description technique de l'outil -- valable pour
+        # n'importe quelle action sensible, pas seulement GitHub. Le
+        # frontend peut afficher ce message directement, ou continuer à
+        # composer le sien à partir de nom_lisible s'il préfère.
+        "message": f"{agent_nom or 'Cet agent'} veut faire ceci : {_nom_lisible(appel['name'])}.",
+        "agent_nom": agent_nom,
         "arguments": arguments_dict,
         "etat_reprise": {
             "messages_agent": messages_agent,
@@ -1035,12 +1063,13 @@ def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, 
             "appels_restants": attente.appels_restants,
             "modele": modele,
             "reasoning_effort": reasoning_effort,
+            "agent_nom": agent_nom,
         },
     }
 
 
 def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
-                 appels_en_cours_a_finir=None, modele=GROQ_PRIMARY, reasoning_effort=None):
+                 appels_en_cours_a_finir=None, modele=GROQ_PRIMARY, reasoning_effort=None, agent_nom=None):
     """
     Boucle d'agent generique sur le modele Groq utilise (par defaut
     GROQ_PRIMARY, mais peut recevoir n'importe quel modele Groq qui sait
@@ -1070,7 +1099,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             for event in _traiter_appels(appels_en_cours_a_finir, messages_agent, table_routage):
                 yield event
         except _AttenteConfirmation as attente:
-            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele, reasoning_effort)
+            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele, reasoning_effort, agent_nom)
             return
 
     for _ in range(MAX_ETAPES_OUTILS):
@@ -1133,7 +1162,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             for event in _traiter_appels(appels, messages_agent, table_routage):
                 yield event
         except _AttenteConfirmation as attente:
-            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele, reasoning_effort)
+            yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele, reasoning_effort, agent_nom)
             return
 
     # MAX_ETAPES_OUTILS epuise sans reponse directe : on force une reponse
@@ -1297,6 +1326,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 client_groq, messages_agent, outils_mcp, table_routage,
                 appels_en_cours_a_finir=etat.get("appels_restants") or None,
                 modele=modele_reprise, reasoning_effort=reasoning_effort_reprise,
+                agent_nom=etat.get("agent_nom"),
             )
         except Exception as e:
             logging.error(f"ERREUR GROQ (reprise apres confirmation) {modele_reprise}: {e}")
@@ -1393,6 +1423,10 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
 
     client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
     outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id, agent_id)
+    # Nom affiché de l'agent (ex. "Nucleos"), calculé UNE fois ici -- voir
+    # _nom_agent, utilisé pour que la confirmation d'une action sensible
+    # dise "Nucleos veut faire X" plutôt qu'une description générique.
+    agent_nom = _nom_agent(agent_id)
 
     for _passage in range(MAX_PASSAGES_CASCADE):
         tout_est_timeout = True
@@ -1414,7 +1448,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
         # 1. GPT-OSS 120B, avec cycle d'outils MCP dynamique
         try:
             yield from _capturer_reponse(
-                _agent_groq(client_groq, messages_agent, outils_mcp, table_routage),
+                _agent_groq(client_groq, messages_agent, outils_mcp, table_routage, agent_nom=agent_nom),
                 reponse_accumulee,
             )
             ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
@@ -1445,7 +1479,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 yield from _capturer_reponse(
                     _agent_groq(
                         client_groq, messages_agent, outils_mcp, table_routage,
-                        modele=model, reasoning_effort=reasoning_pour_ce_modele,
+                        modele=model, reasoning_effort=reasoning_pour_ce_modele, agent_nom=agent_nom,
                     ),
                     reponse_accumulee,
                 )
