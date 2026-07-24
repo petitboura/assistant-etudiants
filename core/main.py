@@ -719,7 +719,7 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
 )
 
 
-def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None):
+def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None, recherche_forcee=False):
     system_prompt = get_system_prompt(agent_id)
     candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
     resume_memoire = _charger_resume_memoire(user_id)
@@ -756,6 +756,18 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     if contexte_docs:
         system_final += f"\n\n{contexte_docs}"
     system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
+    if recherche_forcee:
+        # Icône de recherche dans la barre de saisie (djiguign--ai) --
+        # forçage manuel pour CE message précis (voir docstring de
+        # chat()). Le modèle peut de toute façon décider seul d'utiliser
+        # Tavily sans ce flag (tool-calling normal) ; ceci garantit que
+        # ça arrive quand l'étudiant veut être sûr.
+        system_final += (
+            "\n\nCONSIGNE DE RECHERCHE : pour ce message précis, utilise "
+            "systématiquement un outil de recherche web (tavily_search) avant de "
+            "répondre, même si tu penses déjà connaître la réponse -- l'étudiant a "
+            "explicitement demandé une recherche fraîche."
+        )
     system_final += INSTRUCTIONS_FORMATS_AFFICHAGE
     system_final += REGLE_CONTEXTE_INVISIBLE
     system_final += (
@@ -992,6 +1004,36 @@ def _executer_un_appel(appel, table_routage):
     return appeler_outil(appel["name"], arguments, table_routage)
 
 
+def _extraire_sources_tavily(nom_outil, resultat_brut):
+    """
+    Parse le JSON renvoye par un outil tavily_* (search/extract/map/crawl/
+    research) pour en extraire {"titre", "url"} de chaque resultat --
+    utilise pour l'evenement "sources" (citations), le seul morceau du
+    bloc "Affichage" qui necessitait un nouveau type d'evenement plutot
+    qu'un simple branchement (voir echange avec Bourama, session du
+    2026-07-20). Best-effort : si le JSON ne correspond pas au format
+    attendu (ou n'est pas du JSON), renvoie une liste vide plutot que de
+    faire planter la reponse -- les sources sont un bonus, jamais un
+    prerequis pour repondre.
+    """
+    if not nom_outil.startswith("tavily_"):
+        return []
+    try:
+        donnees = json.loads(resultat_brut)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    resultats = donnees.get("results") if isinstance(donnees, dict) else None
+    if not isinstance(resultats, list):
+        return []
+
+    sources = []
+    for r in resultats:
+        if isinstance(r, dict) and r.get("url"):
+            sources.append({"titre": r.get("title") or r["url"], "url": r["url"]})
+    return sources
+
+
 def _traiter_appels(appels, messages_agent, table_routage):
     """
     Execute une liste d'appels d'outils, en ajoutant le resultat de chacun
@@ -1027,6 +1069,9 @@ def _traiter_appels(appels, messages_agent, table_routage):
                 appel = futures[future]
                 resultat = future.result()
                 yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
+                sources = _extraire_sources_tavily(appel["name"], resultat)
+                if sources:
+                    yield {"type": "sources", "sources": sources}
                 messages_agent.append({
                     "role": "tool",
                     "tool_call_id": appel["id"],
@@ -1197,11 +1242,14 @@ def _capturer_reponse(generateur, accumulateur):
         yield event
 
 
-def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None):
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None, recherche_forcee=False):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
     - {"type": "statut_termine", "texte": "..."} -> cet outil a fini (ou a ete annule)
+    - {"type": "sources", "sources": [{"titre": "...", "url": "..."}]} -> resultats d'une
+      recherche web (Tavily) utilisee pour repondre. Peut etre emis plusieurs fois dans le
+      meme echange (plusieurs recherches) -- l'appelant accumule/fusionne, ne remplace pas.
     - {"type": "reponse", "texte": "..."}        -> morceau de la reponse finale (streaming)
     - {"type": "confirmation_requise", ...}      -> un outil qui MODIFIE les donnees de
       l'etudiant (ex: creer une page Notion) attend une confirmation avant de s'executer.
@@ -1280,6 +1328,13 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     envoyé ici : il est transcrit à part (Whisper) et injecté comme texte
     dans message_utilisateur par le frontend, avant l'appel à chat().
 
+    `recherche_forcee` (optionnel, 2026-07-23, defaut False) : icône de
+    recherche dans la barre de saisie (djiguign--ai) -- force une
+    consigne de recherche web systematique pour CE message. Le modele
+    peut de toute facon decider seul d'utiliser Tavily sans ce flag
+    (tool-calling normal, des lors que le serveur "tavily" est active
+    pour l'agent) ; ce parametre garantit juste que ca arrive.
+
     Liens colles dans message_utilisateur (page web ou video YouTube) :
     recuperes automatiquement (_enrichir_message_avec_urls) et ajoutes en
     contexte APRES le message original avant envoi au modele. Le message
@@ -1340,7 +1395,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     if agent_id is None:
         agent_id = get_secret("AGENT_ID") or AGENT_ID_PAR_DEFAUT
 
-    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire)
+    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire, recherche_forcee)
 
     if localisation and localisation.get("latitude") is not None and localisation.get("longitude") is not None:
         # Contexte "système/environnement" (2026-07-20) : position GPS

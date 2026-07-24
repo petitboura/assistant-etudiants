@@ -89,6 +89,24 @@ def _headers_notion(get_secret, user_id, agent_id):
 SERVEURS_MCP = [
     {"nom": "wolfram", "url_builder": _url_wolfram},
     {
+        "nom": "tavily",
+        "url_builder": _url_tavily,
+        # Réactivé 2026-07-23 (demande de Bourama) -- la plomberie
+        # existait déjà (builder d'URL ci-dessus, libellés de statut
+        # tavily_search/tavily_extract/... dans core/main.py, option
+        # dans le créateur d'agent) mais l'entrée manquait ici, donc
+        # injoignable même pour un agent l'ayant coché dans ses droits.
+        #
+        # ATTENTION connue (voir commentaire sur "notion" plus bas) :
+        # Notion (20 outils) + Tavily cumulés dépassaient la limite
+        # 8000 TPM du tier Groq gratuit -> 413 Payload Too Large, qui
+        # faisait basculer sur le fallback Gemini SANS AUCUN outil.
+        # Le nouveau système de droits par agent (filtrage par outil,
+        # plus par serveur) limite le risque -- mais évite quand même
+        # d'activer Notion ET Tavily ensemble pour un même agent tant
+        # que ce n'est pas revérifié en conditions réelles.
+    },
+    {
         "nom": "generation",
         "url_builder": _url_generation,
         # Pas de "outils_autorises" fixe ici : categorie 1, filtree

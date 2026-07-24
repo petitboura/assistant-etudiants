@@ -76,6 +76,13 @@ class EnvoyerMessagePayload(BaseModel):
     # api/uploads.py:uploader_video_chat). Combinable avec image_url mais
     # rarement les deux en même temps en pratique.
     images_base64: Optional[List[str]] = None
+    # Icône de recherche web dans la barre de saisie (djiguign--ai,
+    # 2026-07-23) -- forçage manuel EN PLUS de l'activation automatique
+    # déjà possible : le modèle peut de toute façon décider seul
+    # d'utiliser Tavily (tool-calling normal, voir INSTRUCTIONS_RECHERCHE_FORCEE
+    # dans core/main.py). Ce flag garantit que ça arrive pour CE message
+    # précis, quand l'étudiant veut être sûr d'avoir une recherche fraîche.
+    recherche_forcee: Optional[bool] = None
     # Ajouté (2026-07-20) pour exposer le chemin de reprise de chat() --
     # jusqu'ici accessible seulement en appel Python interne (chat.py
     # Streamlit), jamais via cette route HTTP. Voir StatutOutil.tsx /
@@ -112,6 +119,7 @@ def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
                 localisation=payload.localisation.model_dump() if payload.localisation else None,
                 fuseau_horaire=payload.fuseau_horaire,
                 images_base64=payload.images_base64,
+                recherche_forcee=payload.recherche_forcee,
             )
         for evenement in generateur:
             yield f"data: {json.dumps(evenement)}\n\n"
