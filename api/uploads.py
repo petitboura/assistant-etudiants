@@ -268,7 +268,7 @@ async def uploader_document_chat(
     # jamais faire échouer la réponse (le texte extrait reste le besoin
     # principal de cet endpoint).
     try:
-        enregistrer_fichier(
+        ligne = enregistrer_fichier(
             contenu=contenu,
             nom_fichier=fichier.filename or f"document.{extension}",
             type_mime=fichier.content_type,
@@ -277,10 +277,12 @@ async def uploader_document_chat(
             user_id=utilisateur.id,
             description="Document envoyé en conversation",
         )
+        url_document = ligne["url_publique"]
     except Exception as e:
         logging.warning(f"Indexation bibliothèque échouée pour document chat {fichier.filename} (extraction OK quand même) : {e}")
+        url_document = None
 
-    return {"texte": texte, "tronque": tronque}
+    return {"texte": texte, "tronque": tronque, "url": url_document}
 
 
 # --- Audio (dictée vocale) : transcription, pas de stockage ----------------
@@ -371,7 +373,7 @@ async def uploader_audio_chat(
     # un futur vrai fichier audio uploadé -- best-effort, ne bloque jamais
     # la réponse (le texte transcrit est déjà prêt).
     try:
-        enregistrer_fichier(
+        ligne = enregistrer_fichier(
             contenu=contenu,
             nom_fichier=fichier.filename or "audio.webm",
             type_mime=fichier.content_type or "audio/webm",
@@ -380,8 +382,12 @@ async def uploader_audio_chat(
             user_id=utilisateur.id,
             description="Audio envoyé en conversation",
         )
+        url_audio = ligne["url_publique"]
     except Exception as e:
         logging.warning(f"Indexation bibliothèque échouée pour audio chat {fichier.filename} (transcription OK quand même) : {e}")
+        url_audio = None
+
+    return {"texte": texte, "url": url_audio}
 
     return {"texte": texte}
 
@@ -549,7 +555,7 @@ async def uploader_video_chat(
         # jetée, jamais retrouvable ensuite. Best-effort : ne doit jamais
         # faire échouer la réponse (transcript/frames sont déjà prêts).
         try:
-            enregistrer_fichier(
+            ligne = enregistrer_fichier(
                 contenu=contenu,
                 nom_fichier=fichier.filename or f"video.{extension}",
                 type_mime=fichier.content_type,
@@ -558,10 +564,12 @@ async def uploader_video_chat(
                 user_id=utilisateur.id,
                 description="Vidéo envoyée en conversation",
             )
+            url_video = ligne["url_publique"]
         except Exception as e:
             logging.warning(f"Indexation bibliothèque échouée pour vidéo chat {fichier.filename} (analyse OK quand même) : {e}")
+            url_video = None
 
-        return {"transcript": transcript, "frames_base64": frames_base64}
+        return {"transcript": transcript, "frames_base64": frames_base64, "url": url_video}
     finally:
         if os.path.exists(chemin_video):
             os.remove(chemin_video)
