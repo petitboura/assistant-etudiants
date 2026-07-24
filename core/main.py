@@ -739,7 +739,16 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
         f"conversation passée. Ton agent_id est \"{agent_id}\". L'user_id de la "
         f"personne actuelle est {f'\"{user_id}\"' if user_id else 'absent (non connectée)'}. "
         "Passe TOUJOURS ces deux valeurs exactement telles quelles à chercher_fichier, "
-        "ne les invente jamais."
+        "ne les invente jamais.\n"
+        "CAS PIÈGE fréquent : quand la personne t'envoie une image (ou tout fichier) "
+        "directement dans la conversation, tu la VOIS (analyse visuelle) mais tu ne "
+        "reçois PAS son URL réelle en texte à ce moment-là -- si on te redemande "
+        "ensuite \"redonne-moi cette image\"/\"le fichier que je viens d'envoyer\", tu "
+        "n'as pas ce lien en mémoire, donc tu ne peux PAS le réécrire de toi-même "
+        "(ça a été confirmé cassé en test réel, 2026-07-23 : lien inventé qui ne mène "
+        "nulle part). Dans ce cas précis, appelle TOUJOURS chercher_fichier "
+        "(elle a été indexée automatiquement lors de l'envoi, niveau utilisateur) "
+        "pour récupérer le vrai lien avant de répondre."
     )
     system_final += (
         "\n\nEXPLORATION GITHUB : tu as accès à explorer_depot_github (arborescence "
