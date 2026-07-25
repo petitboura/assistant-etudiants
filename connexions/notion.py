@@ -115,7 +115,7 @@ def _client_dcr_actif(metadata):
     reponse = httpx.post(
         metadata["registration_endpoint"],
         json={
-            "client_name": "Assistant Etudiants",
+            "client_name": "Djiguigne",
             "redirect_uris": [URL_RETOUR],
             "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
