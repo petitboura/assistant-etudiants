@@ -1,6 +1,25 @@
 """
 Authentification etudiant (email/mot de passe + Google), via Supabase Auth.
 
+STATUT (25/07/2026) : ce fichier n'est actuellement importe nulle part
+dans le depot (ni api/, ni core/, ni connexions/). La connexion
+email/mot de passe reelle se fait aujourd'hui cote frontend Next.js,
+directement contre Supabase (voir djiguign--ai/lib/authFallback.ts),
+sans passer par ce module. Garde intentionnellement : "Se connecter
+avec Google" doit etre remis en place plus tard (Bourama). Pour
+l'activer, il faudra des identifiants OAuth Google (Client ID + Secret,
+Google Cloud Console) a renseigner dans Supabase -> Authentication ->
+Providers -> Google -- rien a faire cote Railway pour ca.
+
+A noter avant de reutiliser ce module tel quel : le flux PKCE fait a la
+main ici (voir NOTE TECHNIQUE plus bas) contournait une limite propre a
+Streamlit (un seul process partage par plusieurs etudiants a la fois).
+Cote Next.js, chaque utilisateur a deja sa propre session navigateur,
+donc l'appel client standard supabase.auth.signInWithOAuth({provider:
+"google"}) depuis le frontend suffirait probablement, sans ce detour
+Python -- a evaluer le moment venu plutot que de reactiver ce fichier
+par defaut.
+
 Le compte reste OPTIONNEL : le chat fonctionne sans connexion. On ne pousse
 l'etudiant a se connecter que quand une fonctionnalite en a vraiment besoin
 (ex: connecter son Notion plus tard).

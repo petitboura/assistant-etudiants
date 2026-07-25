@@ -423,10 +423,10 @@ async def uploader_audio_chat(
 # supprimés dans le `finally` de uploader_video_chat.
 #
 # LIMITE INFRA CONNUE : nécessite ffmpeg/ffprobe sur la machine qui
-# exécute ce backend. Railway (Nixpacks) ne les installe PAS par défaut
-# pour un projet Python -- voir nixpacks.toml à la racine du repo, ajouté
-# le 2026-07-20 pour les déclarer explicitement. Sans ce fichier, cet
-# endpoint échoue en prod avec FileNotFoundError au premier subprocess.
+# exécute ce backend. Railway (Railpack) ne les installe PAS par défaut
+# pour un projet Python -- voir railpack.json à la racine du repo pour
+# les déclarer explicitement. Sans ce fichier, cet endpoint échoue en
+# prod avec FileNotFoundError au premier subprocess.
 
 TYPES_VIDEO_AUTORISES = {
     "video/mp4": "mp4",
