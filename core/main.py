@@ -836,7 +836,7 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
 )
 
 
-def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None, recherche_forcee=False):
+def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None, recherche_forcee=False, outil_force=None):
     system_prompt = get_system_prompt(agent_id)
     candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
     resume_memoire = _charger_resume_memoire(user_id)
@@ -887,34 +887,43 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
         )
     system_final += INSTRUCTIONS_FORMATS_AFFICHAGE
     system_final += REGLE_CONTEXTE_INVISIBLE
-    system_final += (
-        "\n\nBIBLIOTHÈQUE DE FICHIERS : tu as accès à l'outil chercher_fichier pour "
-        "retrouver un fichier (image, PDF, audio, vidéo...) déjà uploadé par la "
-        "plateforme, par le créateur de cet agent, ou par cet utilisateur dans une "
-        f"conversation passée. Ton agent_id est \"{agent_id}\". L'user_id de la "
-        f"personne actuelle est {f'\"{user_id}\"' if user_id else 'absent (non connectée)'}. "
-        "Passe TOUJOURS ces deux valeurs exactement telles quelles à chercher_fichier, "
-        "ne les invente jamais.\n"
-        "CAS PIÈGE fréquent : quand la personne t'envoie une image (ou tout fichier) "
-        "directement dans la conversation, tu la VOIS (analyse visuelle) mais tu ne "
-        "reçois PAS son URL réelle en texte à ce moment-là -- si on te redemande "
-        "ensuite \"redonne-moi cette image\"/\"le fichier que je viens d'envoyer\", tu "
-        "n'as pas ce lien en mémoire, donc tu ne peux PAS le réécrire de toi-même "
-        "(ça a été confirmé cassé en test réel, 2026-07-23 : lien inventé qui ne mène "
-        "nulle part). Dans ce cas précis, appelle TOUJOURS chercher_fichier "
-        "(elle a été indexée automatiquement lors de l'envoi, niveau utilisateur) "
-        "pour récupérer le vrai lien avant de répondre."
-    )
-    system_final += (
-        "\n\nEXPLORATION GITHUB : tu as accès à explorer_depot_github (arborescence "
-        "complète d'un dépôt), lire_fichier_depot_github (contenu d'un fichier précis), "
-        "et modifier_fichier_depot_github (ÉCRIT un changement -- ne l'appelle QUE si "
-        "la personne demande explicitement une modification, jamais de ta propre "
-        "initiative). Ces trois outils prennent un paramètre user_id : passe "
-        f"TOUJOURS {f'\"{user_id}\"' if user_id else 'une chaîne vide (personne non connectée)'} "
-        "exactement tel quel, ne l'invente jamais. Les dépôts privés ne sont "
-        "accessibles que si cette personne a connecté son propre compte GitHub."
-    )
+    # Bouton Outils (2026-07-25) : ces deux blocs décrivaient ces
+    # capacités de façon inconditionnelle, même quand aucun outil n'est
+    # réellement envoyé au modèle -- confirmé en test réel le 25/07
+    # (l'IA "récitait" ces capacités alors que le log backend montrait
+    # `Outils envoyés au LLM ce tour-ci : []`). Désormais gated sur
+    # outil_force : le bloc n'apparaît que si l'outil concerné a été
+    # sélectionné via le bouton Outils pour ce message précis.
+    if outil_force == "chercher_fichier":
+        system_final += (
+            "\n\nBIBLIOTHÈQUE DE FICHIERS : tu as accès à l'outil chercher_fichier pour "
+            "retrouver un fichier (image, PDF, audio, vidéo...) déjà uploadé par la "
+            "plateforme, par le créateur de cet agent, ou par cet utilisateur dans une "
+            f"conversation passée. Ton agent_id est \"{agent_id}\". L'user_id de la "
+            f"personne actuelle est {f'"{user_id}"' if user_id else 'absent (non connectée)'}. "
+            "Passe TOUJOURS ces deux valeurs exactement telles quelles à chercher_fichier, "
+            "ne les invente jamais.\n"
+            "CAS PIÈGE fréquent : quand la personne t'envoie une image (ou tout fichier) "
+            "directement dans la conversation, tu la VOIS (analyse visuelle) mais tu ne "
+            "reçois PAS son URL réelle en texte à ce moment-là -- si on te redemande "
+            "ensuite \"redonne-moi cette image\"/\"le fichier que je viens d'envoyer\", tu "
+            "n'as pas ce lien en mémoire, donc tu ne peux PAS le réécrire de toi-même "
+            "(ça a été confirmé cassé en test réel, 2026-07-23 : lien inventé qui ne mène "
+            "nulle part). Dans ce cas précis, appelle TOUJOURS chercher_fichier "
+            "(elle a été indexée automatiquement lors de l'envoi, niveau utilisateur) "
+            "pour récupérer le vrai lien avant de répondre."
+        )
+    if outil_force in ("explorer_depot_github", "lire_fichier_depot_github", "modifier_fichier_depot_github"):
+        system_final += (
+            "\n\nEXPLORATION GITHUB : tu as accès à explorer_depot_github (arborescence "
+            "complète d'un dépôt), lire_fichier_depot_github (contenu d'un fichier précis), "
+            "et modifier_fichier_depot_github (ÉCRIT un changement -- ne l'appelle QUE si "
+            "la personne demande explicitement une modification, jamais de ta propre "
+            "initiative). Ces trois outils prennent un paramètre user_id : passe "
+            f"TOUJOURS {f'"{user_id}"' if user_id else 'une chaîne vide (personne non connectée)'} "
+            "exactement tel quel, ne l'invente jamais. Les dépôts privés ne sont "
+            "accessibles que si cette personne a connecté son propre compte GitHub."
+        )
 
     # Contexte système "date/heure actuelle" (2026-07-20) : sans ça, le
     # modèle ne sait pas qu'on est en 2026 et peut situer les événements
@@ -1604,7 +1613,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     if agent_id is None:
         agent_id = get_secret("AGENT_ID") or AGENT_ID_PAR_DEFAUT
 
-    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire, recherche_forcee)
+    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire, recherche_forcee, outil_force)
 
     if localisation and localisation.get("latitude") is not None and localisation.get("longitude") is not None:
         # Contexte "système/environnement" (2026-07-20) : position GPS
