@@ -34,6 +34,7 @@ from api.droits_agent import router as droits_agent_router
 from api.droits_agent import router_registre as registre_outils_router
 from core.serveur_mcp_generation import mcp_generation
 from core.notifications_push import traiter_rappels_echus, notifications_push_disponible
+from core.proactivite import verifier_relances_proactives
 from core.serveur_mcp_github import mcp_github
 
 logging.basicConfig(level=logging.INFO)
@@ -56,6 +57,23 @@ async def _boucle_planificateur_rappels():
         await asyncio.sleep(60)
 
 
+async def _boucle_planificateur_proactivite():
+    # Contrairement aux rappels (demande explicite, échéance à la
+    # minute), la proactivité se mesure en jours d'inactivité (voir
+    # core/proactivite.py) -- pas besoin d'un passage aussi fréquent.
+    # Intervalle volontairement plus long que COOLDOWN_VERIFICATION
+    # (6h) pour ne jamais re-scanner une paire déjà vérifiée dans le
+    # même cycle.
+    while True:
+        try:
+            envoyees = verifier_relances_proactives()
+            if envoyees:
+                logging.info(f"Planificateur proactivité : {envoyees} relance(s) envoyée(s).")
+        except Exception as e:
+            logging.error(f"ERREUR boucle planificateur proactivité : {e}")
+        await asyncio.sleep(6 * 60 * 60)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     # Requis par FastMCP (stateless_http=True) : le session_manager du
@@ -65,11 +83,15 @@ async def _lifespan(app: FastAPI):
     # initialized" au premier appel d'outil.
     async with mcp_generation.session_manager.run(), mcp_github.session_manager.run():
         tache_planificateur = None
+        tache_proactivite = None
         if notifications_push_disponible():
             tache_planificateur = asyncio.create_task(_boucle_planificateur_rappels())
+            tache_proactivite = asyncio.create_task(_boucle_planificateur_proactivite())
         yield
         if tache_planificateur:
             tache_planificateur.cancel()
+        if tache_proactivite:
+            tache_proactivite.cancel()
 
 
 app = FastAPI(title="Djiguigne API", version="0.1.0", lifespan=_lifespan)
