@@ -916,6 +916,81 @@ def modifier_agent(
     )
 
 
+class TesterProactivitePayload(BaseModel):
+    # Instructions PAS FORCÉMENT encore enregistrées -- permet de tester un
+    # brouillon avant de cliquer "Enregistrer" (voir ProactiviteAgent.tsx).
+    proactivite_instructions: Optional[str] = None
+    # Par défaut on teste sur soi-même (le créateur, en tant qu'utilisateur
+    # de son propre agent) -- utile pour un agent tout juste créé, sans
+    # vrai historique d'un tiers.
+    user_id: Optional[str] = None
+
+
+class TesterProactiviteReponse(BaseModel):
+    relance: Optional[str] = None
+    aucune_conversation: bool = False
+
+
+@router.post("/{agent_id}/proactivite/tester", response_model=TesterProactiviteReponse)
+def tester_proactivite(
+    agent_id: str, payload: TesterProactivitePayload, utilisateur=Depends(utilisateur_courant)
+):
+    """
+    Test EN LIVE de la décision de relance (25/07, demande Bourama : "faut
+    tester") -- appelle directement _decider_relance (core/proactivite.py)
+    sur une vraie conversation existante, SANS attendre les 6h du
+    planificateur ni les jours d'inactivité configurés, et SANS rien
+    envoyer réellement (pas de notification push, pas d'écriture dans
+    l'historique) -- juste un aperçu de ce que l'agent déciderait.
+    """
+    try:
+        agent = (
+            supabase.table("agents")
+            .select("owner_id, proactivite_instructions")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} pour test proactivité) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger l'agent pour le moment.")
+    if not agent or not agent.data:
+        raise HTTPException(status_code=404, detail="Agent introuvable.")
+    if agent.data["owner_id"] != utilisateur.id:
+        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+
+    cible_user_id = payload.user_id or utilisateur.id
+    # Instructions "brouillon" envoyées par le frontend (pas encore
+    # enregistrées) sinon celles déjà en base -- jamais le défaut
+    # générique tant que le créateur n'a explicitement rien écrit nulle
+    # part (voir _decider_relance qui, lui, applique le défaut si NULL).
+    instructions = (
+        payload.proactivite_instructions
+        if payload.proactivite_instructions is not None
+        else agent.data.get("proactivite_instructions")
+    )
+
+    from core.proactivite import _decider_relance
+
+    try:
+        a_un_historique = (
+            supabase.table("historique_conversations")
+            .select("user_id")
+            .eq("agent_id", agent_id)
+            .eq("user_id", cible_user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (vérif historique test proactivité) : {e}")
+        a_un_historique = None
+    if not a_un_historique or not a_un_historique.data:
+        return TesterProactiviteReponse(relance=None, aucune_conversation=True)
+
+    message = _decider_relance(agent_id, cible_user_id, instructions)
+    return TesterProactiviteReponse(relance=message, aucune_conversation=False)
+
+
 @router.post("/{agent_id}/documents", status_code=201)
 async def uploader_document(
     agent_id: str,
