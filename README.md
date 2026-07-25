@@ -1,4 +1,4 @@
-# assistant-etudiants — Djiguignè AI
+# djiguigne-backend — Djiguignè AI
 
 Plateforme multi-agents : n'importe qui peut créer son propre assistant IA
 sans coder (documents PDF, prompt Notion, outils externes) et obtenir un

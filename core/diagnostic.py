@@ -213,7 +213,7 @@ def check_supabase(vecteur, agent_id):
 def main():
     agent_id = sys.argv[1] if len(sys.argv) > 1 else AGENT_ID_PAR_DEFAUT
 
-    print(f"Diagnostic assistant-etudiants (agent_id = '{agent_id}')")
+    print(f"Diagnostic djiguigne-backend (agent_id = '{agent_id}')")
     print("=" * 40)
     manquants = check_env_vars()
     check_notion(agent_id)
