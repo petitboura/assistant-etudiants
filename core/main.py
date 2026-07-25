@@ -913,6 +913,31 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
             "(elle a été indexée automatiquement lors de l'envoi, niveau utilisateur) "
             "pour récupérer le vrai lien avant de répondre."
         )
+    if not outil_force:
+        # Bouton Outils (2026-07-25, suite) : sans cette instruction, le
+        # modèle invente de lui-même une liste de capacités générique
+        # d'assistant IA (génération de fichiers, recherche web, etc.)
+        # dès qu'on lui demande "qu'est-ce que tu sais faire" -- confirmé
+        # en test réel le 25/07, aucun bloc du prompt système ne causait
+        # ça (le prompt de l'agent Nucleos ne fait que 126 caractères),
+        # c'est une invention pure du modèle. Instruction explicite pour
+        # contrer ce réflexe par défaut.
+        system_final += (
+            "\n\nAUCUN OUTIL ACTIF POUR CE MESSAGE : la personne n'a sélectionné aucun "
+            "outil via le bouton Outils de la barre de saisie. Tu n'as donc accès à "
+            "AUCUNE capacité de recherche web, génération de fichier (PDF/Word/Excel/"
+            "PowerPoint/code/site/image/audio/vidéo/3D), exploration GitHub, ni "
+            "recherche de fichier déjà envoyé -- même si tu en as eu accès plus tôt "
+            "dans cette même conversation. Si on te demande 'qu'est-ce que tu sais "
+            "faire' ou équivalent, NE dresse PAS une liste de capacités générique "
+            "d'assistant IA : dis clairement que tu n'as aucun outil actif "
+            "actuellement, et que la personne doit cliquer sur le bouton Outils (icône "
+            "clé) pour en activer un si elle a besoin d'une de ces capacités. Tu "
+            "restes en revanche capable de répondre normalement par le texte "
+            "(explications, code écrit dans la réponse sans l'exécuter, etc.), et les "
+            "blocs ```mermaid/```chart/```carte/```widget ci-dessus restent "
+            "disponibles (ce sont des formats d'affichage, pas des outils)."
+        )
     if outil_force in ("explorer_depot_github", "lire_fichier_depot_github", "modifier_fichier_depot_github"):
         system_final += (
             "\n\nEXPLORATION GITHUB : tu as accès à explorer_depot_github (arborescence "
