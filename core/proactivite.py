@@ -11,11 +11,11 @@ son propre prompt système + la conversation passée, qui juge de la
 pertinence d'une relance (voir _decider_relance). Ce fichier ne fait que
 détecter l'inactivité et déclencher la décision, jamais le contenu.
 
-Double opt-in obligatoire (voir migration proactivite_relances) :
-- agents.proactivite_active : le CRÉATEUR autorise cet agent à relancer.
-- profiles.notifications_proactives_actives : l'UTILISATEUR autorise SES
-  agents à le relancer.
-Sans les deux, aucune relance n'est jamais envoyée à personne.
+Configurable par le créateur (25/07, colonnes agents.proactivite_* -- voir
+migration proactivite_config_createur) : QUAND (proactivite_delai_jours),
+à quelle fréquence max (proactivite_cooldown_jours), et POURQUOI/COMMENT
+(proactivite_instructions, texte libre comme system_prompt -- si vide,
+INSTRUCTION_PROACTIVITE_DEFAUT s'applique).
 
 Boucle appelante : voir api/main.py (_boucle_planificateur_proactivite).
 Tourne beaucoup moins souvent que celle des rappels -- l'inactivité se
@@ -23,7 +23,12 @@ mesure en jours, pas en minutes.
 """
 
 import logging
+import sys
+import os
 from datetime import datetime, timezone, timedelta
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 
 from groq import Groq
 
@@ -31,30 +36,38 @@ from api.auth import supabase
 from core.main import get_secret, GROQ_PRIMARY, _construire_system_prompt, _ressemble_a_du_json_casse
 from core.notifications_push import envoyer_notification_push, notifications_push_disponible
 
-SEUIL_INACTIVITE = timedelta(days=4)  # pas de nouvelle depuis X jours -> candidat à une relance
 COOLDOWN_VERIFICATION = timedelta(hours=6)  # ne re-vérifie pas une paire (agent, utilisateur) plus souvent que ça
-COOLDOWN_RELANCE = timedelta(days=7)  # ne relance pas la même paire plus d'une fois par semaine
 NB_MESSAGES_CONTEXTE = 20  # historique récent donné au modèle pour juger
 
 SENTINELLE_AUCUNE_RELANCE = "AUCUNE_RELANCE"
 
-INSTRUCTION_PROACTIVITE = f"""
+# Utilisé UNIQUEMENT si le créateur n'a rien écrit dans
+# agents.proactivite_instructions -- sinon son texte remplace ce
+# paragraphe de critères (mais le contrat technique de la sentinelle,
+# lui, reste toujours identique, voir _construire_instruction_proactivite).
+INSTRUCTION_PROACTIVITE_DEFAUT = (
+    "Ne relance QUE s'il y a une vraie raison concrète ancrée dans la "
+    "conversation (un objectif mentionné, une échéance, quelque chose "
+    "resté inachevé) -- jamais une relance générique du style \"tu es "
+    "là ?\" ou \"des nouvelles ?\" sans contenu réel."
+)
+
+
+def _construire_instruction_proactivite(instructions_createur: str | None) -> str:
+    criteres = (instructions_createur or "").strip() or INSTRUCTION_PROACTIVITE_DEFAUT
+    return f"""
 
 DÉCISION DE RELANCE PROACTIVE : la personne ci-dessus ne t'a pas écrit
-depuis plusieurs jours (voir la conversation). C'est TOI qui prends
+depuis un moment (voir la conversation). C'est TOI qui prends
 l'initiative de la contacter, elle n'a rien demandé.
 
-Décide si une relance est vraiment pertinente et utile pour CETTE
-personne précise, sur la base de ce que vous vous êtes dit. Ne relance QUE
-s'il y a une vraie raison concrète ancrée dans la conversation (un
-objectif qu'elle a mentionné, une échéance, quelque chose resté
-inachevé) -- jamais une relance générique du style "tu es là ?" ou "des
-nouvelles ?" sans contenu réel.
+CRITÈRES DÉFINIS PAR LE CRÉATEUR DE CET AGENT POUR DÉCIDER D'UNE RELANCE
+(quand, pourquoi, comment, sur quelle base) :
+{criteres}
 
-- Si une relance est pertinente : réponds UNIQUEMENT avec le message à
-  lui envoyer directement (court, naturel, dans ton style habituel --
-  PAS "Je me permets de vous relancer", plutôt comme si tu reprenais le
-  fil normalement).
+- Si une relance est pertinente selon ces critères : réponds UNIQUEMENT
+  avec le message à envoyer directement à la personne (rien d'autre
+  autour, pas de méta-commentaire).
 - Si aucune relance n'est pertinente : réponds EXACTEMENT et UNIQUEMENT
   "{SENTINELLE_AUCUNE_RELANCE}", rien d'autre, aucune ponctuation en plus.
 """
@@ -93,9 +106,10 @@ def _marquer_relance_envoyee(user_id: str, agent_id: str) -> None:
         logging.error(f"ERREUR SUPABASE (marquer relance envoyée, user={user_id}, agent={agent_id}) : {e}")
 
 
-def _decider_relance(agent_id: str, user_id: str) -> str | None:
+def _decider_relance(agent_id: str, user_id: str, instructions_createur: str | None) -> str | None:
     """
-    Laisse l'agent (son propre prompt système + la conversation passée)
+    Laisse l'agent (son propre prompt système + la conversation passée +
+    les critères du créateur, voir _construire_instruction_proactivite)
     juger de la pertinence d'une relance. Renvoie le message à envoyer,
     ou None si aucune relance n'est pertinente (ou en cas d'erreur --
     fail-silent, une relance ratée n'est jamais grave, contrairement à un
@@ -128,7 +142,7 @@ def _decider_relance(agent_id: str, user_id: str) -> str | None:
     except Exception as e:
         logging.error(f"ERREUR construction prompt (décision relance, agent={agent_id}) : {e}")
         return None
-    system_final += INSTRUCTION_PROACTIVITE
+    system_final += _construire_instruction_proactivite(instructions_createur)
 
     messages = [{"role": "system", "content": system_final}]
     for m in messages_recents:
@@ -169,7 +183,7 @@ def verifier_relances_proactives() -> int:
     try:
         agents_actifs = (
             supabase.table("agents")
-            .select("id, nom")
+            .select("id, nom, proactivite_delai_jours, proactivite_cooldown_jours, proactivite_instructions")
             .eq("proactivite_active", True)
             .eq("actif", True)
             .execute()
@@ -179,11 +193,15 @@ def verifier_relances_proactives() -> int:
         return 0
 
     maintenant = datetime.now(timezone.utc)
-    seuil_inactivite = (maintenant - SEUIL_INACTIVITE).isoformat()
     envoyees = 0
 
     for agent in agents_actifs.data or []:
         agent_id = agent["id"]
+        delai_jours = agent.get("proactivite_delai_jours") or 4
+        cooldown_jours = agent.get("proactivite_cooldown_jours") or 7
+        instructions_createur = agent.get("proactivite_instructions")
+        seuil_inactivite = (maintenant - timedelta(days=delai_jours)).isoformat()
+        cooldown_relance = timedelta(days=cooldown_jours)
 
         # Dernier message (question OU réponse) par utilisateur pour cet
         # agent. NOTE : lit jusqu'à 500 lignes récentes puis déduplique
@@ -245,11 +263,11 @@ def verifier_relances_proactives() -> int:
                 if derniere_verif and derniere_verif > (maintenant - COOLDOWN_VERIFICATION).isoformat():
                     continue  # déjà vérifié récemment, pas la peine de re-décider
                 derniere_relance = suivi.data.get("derniere_relance_envoyee_a")
-                if derniere_relance and derniere_relance > (maintenant - COOLDOWN_RELANCE).isoformat():
+                if derniere_relance and derniere_relance > (maintenant - cooldown_relance).isoformat():
                     _marquer_verification(user_id, agent_id)
                     continue  # relancé récemment, on laisse respirer
 
-            message_relance = _decider_relance(agent_id, user_id)
+            message_relance = _decider_relance(agent_id, user_id, instructions_createur)
             _marquer_verification(user_id, agent_id)
 
             if not message_relance:
