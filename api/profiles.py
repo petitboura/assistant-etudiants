@@ -33,6 +33,12 @@ class ProfilPublic(BaseModel):
     nom_affiche: str = ""
     bio: str = ""
     avatar_url: Optional[str] = None
+    # Proactivité (25/07) : préférence PRIVÉE -- ne vaut la vraie valeur
+    # que pour le propriétaire du profil (voir est_le_proprietaire dans
+    # obtenir_profil_public), reste à False par défaut pour un visiteur
+    # qui regarde le profil de quelqu'un d'autre (rien de personnel à
+    # exposer publiquement ici).
+    notifications_proactives_actives: bool = False
 
 
 class AgentDuCreateur(BaseModel):
@@ -84,7 +90,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
     try:
         profil = (
             supabase.table("profiles")
-            .select("user_id, nom_affiche, bio, avatar_url")
+            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives")
             .eq("user_id", user_id)
             .maybe_single()
             .execute()
@@ -131,6 +137,9 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
         bio=ligne.get("bio") or "",
         avatar_url=ligne.get("avatar_url"),
         agents=agents,
+        notifications_proactives_actives=(
+            bool(ligne.get("notifications_proactives_actives")) if est_le_proprietaire else False
+        ),
     )
 
 
@@ -138,6 +147,10 @@ class MettreAJourProfilPayload(BaseModel):
     nom_affiche: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
+    # Proactivité (25/07) : l'utilisateur autorise SES agents (voir aussi
+    # agents.proactivite_active, côté créateur) à le relancer en cas
+    # d'inactivité. Double opt-in, voir core/proactivite.py.
+    notifications_proactives_actives: Optional[bool] = None
 
 
 @router.patch("/me", response_model=ProfilPublic)
@@ -187,6 +200,8 @@ def mettre_a_jour_mon_profil(
         ligne["bio"] = payload.bio.strip()
     if payload.avatar_url is not None:
         ligne["avatar_url"] = payload.avatar_url
+    if payload.notifications_proactives_actives is not None:
+        ligne["notifications_proactives_actives"] = payload.notifications_proactives_actives
 
     try:
         deja_existant = (
@@ -253,7 +268,7 @@ def mettre_a_jour_mon_profil(
     try:
         res = (
             supabase.table("profiles")
-            .select("user_id, nom_affiche, bio, avatar_url")
+            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives")
             .eq("user_id", utilisateur.id)
             .maybe_single()
             .execute()
@@ -279,6 +294,7 @@ def mettre_a_jour_mon_profil(
         nom_affiche=resultat.get("nom_affiche") or "",
         bio=resultat.get("bio") or "",
         avatar_url=resultat.get("avatar_url"),
+        notifications_proactives_actives=bool(resultat.get("notifications_proactives_actives")),
     )
 
 
