@@ -47,6 +47,16 @@ GROQ_FALLBACKS = [
 ]
 MESSAGE_ERREUR = "Désolé, je rencontre un souci technique pour répondre. Merci de réessayer dans un instant."
 
+# Modération d'entrée (25/07) : verifie le message BRUT de l'etudiant avant
+# tout le reste. Llama Guard 4 sur Groq -- petit modele dedie a la
+# classification de securite (taxonomie MLCommons), pas d'invite systeme
+# necessaire, on lui passe juste le message a evaluer en role "user" (voir
+# console.groq.com/docs/model/llama-guard-4-12b). Repond "safe" ou
+# "unsafe\nS<numero>". Demande Bourama (25/07) : uniquement l'entree pour
+# l'instant (pas la sortie), pour limiter le surcout en tokens.
+MODELE_MODERATION = "meta-llama/llama-guard-4-12b"
+MESSAGE_CONTENU_BLOQUE = "Je ne peux pas répondre à ce message. Reformule ta question autrement, je suis là pour t'aider !"
+
 # Valeur de repli si le secret AGENT_ID n'est pas defini pour ce deploiement
 # (doit rester alignee avec AGENT_ID_PAR_DEFAUT dans retriever.py).
 AGENT_ID_PAR_DEFAUT = "tutorat-maths"
@@ -84,6 +94,31 @@ MODELES_AVEC_REASONING_EFFORT = {
 # Nombre maximum d'aller-retours "outil" autorisés pour une seule question,
 # pour éviter qu'un modèle ne boucle indéfiniment sur le même outil.
 MAX_ETAPES_OUTILS = 5
+
+def _verifier_message_utilisateur(message: str) -> tuple[bool, str | None]:
+    """
+    Verifie un message via Llama Guard 4 (voir MODELE_MODERATION plus haut).
+    Retourne (est_sur: bool, categorie: str|None -- ex "S1", presente
+    seulement si est_sur=False). En cas d'erreur reseau/API sur CE modele de
+    moderation (pas le modele principal), on laisse passer plutot que de
+    bloquer tout le chat pour un souci technique isole -- (True, None) avec
+    un log d'avertissement.
+    """
+    try:
+        client = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0, timeout=8.0)
+        completion = client.chat.completions.create(
+            model=MODELE_MODERATION,
+            messages=[{"role": "user", "content": message}],
+        )
+        resultat = (completion.choices[0].message.content or "").strip()
+        if resultat.lower().startswith("safe"):
+            return True, None
+        categorie = resultat.splitlines()[-1].strip() if "\n" in resultat else None
+        return False, categorie
+    except Exception as e:
+        logging.warning(f"Modération d'entrée indisponible (Llama Guard), message laissé passer : {e}")
+        return True, None
+
 
 def _ressemble_a_du_json_casse(texte: str) -> bool:
     """
@@ -1515,6 +1550,20 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     if historique is None:
         historique = []
 
+    # Modération d'entrée (Llama Guard, 25/07) : vérifie le message BRUT de
+    # l'étudiant avant tout le reste (prompt système, RAG, appel du modèle
+    # principal...) -- fail-fast, pas la peine de construire quoi que ce
+    # soit si le message est bloqué. Demande Bourama (25/07) : uniquement
+    # l'entrée pour l'instant, pas de vérification sur la sortie de l'agent
+    # (pour limiter le surcoût en tokens -- l'agent garde ses garde-fous via
+    # son prompt système + le filet JSON cassé déjà en place).
+    if message_utilisateur:
+        est_sur, categorie = _verifier_message_utilisateur(message_utilisateur)
+        if not est_sur:
+            logging.warning(f"Message bloqué par la modération d'entrée (Llama Guard, {categorie}).")
+            yield {"type": "reponse", "texte": MESSAGE_CONTENU_BLOQUE}
+            return
+
     if agent_id is None:
         agent_id = get_secret("AGENT_ID") or AGENT_ID_PAR_DEFAUT
 
@@ -1683,34 +1732,11 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 {"role": "user" if m["role"] != "assistant" else "model", "parts": [{"text": m["content"]}]}
                 for m in messages_base if m["role"] != "system"
             ]
-            # Instruction ciblee (2026-07-24, trouve par Bourama en test
-            # reel) -- la regle generale anti-hallucination du prompt
-            # (voir INSTRUCTIONS_FORMATS_AFFICHAGE) n'a PAS suffi ici :
-            # Gemini a quand meme invente un faux appel d'outil
-            # (default_api.get_exchange_rate(...), default_api.search_news(...),
-            # noms qui n'existent nulle part dans le code reel -- "default_api"
-            # est un nom generique que Gemini associe au function-calling
-            # dans ses propres exemples d'entrainement). Ce chemin precis
-            # n'a REELEMENT aucun outil branche (pas de parametre tools=
-            # sur cet appel), donc l'instruction est directe et sans
-            # ambiguite plutot que de compter sur la regle generale
-            # noyee dans un long prompt systeme.
-            system_gemini_sans_outils = (
-                system_final
-                + "\n\nIMPORTANT : tu n'as accès à AUCUN outil réel dans cette réponse précise "
-                "(pas de recherche web, pas d'API externe, pas de Notion, rien) -- réponds "
-                "uniquement avec tes connaissances générales. Si la question porte sur une "
-                "information qui change (prix, taux de change, actualité, données en temps "
-                "réel...), dis clairement que tu ne peux pas la vérifier en direct plutôt que "
-                "de deviner. N'écris JAMAIS de code, de pseudo-code, ou de texte qui ressemble "
-                "à un appel d'outil/API (même dans un bloc de code) -- tu n'as aucun outil à "
-                "appeler, l'écrire ne fait qu'inventer un résultat qui n'existe pas."
-            )
             response = client_google.models.generate_content_stream(
                 model=GOOGLE_MODEL,
                 contents=gemini_messages,
                 config=types.GenerateContentConfig(
-                    system_instruction=system_gemini_sans_outils
+                    system_instruction=system_final
                 )
             )
             for chunk in response:
