@@ -526,6 +526,13 @@ class AgentEditable(BaseModel):
     actif: bool = True
     categorie_id: Optional[str] = None
     profil_utilisateur_schema: List[ChampProfilUtilisateur] = Field(default_factory=list)
+    # Proactivité (25/07) : le créateur décide QUAND (délai d'inactivité),
+    # à quelle fréquence max, et POURQUOI/COMMENT (instructions libres,
+    # même logique que system_prompt) -- voir core/proactivite.py.
+    proactivite_active: bool = False
+    proactivite_delai_jours: int = 4
+    proactivite_cooldown_jours: int = 7
+    proactivite_instructions: str = ""
 
 
 @router.get("/{agent_id}/edition", response_model=AgentEditable)
@@ -544,7 +551,9 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id, categorie_id, profil_utilisateur_schema"
+                "actif, owner_id, categorie_id, profil_utilisateur_schema, "
+                "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
+                "proactivite_instructions"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -583,6 +592,10 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         profil_utilisateur_schema=[
             ChampProfilUtilisateur(**c) for c in (ligne.get("profil_utilisateur_schema") or [])
         ],
+        proactivite_active=ligne.get("proactivite_active", False),
+        proactivite_delai_jours=ligne.get("proactivite_delai_jours", 4),
+        proactivite_cooldown_jours=ligne.get("proactivite_cooldown_jours", 7),
+        proactivite_instructions=ligne.get("proactivite_instructions") or "",
     )
 
 
@@ -617,6 +630,11 @@ class ModifierAgentPayload(BaseModel):
     actif: Optional[bool] = None
     categorie_id: Optional[str] = None
     profil_utilisateur_schema: Optional[List[ChampProfilUtilisateur]] = None
+    # Proactivité (25/07) : voir AgentEditable ci-dessus.
+    proactivite_active: Optional[bool] = None
+    proactivite_delai_jours: Optional[int] = None
+    proactivite_cooldown_jours: Optional[int] = None
+    proactivite_instructions: Optional[str] = None
 
 
 @router.patch("/{agent_id}", response_model=AgentEditable)
@@ -642,7 +660,9 @@ def modifier_agent(
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id, categorie_id, profil_utilisateur_schema"
+                "actif, owner_id, categorie_id, profil_utilisateur_schema, "
+                "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
+                "proactivite_instructions"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -798,6 +818,20 @@ def modifier_agent(
         ]
     if payload.actif is not None:
         mise_a_jour["actif"] = payload.actif
+
+    if payload.proactivite_active is not None:
+        mise_a_jour["proactivite_active"] = payload.proactivite_active
+    if payload.proactivite_delai_jours is not None:
+        if payload.proactivite_delai_jours < 1:
+            raise HTTPException(status_code=422, detail="Le délai d'inactivité doit être d'au moins 1 jour.")
+        mise_a_jour["proactivite_delai_jours"] = payload.proactivite_delai_jours
+    if payload.proactivite_cooldown_jours is not None:
+        if payload.proactivite_cooldown_jours < 1:
+            raise HTTPException(status_code=422, detail="Le délai minimum entre deux relances doit être d'au moins 1 jour.")
+        mise_a_jour["proactivite_cooldown_jours"] = payload.proactivite_cooldown_jours
+    if payload.proactivite_instructions is not None:
+        mise_a_jour["proactivite_instructions"] = payload.proactivite_instructions.strip()
+
     if payload.categorie_id is not None:
         try:
             categorie_existe = (
@@ -871,6 +905,14 @@ def modifier_agent(
         sous_titre=ui_config.get("sous_titre_accueil", ""),
         actif=mise_a_jour.get("actif", ligne.get("actif", True)),
         categorie_id=mise_a_jour.get("categorie_id", ligne.get("categorie_id")),
+        proactivite_active=mise_a_jour.get("proactivite_active", ligne.get("proactivite_active", False)),
+        proactivite_delai_jours=mise_a_jour.get("proactivite_delai_jours", ligne.get("proactivite_delai_jours", 4)),
+        proactivite_cooldown_jours=mise_a_jour.get(
+            "proactivite_cooldown_jours", ligne.get("proactivite_cooldown_jours", 7)
+        ),
+        proactivite_instructions=mise_a_jour.get(
+            "proactivite_instructions", ligne.get("proactivite_instructions") or ""
+        ),
     )
 
 
