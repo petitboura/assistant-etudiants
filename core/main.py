@@ -1124,16 +1124,26 @@ def _executer_un_appel(appel, table_routage):
 def _extraire_sources_tavily(nom_outil, resultat_brut):
     """
     Parse le JSON renvoye par un outil tavily_* (search/extract/map/crawl/
-    research) pour en extraire {"titre", "url"} de chaque resultat --
-    utilise pour l'evenement "sources" (citations), le seul morceau du
-    bloc "Affichage" qui necessitait un nouveau type d'evenement plutot
-    qu'un simple branchement (voir echange avec Bourama, session du
-    2026-07-20). Best-effort : si le JSON ne correspond pas au format
-    attendu (ou n'est pas du JSON), renvoie une liste vide plutot que de
-    faire planter la reponse -- les sources sont un bonus, jamais un
+    research) ou notion-search pour en extraire {"titre", "url"} de
+    chaque resultat -- utilise pour l'evenement "sources" (citations), le
+    seul morceau du bloc "Affichage" qui necessitait un nouveau type
+    d'evenement plutot qu'un simple branchement (voir echange avec
+    Bourama, session du 2026-07-20).
+
+    Etendu le 2026-07-25 a notion-search : meme forme de reponse cote
+    protocole MCP (bloc.content[0].text = JSON avec une cle "results",
+    chaque resultat ayant "title"/"url") -- verifie par appel reel avant
+    d'ecrire ce parseur, pas suppose. Les autres outils Notion
+    (notion-fetch, create-pages, update-page) ne renvoient pas cette
+    forme et restent hors citations : notion-fetch renvoie du markdown
+    de page, pas une liste de resultats.
+
+    Best-effort : si le JSON ne correspond pas au format attendu (ou
+    n'est pas du JSON), renvoie une liste vide plutot que de faire
+    planter la reponse -- les sources sont un bonus, jamais un
     prerequis pour repondre.
     """
-    if not nom_outil.startswith("tavily_"):
+    if not (nom_outil.startswith("tavily_") or nom_outil == "notion-search"):
         return []
     try:
         donnees = json.loads(resultat_brut)
