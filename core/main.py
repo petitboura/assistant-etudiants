@@ -85,6 +85,23 @@ MODELES_AVEC_REASONING_EFFORT = {
 # pour éviter qu'un modèle ne boucle indéfiniment sur le même outil.
 MAX_ETAPES_OUTILS = 5
 
+def _ressemble_a_du_json_casse(texte: str) -> bool:
+    """
+    Heuristique pour un bug Groq connu et non resolu sur gpt-oss-120b (voir
+    community.groq.com/t/670 -- "Reasoning tokens and gibberish output
+    appearing in responses despite configuration to hide reasoning") : le
+    modele melange parfois des arguments d'appel d'outil (JSON brut) dans
+    delta.content (le texte de reponse visible) au lieu de passer par
+    delta.tool_calls comme prevu. Plus frequent avec 3+ outils actifs ou une
+    conversation longue -- notre cas avec Notion/Wolfram/Tavily. Signale par
+    Bourama (24/07) : "souvent il donne dans le chat le json qu'il reçoit".
+    Pas un bug corrige par un parametre (arrive meme avec reasoning_format=
+    "hidden" d'apres les rapports) -- on ne peut que le detecter et masquer
+    le debut suspect plutot que l'afficher tel quel a l'etudiant.
+    """
+    debut = texte.lstrip()
+    return debut.startswith("{") or debut.startswith("[")
+
 # Noms lisibles affichés à l'utilisateur pendant qu'un outil MCP est utilisé.
 # Nouvel outil = ajouter une ligne ici (optionnel, sinon le nom brut s'affiche).
 NOMS_OUTILS_LISIBLES = {
@@ -1139,12 +1156,13 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
     """
     kwargs_reasoning = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
     # reasoning_format="parsed" separe le raisonnement (delta.reasoning) du
-    # texte de reponse final (delta.content) -- sinon certains modeles
-    # melangent tout dans content. Demande Bourama (24/07) : rendre ce
-    # raisonnement visible cote frontend, jusqu'ici genere par le modele
-    # (par defaut pour GROQ_PRIMARY, un modele de raisonnement) mais jamais
-    # capture ni affiche.
-    if modele in MODELES_AVEC_REASONING_EFFORT and reasoning_effort != "none":
+    # texte de reponse final (delta.content). IMPORTANT : la doc Groq
+    # (console.groq.com/docs/reasoning) precise que ce parametre n'est PAS
+    # supporte par gpt-oss-20b/120b (eux exposent deja le raisonnement par
+    # defaut dans le champ "reasoning") -- on ne l'envoie donc qu'aux
+    # modeles qui le supportent reellement (qwen3), pour eviter un
+    # comportement indefini cote API sur GROQ_PRIMARY (gpt-oss-120b).
+    if modele in MODELES_AVEC_REASONING_EFFORT and "gpt-oss" not in modele and reasoning_effort != "none":
         kwargs_reasoning["reasoning_format"] = "parsed"
 
     if appels_en_cours_a_finir:
@@ -1168,6 +1186,16 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
 
         reponse_directe = False
         appels_en_cours = {}  # index -> {"id", "name", "arguments"}
+        # Filet de securite contre le bug Groq (_ressemble_a_du_json_casse,
+        # voir plus haut) : on retient les tout premiers caracteres avant de
+        # decider s'ils partent en "reponse" (affiches normalement) ou en
+        # "raisonnement" (masques du texte visible, le bug ressemble a du
+        # JSON d'appel d'outil rate). SEUIL_VERIF_JSON assez petit pour ne
+        # pas retarder perceptiblement le debut du streaming normal.
+        SEUIL_VERIF_JSON = 20
+        buffer_debut = ""
+        buffer_verifie = False
+        contenu_suspect = False
 
         for chunk in completion:
             delta = chunk.choices[0].delta
@@ -1178,7 +1206,19 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
 
             if delta.content:
                 reponse_directe = True
-                yield {"type": "reponse", "texte": delta.content}
+                if contenu_suspect:
+                    yield {"type": "raisonnement", "texte": delta.content}
+                elif buffer_verifie:
+                    yield {"type": "reponse", "texte": delta.content}
+                else:
+                    buffer_debut += delta.content
+                    if len(buffer_debut) >= SEUIL_VERIF_JSON:
+                        buffer_verifie = True
+                        if _ressemble_a_du_json_casse(buffer_debut):
+                            contenu_suspect = True
+                            yield {"type": "raisonnement", "texte": buffer_debut}
+                        else:
+                            yield {"type": "reponse", "texte": buffer_debut}
 
             if delta.tool_calls:
                 for fragment in delta.tool_calls:
@@ -1192,6 +1232,14 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
                             etat["name"] += fragment.function.name
                         if fragment.function.arguments:
                             etat["arguments"] += fragment.function.arguments
+
+        if buffer_debut and not buffer_verifie:
+            # Le flux s'est terminé avant d'atteindre SEUIL_VERIF_JSON
+            # (réponse très courte) -- on tranche avec ce qu'on a.
+            if _ressemble_a_du_json_casse(buffer_debut):
+                yield {"type": "raisonnement", "texte": buffer_debut}
+            else:
+                yield {"type": "reponse", "texte": buffer_debut}
 
         if reponse_directe:
             logging.info(f"Réponse via GROQ (sans outil, streaming): {modele}")
@@ -1233,6 +1281,9 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         timeout=DELAI_MAX_PAR_APPEL,
         **kwargs_reasoning,
     )
+    buffer_debut = ""
+    buffer_verifie = False
+    contenu_suspect = False
     for chunk in completion:
         delta = chunk.choices[0].delta
         raisonnement = getattr(delta, "reasoning", None)
@@ -1240,7 +1291,24 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             yield {"type": "raisonnement", "texte": raisonnement}
         token = delta.content or ""
         if token:
-            yield {"type": "reponse", "texte": token}
+            if contenu_suspect:
+                yield {"type": "raisonnement", "texte": token}
+            elif buffer_verifie:
+                yield {"type": "reponse", "texte": token}
+            else:
+                buffer_debut += token
+                if len(buffer_debut) >= 20:
+                    buffer_verifie = True
+                    if _ressemble_a_du_json_casse(buffer_debut):
+                        contenu_suspect = True
+                        yield {"type": "raisonnement", "texte": buffer_debut}
+                    else:
+                        yield {"type": "reponse", "texte": buffer_debut}
+    if buffer_debut and not buffer_verifie:
+        if _ressemble_a_du_json_casse(buffer_debut):
+            yield {"type": "raisonnement", "texte": buffer_debut}
+        else:
+            yield {"type": "reponse", "texte": buffer_debut}
     logging.info(f"Réponse via GROQ (avec outil): {modele}")
 
 
