@@ -27,6 +27,7 @@ from api.auth import supabase, utilisateur_courant, get_secret
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
 from bibliotheque_fichiers import enregistrer_fichier, indexer_fichier_existant  # noqa: E402
+from conversion_pdf import conversion_disponible, convertir_en_pdf  # noqa: E402
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
@@ -222,9 +223,12 @@ async def uploader_document_chat(
     utilisateur=Depends(utilisateur_courant),
 ):
     """
-    Extrait le texte d'un PDF/Word/Excel joint à un message de chat. Ne
-    stocke rien -- renvoie directement {"texte": ..., "tronque": bool} pour
-    injection dans le message avant envoi à /api/chat.
+    Extrait le texte d'un PDF/Word/Excel joint à un message de chat, pour
+    injection dans le message avant envoi à /api/chat. Le fichier original
+    est aussi stocké (voir enregistrer_fichier ci-dessous, depuis le
+    2026-07-22) et, pour Word/Excel, converti en PDF pour permettre un
+    aperçu visuel côté frontend (FichierChip.tsx) -- un PDF n'a pas besoin
+    de conversion, il est déjà son propre aperçu.
     """
     if fichier.content_type not in TYPES_DOCUMENTS_AUTORISES:
         raise HTTPException(
@@ -282,7 +286,24 @@ async def uploader_document_chat(
         logging.warning(f"Indexation bibliothèque échouée pour document chat {fichier.filename} (extraction OK quand même) : {e}")
         url_document = None
 
-    return {"texte": texte, "tronque": tronque, "url": url_document}
+    # Aperçu PDF (25/07) : uniquement pour Word/Excel -- un PDF uploadé
+    # est déjà consultable tel quel, pas besoin de conversion. Best-effort
+    # comme le reste de cette fonction : CLOUDCONVERT_API_KEY absente ou
+    # conversion échouée -> url_apercu reste None, le texte extrait et le
+    # fichier original restent utilisables sans aperçu visuel.
+    url_apercu = None
+    if extension != "pdf" and conversion_disponible():
+        try:
+            pdf_bytes = convertir_en_pdf(contenu, fichier.filename or f"document.{extension}")
+            chemin_apercu = f"apercus/{uuid.uuid4()}.pdf"
+            supabase.storage.from_("images-publiques").upload(
+                chemin_apercu, pdf_bytes, {"content-type": "application/pdf"}
+            )
+            url_apercu = supabase.storage.from_("images-publiques").get_public_url(chemin_apercu)
+        except Exception as e:
+            logging.warning(f"Aperçu PDF échoué pour document chat {fichier.filename} (extraction/stockage OK quand même) : {e}")
+
+    return {"texte": texte, "tronque": tronque, "url": url_document, "url_apercu": url_apercu}
 
 
 # --- Audio (dictée vocale) : transcription, pas de stockage ----------------

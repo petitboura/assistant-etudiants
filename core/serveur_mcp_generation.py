@@ -20,7 +20,12 @@ import logging
 
 from mcp.server.fastmcp import FastMCP, Context
 
-from core.generation_documents import generer_pdf_depuis_markdown
+from core.generation_documents import (
+    generer_pdf_depuis_markdown,
+    generer_docx as _generer_docx,
+    generer_xlsx as _generer_xlsx,
+    generer_pptx as _generer_pptx,
+)
 from core.generation_code import generer_zip_depuis_fichiers
 from core.generation_archives import generer_bundle as _generer_bundle
 from core.generation_donnees import exporter_donnees as _exporter_donnees
@@ -71,6 +76,67 @@ def generer_document(titre: str, contenu_markdown: str) -> str:
     except Exception as e:
         logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : la génération du document a échoué, réessaie."
+
+
+def _formater_resultat_document(resultat: dict) -> str:
+    """
+    Met en forme {"url": ..., "url_apercu": ...} en texte pour l'agent.
+    url_apercu peut être None (CLOUDCONVERT_API_KEY absente, ou
+    conversion échouée) -- dans ce cas on ne mentionne que le fichier
+    original, pas d'aperçu à proposer.
+    """
+    if resultat.get("url_apercu"):
+        return f"Document généré : {resultat['url']} (aperçu visuel : {resultat['url_apercu']})"
+    return f"Document généré : {resultat['url']}"
+
+
+@mcp_generation.tool()
+def generer_document_word(titre: str, contenu_markdown: str) -> str:
+    """
+    Génère un document Word (.docx) à partir d'un titre et d'un contenu
+    markdown (titres #/##/### et paragraphes supportés, pas de mise en
+    forme avancée). Renvoie l'URL publique du fichier, et si possible un
+    aperçu PDF prêt à afficher directement dans le chat.
+    """
+    try:
+        return _formater_resultat_document(_generer_docx(titre, contenu_markdown))
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
+        return "Erreur : la génération du document Word a échoué, réessaie."
+
+
+@mcp_generation.tool()
+def generer_document_excel(titre: str, en_tetes: list, lignes: list) -> str:
+    """
+    Génère un classeur Excel (.xlsx) à une feuille. `en_tetes` : liste
+    de noms de colonnes, ex. ["Nom", "Note"]. `lignes` : liste de
+    listes de valeurs, une sous-liste par ligne, ex.
+    [["Awa", 15], ["Ibrahim", 12]]. Renvoie l'URL publique du fichier,
+    et si possible un aperçu PDF prêt à afficher directement dans le
+    chat.
+    """
+    try:
+        return _formater_resultat_document(_generer_xlsx(titre, en_tetes, lignes))
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
+        return "Erreur : la génération du classeur Excel a échoué, réessaie."
+
+
+@mcp_generation.tool()
+def generer_document_powerpoint(titre: str, diapositives: list) -> str:
+    """
+    Génère une présentation PowerPoint (.pptx). `diapositives` : liste
+    de dicts {"titre": ..., "contenu": ...}, une diapositive titre+texte
+    par élément (en plus d'une diapositive de titre générée
+    automatiquement à partir de `titre`). Renvoie l'URL publique du
+    fichier, et si possible un aperçu PDF prêt à afficher directement
+    dans le chat.
+    """
+    try:
+        return _formater_resultat_document(_generer_pptx(titre, diapositives))
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
+        return "Erreur : la génération de la présentation PowerPoint a échoué, réessaie."
 
 
 @mcp_generation.tool()

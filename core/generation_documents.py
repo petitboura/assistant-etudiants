@@ -20,6 +20,7 @@ import markdown as md_lib
 from weasyprint import HTML
 
 from api.auth import supabase
+from core.conversion_pdf import conversion_disponible, convertir_en_pdf
 
 BUCKET = "generations"
 
@@ -68,3 +69,133 @@ def generer_pdf_depuis_markdown(titre: str, contenu_markdown: str) -> str:
         raise
 
     return supabase.storage.from_(BUCKET).get_public_url(chemin)
+
+
+# --- Word / Excel / PowerPoint, ajoutés le 25/07 ---------------------------
+#
+# Contrairement au PDF ci-dessus (gratuit, local, WeasyPrint), ces formats
+# ne sont pas "convertibles" directement en PDF sans dépendance lourde
+# (LibreOffice) -- décision Bourama du 25/07 : passer par CloudConvert
+# (service externe) plutôt que d'installer LibreOffice sur Railway. Voir
+# core/conversion_pdf.py pour le détail et les compromis.
+#
+# Chaque fonction ci-dessous renvoie un dict {"url": ..., "url_apercu": ...}
+# -- url_apercu est None si CLOUDCONVERT_API_KEY n'est pas configurée, ou si
+# la conversion échoue pour une autre raison (quota dépassé, etc.) : dans
+# ce cas le fichier original reste tout de même généré et téléchargeable,
+# seul l'aperçu visuel manque. Ne JAMAIS faire échouer toute la génération
+# à cause d'un souci d'aperçu, qui est une fonctionnalité secondaire par
+# rapport au fichier lui-même.
+
+MIME_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+MIME_PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+
+def _uploader_avec_apercu(contenu_bytes: bytes, extension: str, content_type: str, nom_fichier: str) -> dict:
+    """
+    Upload le fichier original dans Supabase Storage, puis tente une
+    conversion PDF pour l'aperçu (best-effort, voir note ci-dessus).
+    Renvoie {"url": url_original, "url_apercu": url_pdf_ou_None}.
+    """
+    chemin = f"documents/{uuid.uuid4()}.{extension}"
+    try:
+        supabase.storage.from_(BUCKET).upload(chemin, contenu_bytes, {"content-type": content_type})
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE STORAGE (upload document {chemin}) : {e}")
+        raise
+    url = supabase.storage.from_(BUCKET).get_public_url(chemin)
+
+    url_apercu = None
+    if conversion_disponible():
+        try:
+            pdf_bytes = convertir_en_pdf(contenu_bytes, nom_fichier)
+            chemin_apercu = f"documents/{uuid.uuid4()}_apercu.pdf"
+            supabase.storage.from_(BUCKET).upload(chemin_apercu, pdf_bytes, {"content-type": "application/pdf"})
+            url_apercu = supabase.storage.from_(BUCKET).get_public_url(chemin_apercu)
+        except Exception as e:
+            logging.warning(f"Aperçu PDF échoué pour {nom_fichier} (fichier original OK quand même) : {e}")
+
+    return {"url": url, "url_apercu": url_apercu}
+
+
+def generer_docx(titre: str, contenu_markdown: str) -> dict:
+    """
+    Génère un document Word simple à partir de markdown. Ne gère QUE
+    titres (#, ##, ###) et paragraphes -- pas de gras/italique/listes
+    imbriquées pour cette première version (contrairement au PDF qui
+    passe par un vrai moteur HTML/CSS). À enrichir si Bourama en a besoin
+    en usage réel.
+    """
+    import io
+    import docx as docx_lib
+
+    document = docx_lib.Document()
+    document.add_heading(titre, level=0)
+
+    for ligne in contenu_markdown.split("\n"):
+        ligne_nettoyee = ligne.strip()
+        if not ligne_nettoyee:
+            continue
+        if ligne_nettoyee.startswith("### "):
+            document.add_heading(ligne_nettoyee[4:], level=3)
+        elif ligne_nettoyee.startswith("## "):
+            document.add_heading(ligne_nettoyee[3:], level=2)
+        elif ligne_nettoyee.startswith("# "):
+            document.add_heading(ligne_nettoyee[2:], level=1)
+        else:
+            document.add_paragraph(ligne_nettoyee)
+
+    tampon = io.BytesIO()
+    document.save(tampon)
+    return _uploader_avec_apercu(tampon.getvalue(), "docx", MIME_DOCX, f"{titre}.docx")
+
+
+def generer_xlsx(titre: str, en_tetes: list, lignes: list) -> dict:
+    """
+    Génère un classeur Excel à une feuille. `en_tetes` : liste de noms de
+    colonnes. `lignes` : liste de listes (une sous-liste par ligne,
+    valeurs dans le même ordre que en_tetes).
+    """
+    import io
+    from openpyxl import Workbook
+
+    classeur = Workbook()
+    feuille = classeur.active
+    feuille.title = titre[:31]  # limite Excel : 31 caractères max pour un nom de feuille
+
+    feuille.append(en_tetes)
+    for cellule in feuille[1]:
+        cellule.font = cellule.font.copy(bold=True)
+    for ligne in lignes:
+        feuille.append(ligne)
+
+    tampon = io.BytesIO()
+    classeur.save(tampon)
+    return _uploader_avec_apercu(tampon.getvalue(), "xlsx", MIME_XLSX, f"{titre}.xlsx")
+
+
+def generer_pptx(titre: str, diapositives: list) -> dict:
+    """
+    Génère une présentation PowerPoint. `diapositives` : liste de dicts
+    {"titre": str, "contenu": str} -- une diapositive titre+texte par
+    élément, mise en page "Titre et contenu" standard (layout index 1 du
+    template par défaut python-pptx).
+    """
+    import io
+    from pptx import Presentation
+
+    presentation = Presentation()
+
+    diapo_titre = presentation.slides.add_slide(presentation.slide_layouts[0])
+    diapo_titre.shapes.title.text = titre
+
+    for diapo_info in diapositives:
+        diapo = presentation.slides.add_slide(presentation.slide_layouts[1])
+        diapo.shapes.title.text = diapo_info.get("titre", "")
+        corps = diapo.placeholders[1].text_frame
+        corps.text = diapo_info.get("contenu", "")
+
+    tampon = io.BytesIO()
+    presentation.save(tampon)
+    return _uploader_avec_apercu(tampon.getvalue(), "pptx", MIME_PPTX, f"{titre}.pptx")

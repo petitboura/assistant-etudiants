@@ -5,6 +5,8 @@ supabase
 PyPDF2
 python-docx
 openpyxl
+python-pptx
+requests
 trafilatura
 youtube-transcript-api
 google-genai
