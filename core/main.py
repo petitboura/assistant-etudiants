@@ -112,6 +112,34 @@ def _ressemble_a_du_json_casse(texte: str) -> bool:
         return False
     return '"name"' in debut and '"arguments"' in debut
 
+
+def _debut_provient_d_un_resultat_outil(debut: str, messages_agent) -> bool:
+    """
+    Deuxieme cas signale par Bourama (25/07), distinct de
+    _ressemble_a_du_json_casse : le modele recopie parfois tel quel le
+    JSON BRUT renvoye par un outil (GitHub, Notion, Tavily, Wolfram...)
+    comme si c'etait sa reponse, au lieu de le resumer en langage naturel.
+    Contrairement au bug d'appel d'outil rate, ce JSON n'a pas forcement
+    les cles "name"/"arguments" -- sa forme depend entierement de l'outil
+    source, donc pas de pattern generique fiable. On compare plutot
+    directement au texte des resultats d'outils recus DANS CE TOUR
+    (messages_agent, role="tool", toujours groupes juste avant l'appel
+    Groq courant -- voir _traiter_appels) : si le debut de la reponse est
+    un extrait verbatim d'un de ces resultats, c'est une recopie brute,
+    peu importe l'outil ou le format.
+    """
+    debut = debut.strip()
+    if len(debut) < 15:
+        return False
+    for message in reversed(messages_agent):
+        if message.get("role") != "tool":
+            break  # les messages "tool" d'un meme tour sont toujours groupes en fin de liste
+        contenu = message.get("content")
+        if isinstance(contenu, str) and debut[:40] in contenu:
+            return True
+    return False
+
+
 # Noms lisibles affichés à l'utilisateur pendant qu'un outil MCP est utilisé.
 # Nouvel outil = ajouter une ligne ici (optionnel, sinon le nom brut s'affiche).
 NOMS_OUTILS_LISIBLES = {
@@ -1224,7 +1252,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
                     buffer_debut += delta.content
                     if len(buffer_debut) >= SEUIL_VERIF_JSON:
                         buffer_verifie = True
-                        if _ressemble_a_du_json_casse(buffer_debut):
+                        if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
                             contenu_suspect = True
                             yield {"type": "raisonnement", "texte": buffer_debut}
                         else:
@@ -1246,7 +1274,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         if buffer_debut and not buffer_verifie:
             # Le flux s'est terminé avant d'atteindre SEUIL_VERIF_JSON
             # (réponse très courte) -- on tranche avec ce qu'on a.
-            if _ressemble_a_du_json_casse(buffer_debut):
+            if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
                 yield {"type": "raisonnement", "texte": buffer_debut}
             else:
                 yield {"type": "reponse", "texte": buffer_debut}
@@ -1309,13 +1337,13 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
                 buffer_debut += token
                 if len(buffer_debut) >= 60:
                     buffer_verifie = True
-                    if _ressemble_a_du_json_casse(buffer_debut):
+                    if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
                         contenu_suspect = True
                         yield {"type": "raisonnement", "texte": buffer_debut}
                     else:
                         yield {"type": "reponse", "texte": buffer_debut}
     if buffer_debut and not buffer_verifie:
-        if _ressemble_a_du_json_casse(buffer_debut):
+        if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
             yield {"type": "raisonnement", "texte": buffer_debut}
         else:
             yield {"type": "reponse", "texte": buffer_debut}
