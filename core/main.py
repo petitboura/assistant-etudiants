@@ -695,15 +695,6 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "pour un contenu que tu n'as pas réellement obtenu. Si on te demande une image et "
     "qu'aucun outil de génération d'image n'est disponible dans cette conversation, "
     "dis-le clairement plutôt que d'inventer un lien.\n"
-    "MÊME RÈGLE pour un appel d'outil : n'écris JAMAIS dans ta réponse visible du "
-    "pseudo-code, une balise, ou tout texte qui a l'air d'un appel d'outil "
-    "(ex. <tool_code>, function_call, nom_outil(...)) -- un appel d'outil se fait "
-    "UNIQUEMENT via le vrai mécanisme d'appel de fonction, jamais en l'écrivant "
-    "comme texte de réponse. Si aucun outil pertinent n'est disponible dans cette "
-    "conversation, dis-le clairement et réponds avec tes connaissances générales "
-    "(en le signalant si le sujet est sensible à la fraîcheur de l'info) plutôt "
-    "que de fabriquer une réponse qui prétend s'appuyer sur une recherche/un outil "
-    "qui n'a pas réellement été exécuté.\n"
     "À L'INVERSE, dès qu'un outil de génération (image, document, code, site, "
     "bundle, données, audio, vidéo, 3D...) te renvoie une URL réelle, tu DOIS "
     "l'inclure dans ta réponse, sans exception : ![description](url) pour une "
@@ -1147,6 +1138,14 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
     sensible) avant de redemander une reponse au modele.
     """
     kwargs_reasoning = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
+    # reasoning_format="parsed" separe le raisonnement (delta.reasoning) du
+    # texte de reponse final (delta.content) -- sinon certains modeles
+    # melangent tout dans content. Demande Bourama (24/07) : rendre ce
+    # raisonnement visible cote frontend, jusqu'ici genere par le modele
+    # (par defaut pour GROQ_PRIMARY, un modele de raisonnement) mais jamais
+    # capture ni affiche.
+    if modele in MODELES_AVEC_REASONING_EFFORT and reasoning_effort != "none":
+        kwargs_reasoning["reasoning_format"] = "parsed"
 
     if appels_en_cours_a_finir:
         try:
@@ -1172,6 +1171,10 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
 
         for chunk in completion:
             delta = chunk.choices[0].delta
+
+            raisonnement = getattr(delta, "reasoning", None)
+            if raisonnement:
+                yield {"type": "raisonnement", "texte": raisonnement}
 
             if delta.content:
                 reponse_directe = True
@@ -1231,7 +1234,11 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         **kwargs_reasoning,
     )
     for chunk in completion:
-        token = chunk.choices[0].delta.content or ""
+        delta = chunk.choices[0].delta
+        raisonnement = getattr(delta, "reasoning", None)
+        if raisonnement:
+            yield {"type": "raisonnement", "texte": raisonnement}
+        token = delta.content or ""
         if token:
             yield {"type": "reponse", "texte": token}
     logging.info(f"Réponse via GROQ (avec outil): {modele}")
@@ -1256,6 +1263,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
     - {"type": "statut_termine", "texte": "..."} -> cet outil a fini (ou a ete annule)
+    - {"type": "raisonnement", "texte": "..."}   -> fragment de raisonnement interne du modele, avant la reponse finale (modeles de MODELES_AVEC_REASONING_EFFORT uniquement)
     - {"type": "sources", "sources": [{"titre": "...", "url": "..."}]} -> resultats d'une
       recherche web (Tavily) utilisee pour repondre. Peut etre emis plusieurs fois dans le
       meme echange (plusieurs recherches) -- l'appelant accumule/fusionne, ne remplace pas.
