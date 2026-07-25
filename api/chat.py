@@ -83,6 +83,11 @@ class EnvoyerMessagePayload(BaseModel):
     # dans core/main.py). Ce flag garantit que ça arrive pour CE message
     # précis, quand l'étudiant veut être sûr d'avoir une recherche fraîche.
     recherche_forcee: Optional[bool] = None
+    # Bouton "Outils" (2026-07-25, TEST agent nucleos uniquement -- voir
+    # core/mcp_tools.py:lister_tous_les_outils) : nom d'un seul outil
+    # sélectionné manuellement côté frontend (BarreDeSaisie.tsx). Ignoré
+    # pour tout agent différent de "nucleos".
+    outil_force: Optional[str] = None
     # Ajouté (2026-07-20) pour exposer le chemin de reprise de chat() --
     # jusqu'ici accessible seulement en appel Python interne (chat.py
     # Streamlit), jamais via cette route HTTP. Voir StatutOutil.tsx /
@@ -120,6 +125,7 @@ def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
                 fuseau_horaire=payload.fuseau_horaire,
                 images_base64=payload.images_base64,
                 recherche_forcee=payload.recherche_forcee,
+                outil_force=payload.outil_force,
             )
         for evenement in generateur:
             yield f"data: {json.dumps(evenement)}\n\n"

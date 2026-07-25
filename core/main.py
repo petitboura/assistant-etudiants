@@ -1426,7 +1426,7 @@ def _capturer_reponse(generateur, accumulateur):
         yield event
 
 
-def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None, recherche_forcee=False):
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None, recherche_forcee=False, outil_force=None):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
@@ -1676,7 +1676,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
         return
 
     client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
-    outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id, agent_id)
+    outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id, agent_id, outil_force)
     # Nom affiché de l'agent (ex. "Nucleos"), calculé UNE fois ici -- voir
     # _nom_agent, utilisé pour que la confirmation d'une action sensible
     # dise "Nucleos veut faire X" plutôt qu'une description générique.
