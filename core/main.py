@@ -913,6 +913,25 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
             "(elle a été indexée automatiquement lors de l'envoi, niveau utilisateur) "
             "pour récupérer le vrai lien avant de répondre."
         )
+    if outil_force:
+        # Confirmé en test réel 25/07 : même avec l'outil réellement
+        # présent dans la liste envoyée au modèle (vérifié via le log
+        # `Outils envoyés au LLM ce tour-ci : ['tavily_search']`), le
+        # modèle a quand même répondu par son réflexe par défaut ("mes
+        # connaissances s'arrêtent à ma coupure, je ne peux pas chercher
+        # en ligne") au lieu d'appeler l'outil. Instruction explicite
+        # pour forcer la bonne priorité : la présence réelle de l'outil
+        # prime sur toute limitation générale apprise à l'entraînement.
+        system_final += (
+            f"\n\nOUTIL ACTIF POUR CE MESSAGE : {outil_force} est disponible et "
+            "prêt à être appelé, sélectionné explicitement par la personne via le "
+            "bouton Outils. Si cet outil est pertinent pour répondre à sa demande, "
+            "appelle-le -- ne dis JAMAIS que tu ne peux pas faire quelque chose "
+            "(chercher une info récente, générer un fichier, explorer un dépôt...) "
+            "au prétexte de tes limitations générales de modèle de langage : la "
+            "présence réelle de cet outil dans cette conversation prime toujours sur "
+            "ce que tu crois savoir de tes propres capacités par défaut."
+        )
     if not outil_force:
         # Bouton Outils (2026-07-25, suite) : sans cette instruction, le
         # modèle invente de lui-même une liste de capacités générique
