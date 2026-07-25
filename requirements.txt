@@ -1,0 +1,6 @@
+# Ce fichier existe uniquement pour que Railpack (builder Railway) detecte
+# qu'il s'agit d'un projet Python et installe pip/Python dans l'image.
+# La vraie liste de dependances vit dans api/requirements.txt -- ne rien
+# dupliquer ici, juste pointer vers elle (pip sait lire les requirements
+# imbriques nativement).
+-r api/requirements.txt
