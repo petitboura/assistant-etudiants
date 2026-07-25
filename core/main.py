@@ -1683,11 +1683,34 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 {"role": "user" if m["role"] != "assistant" else "model", "parts": [{"text": m["content"]}]}
                 for m in messages_base if m["role"] != "system"
             ]
+            # Instruction ciblee (2026-07-24, trouve par Bourama en test
+            # reel) -- la regle generale anti-hallucination du prompt
+            # (voir INSTRUCTIONS_FORMATS_AFFICHAGE) n'a PAS suffi ici :
+            # Gemini a quand meme invente un faux appel d'outil
+            # (default_api.get_exchange_rate(...), default_api.search_news(...),
+            # noms qui n'existent nulle part dans le code reel -- "default_api"
+            # est un nom generique que Gemini associe au function-calling
+            # dans ses propres exemples d'entrainement). Ce chemin precis
+            # n'a REELEMENT aucun outil branche (pas de parametre tools=
+            # sur cet appel), donc l'instruction est directe et sans
+            # ambiguite plutot que de compter sur la regle generale
+            # noyee dans un long prompt systeme.
+            system_gemini_sans_outils = (
+                system_final
+                + "\n\nIMPORTANT : tu n'as accès à AUCUN outil réel dans cette réponse précise "
+                "(pas de recherche web, pas d'API externe, pas de Notion, rien) -- réponds "
+                "uniquement avec tes connaissances générales. Si la question porte sur une "
+                "information qui change (prix, taux de change, actualité, données en temps "
+                "réel...), dis clairement que tu ne peux pas la vérifier en direct plutôt que "
+                "de deviner. N'écris JAMAIS de code, de pseudo-code, ou de texte qui ressemble "
+                "à un appel d'outil/API (même dans un bloc de code) -- tu n'as aucun outil à "
+                "appeler, l'écrire ne fait qu'inventer un résultat qui n'existe pas."
+            )
             response = client_google.models.generate_content_stream(
                 model=GOOGLE_MODEL,
                 contents=gemini_messages,
                 config=types.GenerateContentConfig(
-                    system_instruction=system_final
+                    system_instruction=system_gemini_sans_outils
                 )
             )
             for chunk in response:
