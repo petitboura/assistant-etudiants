@@ -98,9 +98,19 @@ def _ressemble_a_du_json_casse(texte: str) -> bool:
     Pas un bug corrige par un parametre (arrive meme avec reasoning_format=
     "hidden" d'apres les rapports) -- on ne peut que le detecter et masquer
     le debut suspect plutot que l'afficher tel quel a l'etudiant.
+
+    IMPORTANT (retour Bourama, 25/07) : ne PAS juste tester "ca commence par
+    { ou [" -- si l'etudiant demande explicitement un vrai JSON ("donne-moi
+    un JSON avec..."), sa reponse legitime commence pareil et serait masquee
+    a tort. On exige donc en plus la signature precise d'un appel d'outil
+    Groq rate (les cles "name" ET "arguments" pres du debut, la structure
+    interne que Groq utilise pour le tool calling) -- un vrai JSON demande
+    par l'etudiant a quasiment jamais ces deux cles precises ensemble.
     """
     debut = texte.lstrip()
-    return debut.startswith("{") or debut.startswith("[")
+    if not (debut.startswith("{") or debut.startswith("[")):
+        return False
+    return '"name"' in debut and '"arguments"' in debut
 
 # Noms lisibles affichés à l'utilisateur pendant qu'un outil MCP est utilisé.
 # Nouvel outil = ajouter une ligne ici (optionnel, sinon le nom brut s'affiche).
@@ -1192,7 +1202,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         # "raisonnement" (masques du texte visible, le bug ressemble a du
         # JSON d'appel d'outil rate). SEUIL_VERIF_JSON assez petit pour ne
         # pas retarder perceptiblement le debut du streaming normal.
-        SEUIL_VERIF_JSON = 20
+        SEUIL_VERIF_JSON = 60
         buffer_debut = ""
         buffer_verifie = False
         contenu_suspect = False
@@ -1297,7 +1307,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
                 yield {"type": "reponse", "texte": token}
             else:
                 buffer_debut += token
-                if len(buffer_debut) >= 20:
+                if len(buffer_debut) >= 60:
                     buffer_verifie = True
                     if _ressemble_a_du_json_casse(buffer_debut):
                         contenu_suspect = True
