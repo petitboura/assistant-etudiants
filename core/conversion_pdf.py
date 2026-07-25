@@ -34,11 +34,7 @@ TIMEOUT_TOTAL_SECONDES = 90
 
 
 def _get_secret(cle):
-    try:
-        import streamlit as st
-        return st.secrets[cle]
-    except Exception:
-        return os.environ.get(cle)
+    return os.environ.get(cle)
 
 
 def conversion_disponible() -> bool:

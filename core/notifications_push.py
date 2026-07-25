@@ -32,11 +32,7 @@ VAPID_CLAIMS_SUB = "mailto:contact@maame.africa"  # à changer par une vraie adr
 
 
 def _get_secret(cle):
-    try:
-        import streamlit as st
-        return st.secrets[cle]
-    except Exception:
-        return os.environ.get(cle)
+    return os.environ.get(cle)
 
 
 def notifications_push_disponible() -> bool:

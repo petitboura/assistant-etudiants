@@ -39,11 +39,7 @@ MODELE_TOGETHER = "black-forest-labs/FLUX.1-schnell"
 
 
 def _get_secret(cle):
-    try:
-        import streamlit as st
-        return st.secrets[cle]
-    except Exception:
-        return os.environ.get(cle)
+    return os.environ.get(cle)
 
 
 def image_generation_disponible() -> bool:

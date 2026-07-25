@@ -26,11 +26,7 @@ MODELE_EMBEDDING = "gemini-embedding-001"
 
 
 def get_secret(key):
-    try:
-        import streamlit as st
-        return st.secrets[key]
-    except Exception:
-        return os.environ.get(key)
+    return os.environ.get(key)
 
 
 _client = None

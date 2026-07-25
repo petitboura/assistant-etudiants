@@ -32,11 +32,7 @@ BASE_URL = "https://queue.fal.run"
 
 
 def _get_secret(cle):
-    try:
-        import streamlit as st
-        return st.secrets[cle]
-    except Exception:
-        return os.environ.get(cle)
+    return os.environ.get(cle)
 
 
 def modele_3d_disponible() -> bool:

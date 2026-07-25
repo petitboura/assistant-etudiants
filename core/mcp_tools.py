@@ -40,11 +40,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 def _get_secret_local(key):
-    try:
-        import streamlit as st
-        return st.secrets[key]
-    except Exception:
-        return os.environ.get(key)
+    return os.environ.get(key)
 
 
 _supabase = create_client(_get_secret_local("SUPABASE_URL"), _get_secret_local("SUPABASE_SECRET"))

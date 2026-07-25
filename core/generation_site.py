@@ -31,11 +31,7 @@ BASE_URL = "https://api.vercel.com/v13/deployments"
 
 
 def _get_secret(cle):
-    try:
-        import streamlit as st
-        return st.secrets[cle]
-    except Exception:
-        return os.environ.get(cle)
+    return os.environ.get(cle)
 
 
 def site_deploiement_disponible() -> bool:

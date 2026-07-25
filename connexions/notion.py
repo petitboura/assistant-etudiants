@@ -61,11 +61,7 @@ MARGE_RAFRAICHISSEMENT = timedelta(minutes=5)
 
 
 def get_secret(key):
-    try:
-        import streamlit as st
-        return st.secrets[key]
-    except Exception:
-        return os.environ.get(key)
+    return os.environ.get(key)
 
 
 SUPABASE_URL = get_secret("SUPABASE_URL")

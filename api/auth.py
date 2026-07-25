@@ -16,9 +16,7 @@ logging.basicConfig(level=logging.INFO)
 
 def get_secret(key):
     """
-    Contrairement a core/*.py (qui tourne sous Streamlit et lit
-    st.secrets), cette API tourne sous Railway/uvicorn : uniquement des
-    variables d'environnement, jamais st.secrets.
+    Variables d'environnement uniquement (Railway/uvicorn).
     """
     return os.environ.get(key)
 

@@ -43,11 +43,7 @@ VOIX_PAR_DEFAUT = "austin"
 
 
 def _get_secret(cle):
-    try:
-        import streamlit as st
-        return st.secrets[cle]
-    except Exception:
-        return os.environ.get(cle)
+    return os.environ.get(cle)
 
 
 def _groq_actif() -> bool:

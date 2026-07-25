@@ -29,11 +29,7 @@ BASE_URL = "https://api.luminpdf.com/v1"
 
 
 def _get_secret(cle):
-    try:
-        import streamlit as st
-        return st.secrets[cle]
-    except Exception:
-        return os.environ.get(cle)
+    return os.environ.get(cle)
 
 
 def signature_disponible() -> bool:
