@@ -231,22 +231,23 @@ def lister_tous_les_outils(get_secret, user_id=None, agent_id=None, outil_force=
         except Exception as e:
             logging.error(f"ERREUR MCP listing ({nom}): {e}")
 
-    # Mode "bouton Outils" (test, 2026-07-25) -- UNIQUEMENT sur l'agent
-    # nucleos, pour reduire la consommation de tokens (schema complet de
-    # 19 outils envoye a chaque message par defaut, cout mesure comme le
-    # plus gros poste). Sur nucleos : aucun outil envoye SAUF si le
-    # frontend en a explicitement selectionne un (bouton Outils, voir
-    # BarreDeSaisie.tsx) -- l'IA perd son autonomie d'appel d'outils
-    # implicite sur cet agent precis (ex: chercher_fichier automatique),
-    # compromis assume pour la duree du test. Tous les autres agents :
-    # comportement inchange (outil_force ignore).
-    if agent_id == "nucleos":
-        if outil_force:
-            outils_pour_llm = [o for o in outils_pour_llm if o["function"]["name"] == outil_force]
-            table_routage = {k: v for k, v in table_routage.items() if k == outil_force}
-        else:
-            outils_pour_llm = []
-            table_routage = {}
+    # Mode "bouton Outils" (2026-07-25, GLOBAL -- décision définitive de
+    # Bourama, initialement testé sur l'agent nucleos seul puis étendu à
+    # tous). Objectif : réduire la conso token (schéma de ~20 outils
+    # envoyé à chaque message, identifié comme le plus gros poste).
+    # AUCUN outil envoyé par défaut, sur AUCUN agent, sauf sélection
+    # explicite d'UN outil par le frontend (bouton Outils, voir
+    # BarreDeSaisie.tsx). Effet de bord assumé et voulu : l'IA perd son
+    # autonomie d'appel d'outil implicite partout (ex. chercher_fichier
+    # automatique quand on redemande un fichier envoyé, tavily_search
+    # automatique sur une question d'actualité) tant que rien n'est
+    # sélectionné.
+    if outil_force:
+        outils_pour_llm = [o for o in outils_pour_llm if o["function"]["name"] == outil_force]
+        table_routage = {k: v for k, v in table_routage.items() if k == outil_force}
+    else:
+        outils_pour_llm = []
+        table_routage = {}
 
     logging.info(f"Outils envoyés au LLM ce tour-ci : {[o['function']['name'] for o in outils_pour_llm]}")
     return outils_pour_llm, table_routage
