@@ -48,13 +48,40 @@ GROQ_FALLBACKS = [
 MESSAGE_ERREUR = "Désolé, je rencontre un souci technique pour répondre. Merci de réessayer dans un instant."
 
 # Modération d'entrée (25/07) : verifie le message BRUT de l'etudiant avant
-# tout le reste. Llama Guard 4 sur Groq -- petit modele dedie a la
-# classification de securite (taxonomie MLCommons), pas d'invite systeme
-# necessaire, on lui passe juste le message a evaluer en role "user" (voir
-# console.groq.com/docs/model/llama-guard-4-12b). Repond "safe" ou
-# "unsafe\nS<numero>". Demande Bourama (25/07) : uniquement l'entree pour
-# l'instant (pas la sortie), pour limiter le surcout en tokens.
-MODELE_MODERATION = "meta-llama/llama-guard-4-12b"
+# tout le reste. IMPORTANT : Llama Guard 4 (meta-llama/llama-guard-4-12b)
+# a ete retire par Groq (deprecation du 10/02/2026, voir
+# console.groq.com/docs/deprecations) -- constate en prod le 25/07 (fail-
+# open, donc rien n'etait bloque depuis le debut, gpt-oss-120b refusait
+# parfois tout seul en anglais sur son propre entrainement de securite,
+# d'ou la confusion initiale). Remplace par openai/gpt-oss-safeguard-20b,
+# le modele recommande par Groq -- fonctionne differemment : "bring your
+# own policy", on lui fournit notre propre politique de moderation
+# (POLITIQUE_MODERATION plus bas) en role "system", et il repond en JSON
+# structure {"violation": 0|1, "category": "...", "rationale": "..."} au
+# lieu du simple "safe"/"unsafe" de Llama Guard (voir
+# console.groq.com/docs/content-moderation). Demande Bourama (25/07) :
+# uniquement l'entree pour l'instant (pas la sortie), pour limiter le
+# surcout en tokens.
+MODELE_MODERATION = "openai/gpt-oss-safeguard-20b"
+POLITIQUE_MODERATION = """# Politique de modération -- messages d'étudiants vers un assistant IA éducatif
+
+## Catégories de violation
+- violence : instructions ou encouragement à la violence, fabrication d'armes ou d'explosifs.
+- haine : contenu haineux ou discriminatoire visant un groupe protégé.
+- sexuel : contenu sexuel explicite, ou impliquant des mineurs sous quelque forme que ce soit.
+- automutilation : encouragement ou instructions de suicide/automutilation.
+- illegal : instructions pour des activités clairement illégales (drogues dures, piratage malveillant, fraude...).
+- harcelement : insultes graves ou harcèlement ciblé envers une personne précise.
+
+## Ce qui N'EST PAS une violation (à laisser passer)
+- Questions scolaires/académiques, même sur des sujets sensibles en soi (histoire des guerres, chimie de base, biologie, philosophie...).
+- Langage familier, frustration ou grossièretés légères sans intention de nuire à quelqu'un.
+- Demandes créatives ou hypothétiques clairement encadrées (devoirs, fiction, débat argumenté).
+- Un vrai JSON ou du code demandé explicitement par l'étudiant.
+
+## Format de réponse (JSON uniquement, rien d'autre)
+{"violation": 0 ou 1, "category": "<une des catégories ci-dessus ou null si aucune>", "rationale": "<explication en une phrase>"}
+"""
 MESSAGE_CONTENU_BLOQUE = "Je ne peux pas répondre à ce message. Reformule ta question autrement, je suis là pour t'aider !"
 
 # Valeur de repli si le secret AGENT_ID n'est pas defini pour ce deploiement
@@ -97,26 +124,30 @@ MAX_ETAPES_OUTILS = 5
 
 def _verifier_message_utilisateur(message: str) -> tuple[bool, str | None]:
     """
-    Verifie un message via Llama Guard 4 (voir MODELE_MODERATION plus haut).
-    Retourne (est_sur: bool, categorie: str|None -- ex "S1", presente
-    seulement si est_sur=False). En cas d'erreur reseau/API sur CE modele de
-    moderation (pas le modele principal), on laisse passer plutot que de
-    bloquer tout le chat pour un souci technique isole -- (True, None) avec
-    un log d'avertissement.
+    Verifie un message via gpt-oss-safeguard-20b + POLITIQUE_MODERATION
+    (voir plus haut -- remplace Llama Guard 4, retire par Groq). Retourne
+    (est_sur: bool, categorie: str|None -- presente seulement si
+    est_sur=False). En cas d'erreur reseau/API OU si le JSON renvoye est
+    illisible, on laisse passer plutot que de bloquer tout le chat pour un
+    souci technique isole sur CE modele de moderation (pas le modele
+    principal) -- (True, None) avec un log d'avertissement.
     """
     try:
         client = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0, timeout=8.0)
         completion = client.chat.completions.create(
             model=MODELE_MODERATION,
-            messages=[{"role": "user", "content": message}],
+            messages=[
+                {"role": "system", "content": POLITIQUE_MODERATION},
+                {"role": "user", "content": message},
+            ],
+            reasoning_effort="low",  # priorite a la latence, c'est un feu vert/rouge avant le vrai appel
         )
-        resultat = (completion.choices[0].message.content or "").strip()
-        if resultat.lower().startswith("safe"):
+        resultat = json.loads(completion.choices[0].message.content or "{}")
+        if not resultat.get("violation"):
             return True, None
-        categorie = resultat.splitlines()[-1].strip() if "\n" in resultat else None
-        return False, categorie
+        return False, resultat.get("category")
     except Exception as e:
-        logging.warning(f"Modération d'entrée indisponible (Llama Guard), message laissé passer : {e}")
+        logging.warning(f"Modération d'entrée indisponible (gpt-oss-safeguard), message laissé passer : {e}")
         return True, None
 
 
