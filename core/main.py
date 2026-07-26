@@ -886,14 +886,17 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
         )
     system_final += INSTRUCTIONS_FORMATS_AFFICHAGE
     system_final += REGLE_CONTEXTE_INVISIBLE
-    # Bouton Outils (2026-07-25) : ces deux blocs décrivaient ces
-    # capacités de façon inconditionnelle, même quand aucun outil n'est
-    # réellement envoyé au modèle -- confirmé en test réel le 25/07
-    # (l'IA "récitait" ces capacités alors que le log backend montrait
-    # `Outils envoyés au LLM ce tour-ci : []`). Désormais gated sur
-    # outil_force : le bloc n'apparaît que si l'outil concerné a été
-    # sélectionné via le bouton Outils pour ce message précis.
-    if outil_force == "chercher_fichier":
+    # Bouton Outils (2026-07-25, multi-sélection depuis le 26/07 --
+    # outil_force est maintenant une LISTE, plus une simple chaîne, voir
+    # demande Bourama). Ces deux blocs décrivaient ces capacités de façon
+    # inconditionnelle, même quand aucun outil n'est réellement envoyé au
+    # modèle -- confirmé en test réel le 25/07 (l'IA "récitait" ces
+    # capacités alors que le log backend montrait `Outils envoyés au LLM
+    # ce tour-ci : []`). Désormais gated sur outil_force : le bloc
+    # n'apparaît que si l'outil concerné fait partie de la sélection pour
+    # ce message précis.
+    outils_forces = outil_force or []
+    if "chercher_fichier" in outils_forces:
         system_final += (
             "\n\nBIBLIOTHÈQUE DE FICHIERS : tu as accès à l'outil chercher_fichier pour "
             "retrouver un fichier (image, PDF, audio, vidéo...) déjà uploadé par la "
@@ -912,7 +915,7 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
             "(elle a été indexée automatiquement lors de l'envoi, niveau utilisateur) "
             "pour récupérer le vrai lien avant de répondre."
         )
-    if outil_force:
+    if outils_forces:
         # Confirmé en test réel 25/07 : même avec l'outil réellement
         # présent dans la liste envoyée au modèle (vérifié via le log
         # `Outils envoyés au LLM ce tour-ci : ['tavily_search']`), le
@@ -921,17 +924,18 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
         # en ligne") au lieu d'appeler l'outil. Instruction explicite
         # pour forcer la bonne priorité : la présence réelle de l'outil
         # prime sur toute limitation générale apprise à l'entraînement.
+        liste_lisible = ", ".join(outils_forces)
         system_final += (
-            f"\n\nOUTIL ACTIF POUR CE MESSAGE : {outil_force} est disponible et "
-            "prêt à être appelé, sélectionné explicitement par la personne via le "
-            "bouton Outils. Si cet outil est pertinent pour répondre à sa demande, "
+            f"\n\nOUTIL(S) ACTIF(S) POUR CE MESSAGE : {liste_lisible} {'sont disponibles' if len(outils_forces) > 1 else 'est disponible'} et "
+            "prêt(s) à être appelé(s), sélectionné(s) explicitement par la personne via le "
+            "bouton Outils. Si l'un de ces outils est pertinent pour répondre à sa demande, "
             "appelle-le -- ne dis JAMAIS que tu ne peux pas faire quelque chose "
             "(chercher une info récente, générer un fichier, explorer un dépôt...) "
             "au prétexte de tes limitations générales de modèle de langage : la "
-            "présence réelle de cet outil dans cette conversation prime toujours sur "
+            "présence réelle de ce(s) outil(s) dans cette conversation prime toujours sur "
             "ce que tu crois savoir de tes propres capacités par défaut."
         )
-    if not outil_force:
+    if not outils_forces:
         # Bouton Outils (2026-07-25, suite) : sans cette instruction, le
         # modèle invente de lui-même une liste de capacités générique
         # d'assistant IA (génération de fichiers, recherche web, etc.)
@@ -956,7 +960,7 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
             "blocs ```mermaid/```chart/```carte/```widget ci-dessus restent "
             "disponibles (ce sont des formats d'affichage, pas des outils)."
         )
-    if outil_force in ("explorer_depot_github", "lire_fichier_depot_github", "modifier_fichier_depot_github"):
+    if any(o in outils_forces for o in ("explorer_depot_github", "lire_fichier_depot_github", "modifier_fichier_depot_github")):
         system_final += (
             "\n\nEXPLORATION GITHUB : tu as accès à explorer_depot_github (arborescence "
             "complète d'un dépôt), lire_fichier_depot_github (contenu d'un fichier précis), "

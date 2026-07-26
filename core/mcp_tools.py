@@ -242,9 +242,21 @@ def lister_tous_les_outils(get_secret, user_id=None, agent_id=None, outil_force=
     # automatique quand on redemande un fichier envoyé, tavily_search
     # automatique sur une question d'actualité) tant que rien n'est
     # sélectionné.
-    if outil_force:
-        outils_pour_llm = [o for o in outils_pour_llm if o["function"]["name"] == outil_force]
-        table_routage = {k: v for k, v in table_routage.items() if k == outil_force}
+    # Mode "bouton Outils" (2026-07-25, GLOBAL -- décision définitive de
+    # Bourama, initialement testé sur l'agent nucleos seul puis étendu à
+    # tous, puis passé à la MULTI-sélection le 26/07). Objectif : réduire
+    # la conso token (schéma de ~20 outils envoyé à chaque message,
+    # identifié comme le plus gros poste). AUCUN outil envoyé par défaut,
+    # sur AUCUN agent, sauf sélection explicite d'un ou plusieurs outils
+    # par le frontend (bouton Outils, voir BarreDeSaisie.tsx). Effet de
+    # bord assumé et voulu : l'IA perd son autonomie d'appel d'outil
+    # implicite partout (ex. chercher_fichier automatique quand on
+    # redemande un fichier envoyé, tavily_search automatique sur une
+    # question d'actualité) tant que rien n'est sélectionné.
+    outils_forces = set(outil_force or [])
+    if outils_forces:
+        outils_pour_llm = [o for o in outils_pour_llm if o["function"]["name"] in outils_forces]
+        table_routage = {k: v for k, v in table_routage.items() if k in outils_forces}
     else:
         outils_pour_llm = []
         table_routage = {}
