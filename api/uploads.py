@@ -22,6 +22,7 @@ import subprocess
 import tempfile
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from google import genai
 
 from api.auth import supabase, utilisateur_courant, get_secret
 
@@ -155,6 +156,73 @@ async def uploader_image_chat(
         logging.warning(f"Indexation bibliothèque échouée pour image chat {chemin} (upload OK quand même) : {e}")
 
     return {"url": url}
+
+
+PROMPT_EXTRACTION_FORMULE = (
+    "Tu es un outil d'extraction de formule mathématique à partir d'une "
+    "image (photo de feuille, manuel, écran, ou formule manuscrite). "
+    "Renvoie UNIQUEMENT le LaTeX de la ou des formules visibles sur "
+    "l'image, sans aucun texte d'accompagnement, sans délimiteurs $ ou "
+    "$$, sans balises markdown ni bloc de code. S'il y a plusieurs "
+    "formules distinctes, sépare-les par un retour à la ligne. Si "
+    "l'image ne contient aucune formule mathématique lisible, réponds "
+    "exactement : AUCUNE_FORMULE_DETECTEE"
+)
+
+
+@router.post("/extraire-formule")
+async def extraire_formule(
+    fichier: UploadFile = File(...),
+    utilisateur=Depends(utilisateur_courant),
+):
+    """
+    OCR ciblé formule (2026-07-26, demande de Bourama : priorité maths --
+    "l'image convertie que tu peux éditer avant d'envoyer"). Contrairement
+    à /image-chat, cette image n'est PAS destinée à rejoindre la
+    conversation : elle sert uniquement à en extraire le LaTeX, renvoyé
+    au frontend pour être ouvert dans EditeurFormule.tsx (éditable avant
+    insertion). Pas de stockage Supabase ici -- l'image ne sert qu'à cet
+    appel Gemini ponctuel, rien à retrouver plus tard dans la
+    bibliothèque de fichiers (contrairement à une image envoyée en
+    conversation).
+
+    Mêmes contraintes de format/taille que /image-chat : Gemini
+    (google-genai), seul modèle multimodal du projet, n'accepte de toute
+    façon que jpeg/png/webp pour la vision.
+    """
+    if fichier.content_type not in TYPES_AUTORISES:
+        raise HTTPException(
+            status_code=400,
+            detail="Format non supporté (jpeg, png ou webp uniquement).",
+        )
+
+    contenu = await fichier.read()
+    if len(contenu) > TAILLE_MAX_OCTETS:
+        raise HTTPException(status_code=400, detail="Image trop lourde (5 Mo max).")
+    if len(contenu) == 0:
+        raise HTTPException(status_code=400, detail="Fichier vide.")
+
+    try:
+        client_google = genai.Client(api_key=get_secret("GOOGLE_API_KEY"))
+        reponse = client_google.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[{
+                "role": "user",
+                "parts": [
+                    {"text": PROMPT_EXTRACTION_FORMULE},
+                    {"inline_data": {"mime_type": fichier.content_type, "data": base64.b64encode(contenu).decode("utf-8")}},
+                ],
+            }],
+        )
+    except Exception as e:
+        logging.error(f"ERREUR GEMINI (extraire-formule) : {e}")
+        raise HTTPException(status_code=500, detail="Échec de l'extraction, réessaie.")
+
+    latex = (reponse.text or "").strip().strip("`").strip()
+    if not latex or latex == "AUCUNE_FORMULE_DETECTEE":
+        raise HTTPException(status_code=422, detail="Aucune formule détectée dans cette image.")
+
+    return {"latex": latex}
 
 
 # --- Documents (PDF/Word/Excel) : extraction texte, pas de stockage --------
