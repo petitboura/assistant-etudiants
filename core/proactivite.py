@@ -37,7 +37,8 @@ from core.main import get_secret, GROQ_PRIMARY, _construire_system_prompt, _ress
 from core.notifications_push import envoyer_notification_push, notifications_push_disponible
 
 COOLDOWN_VERIFICATION = timedelta(hours=6)  # ne re-vérifie pas une paire (agent, utilisateur) plus souvent que ça
-NB_MESSAGES_CONTEXTE = 20  # historique récent donné au modèle pour juger
+NB_MESSAGES_CONTEXTE = 10  # historique récent donné au modèle pour juger (réduit du 25/07 -- voir TAILLE_MAX_MESSAGE)
+TAILLE_MAX_MESSAGE = 500  # troncature (25/07) : évite de dépasser la limite TPM Groq sur de longs échanges
 
 SENTINELLE_AUCUNE_RELANCE = "AUCUNE_RELANCE"
 
@@ -106,14 +107,22 @@ def _marquer_relance_envoyee(user_id: str, agent_id: str) -> None:
         logging.error(f"ERREUR SUPABASE (marquer relance envoyée, user={user_id}, agent={agent_id}) : {e}")
 
 
-def _decider_relance(agent_id: str, user_id: str, instructions_createur: str | None) -> str | None:
+def _decider_relance(
+    agent_id: str, user_id: str, instructions_createur: str | None, propager_erreurs: bool = False
+) -> str | None:
     """
     Laisse l'agent (son propre prompt système + la conversation passée +
     les critères du créateur, voir _construire_instruction_proactivite)
     juger de la pertinence d'une relance. Renvoie le message à envoyer,
-    ou None si aucune relance n'est pertinente (ou en cas d'erreur --
-    fail-silent, une relance ratée n'est jamais grave, contrairement à un
-    message bloqué à tort dans le chat normal).
+    ou None si aucune relance n'est pertinente.
+
+    propager_erreurs=False (par défaut, utilisé par le planificateur en
+    tâche de fond) : fail-silent, une relance ratée n'est jamais grave.
+    propager_erreurs=True (utilisé par l'endpoint de test, voir
+    api/agents.py:tester_proactivite) : les erreurs remontent au lieu
+    d'être avalées -- sinon un échec technique (ex: quota Groq dépassé,
+    constaté le 25/07) est indiscernable d'une vraie décision "je ne
+    relance pas" côté interface.
     """
     try:
         historique = (
@@ -127,6 +136,8 @@ def _decider_relance(agent_id: str, user_id: str, instructions_createur: str | N
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture historique décision relance, user={user_id}, agent={agent_id}) : {e}")
+        if propager_erreurs:
+            raise
         return None
 
     messages_recents = list(reversed(historique.data or []))
@@ -141,13 +152,18 @@ def _decider_relance(agent_id: str, user_id: str, instructions_createur: str | N
         system_final = _construire_system_prompt("", agent_id, user_id, longueur_reponse="courte")
     except Exception as e:
         logging.error(f"ERREUR construction prompt (décision relance, agent={agent_id}) : {e}")
+        if propager_erreurs:
+            raise
         return None
     system_final += _construire_instruction_proactivite(instructions_createur)
 
     messages = [{"role": "system", "content": system_final}]
     for m in messages_recents:
         role = "assistant" if m["role"] == "assistant" else "user"
-        messages.append({"role": role, "content": m["content"]})
+        contenu = m["content"] or ""
+        if len(contenu) > TAILLE_MAX_MESSAGE:
+            contenu = contenu[:TAILLE_MAX_MESSAGE] + "… (tronqué)"
+        messages.append({"role": role, "content": contenu})
     messages.append(
         {"role": "user", "content": "[Aucun nouveau message -- décide si tu relances, selon les consignes ci-dessus.]"}
     )
@@ -158,6 +174,8 @@ def _decider_relance(agent_id: str, user_id: str, instructions_createur: str | N
         texte = (completion.choices[0].message.content or "").strip()
     except Exception as e:
         logging.error(f"ERREUR Groq (décision relance, agent={agent_id}, user={user_id}) : {e}")
+        if propager_erreurs:
+            raise
         return None
 
     if not texte or texte.strip().upper() == SENTINELLE_AUCUNE_RELANCE:
