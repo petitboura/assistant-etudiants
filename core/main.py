@@ -1463,12 +1463,26 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             else:
                 yield {"type": "reponse", "texte": buffer_debut}
 
-        if reponse_directe:
+        if reponse_directe and not appels_en_cours:
+            # Cas normal : reponse texte pure, aucun outil appele -- on
+            # peut s'arreter la.
             logging.info(f"Réponse via GROQ (sans outil, streaming): {modele}")
             return
 
         if not appels_en_cours:
             return  # ni contenu ni outil (rare) : rien a faire de plus
+
+        # BUG CORRIGE (2026-07-26, trouve par Bourama) : avant ce fix, la
+        # simple presence de texte (reponse_directe=True) faisait sortir
+        # la fonction ICI, AVANT d'atteindre le code qui execute
+        # appels_en_cours plus bas -- un appel d'outil recu dans le meme
+        # passage qu'un peu de texte (ex: un modele qui dit "D'accord, je
+        # m'en occupe..." en meme temps qu'il appelle l'outil) etait donc
+        # silencieusement perdu : jamais execute, aucune erreur visible,
+        # l'IA repondait juste comme si de rien n'etait. Desormais, si
+        # appels_en_cours n'est pas vide, on continue vers le traitement
+        # des appels ci-dessous, meme si du texte a deja ete stream et
+        # affiche.
 
         appels = [appels_en_cours[i] for i in sorted(appels_en_cours)]
 
