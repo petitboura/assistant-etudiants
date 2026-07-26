@@ -1174,30 +1174,22 @@ def _executer_un_appel(appel, table_routage):
     return appeler_outil(appel["name"], arguments, table_routage)
 
 
-def _extraire_sources_tavily(nom_outil, resultat_brut):
+def _sources_depuis_json_generique(resultat_brut):
     """
-    Parse le JSON renvoye par un outil tavily_* (search/extract/map/crawl/
-    research) ou notion-search pour en extraire {"titre", "url"} de
-    chaque resultat -- utilise pour l'evenement "sources" (citations), le
-    seul morceau du bloc "Affichage" qui necessitait un nouveau type
-    d'evenement plutot qu'un simple branchement (voir echange avec
-    Bourama, session du 2026-07-20).
-
-    Etendu le 2026-07-25 a notion-search : meme forme de reponse cote
-    protocole MCP (bloc.content[0].text = JSON avec une cle "results",
-    chaque resultat ayant "title"/"url") -- verifie par appel reel avant
-    d'ecrire ce parseur, pas suppose. Les autres outils Notion
-    (notion-fetch, create-pages, update-page) ne renvoient pas cette
-    forme et restent hors citations : notion-fetch renvoie du markdown
-    de page, pas une liste de resultats.
+    Detection GENERIQUE, independante du nom de l'outil : tout outil qui
+    renvoie un JSON de la forme {"results": [{"title"/"titre", "url"}, ...]}
+    voit ses sources extraites automatiquement -- couvre tavily_* et
+    notion-search aujourd'hui (verifie par appel reel, pas suppose), et
+    n'importe quel outil FUTUR qui renverrait la meme forme, sans toucher
+    a ce fichier (demande explicite de Bourama, session du 2026-07-26 :
+    preparer les citations pour n'importe quelle action/outil a venir,
+    pas seulement ceux d'aujourd'hui).
 
     Best-effort : si le JSON ne correspond pas au format attendu (ou
     n'est pas du JSON), renvoie une liste vide plutot que de faire
     planter la reponse -- les sources sont un bonus, jamais un
     prerequis pour repondre.
     """
-    if not (nom_outil.startswith("tavily_") or nom_outil == "notion-search"):
-        return []
     try:
         donnees = json.loads(resultat_brut)
     except (json.JSONDecodeError, TypeError):
@@ -1212,6 +1204,73 @@ def _extraire_sources_tavily(nom_outil, resultat_brut):
         if isinstance(r, dict) and r.get("url"):
             sources.append({"titre": r.get("title") or r["url"], "url": r["url"]})
     return sources
+
+
+def _sources_github_depuis_arguments(appel):
+    """
+    Cas particulier : nos outils GitHub locaux (core/serveur_mcp_github.py)
+    renvoient du TEXTE brut (arborescence ou contenu de fichier), jamais du
+    JSON -- la detection generique ci-dessus ne peut donc rien y trouver.
+    La source se deduit plutot des ARGUMENTS de l'appel (repo/chemin),
+    exactement comme le fait l'outil lui-meme pour construire ses requetes
+    API. Si `branche` n'a pas ete precisee par le modele, on refait le
+    meme appel `default_branch` que l'outil (voir explorer_depot_github/
+    lire_fichier_depot_github) plutot que de deviner "main" -- un mauvais
+    lien casse (ex: depot dont la branche par defaut est "master") serait
+    pire qu'une source absente.
+    """
+    try:
+        arguments = json.loads(appel["arguments"] or "{}")
+    except Exception:
+        return []
+
+    repo = (arguments.get("repo") or "").strip()
+    if not repo:
+        return []
+
+    branche = (arguments.get("branche") or "").strip()
+    if not branche:
+        try:
+            info = requests.get(f"https://api.github.com/repos/{repo}", timeout=5)
+            branche = info.json().get("default_branch", "main") if info.status_code == 200 else "main"
+        except Exception:
+            branche = "main"
+
+    if appel["name"] == "lire_fichier_depot_github":
+        chemin = (arguments.get("chemin") or "").strip()
+        if not chemin:
+            return []
+        return [{"titre": chemin.split("/")[-1], "url": f"https://github.com/{repo}/blob/{branche}/{chemin}"}]
+
+    # explorer_depot_github
+    chemin_depart = (arguments.get("chemin_depart") or "").strip()
+    url = f"https://github.com/{repo}/tree/{branche}/{chemin_depart}".rstrip("/")
+    return [{"titre": repo, "url": url}]
+
+
+def _extraire_sources(appel, resultat_brut):
+    """
+    Construit les sources ({"titre", "url"}) d'un appel d'outil pour
+    l'evenement SSE "sources" (citations affichees sous la reponse, voir
+    ChatIA.tsx/SourcesBulle.tsx). Deux strategies, dans l'ordre :
+
+    1. Generique par forme de JSON (_sources_depuis_json_generique) --
+       future-proof, aucune liste d'outils a maintenir.
+    2. Cas particuliers a resultat texte brut, ou la source se deduit des
+       arguments de l'appel plutot que du resultat (GitHub aujourd'hui ;
+       tout futur outil du meme genre s'ajoute ici au besoin).
+
+    Best-effort partout : jamais d'exception qui remonte jusqu'a la
+    reponse -- les sources sont un bonus.
+    """
+    sources = _sources_depuis_json_generique(resultat_brut)
+    if sources:
+        return sources
+
+    if appel["name"] in ("explorer_depot_github", "lire_fichier_depot_github"):
+        return _sources_github_depuis_arguments(appel)
+
+    return []
 
 
 def _traiter_appels(appels, messages_agent, table_routage):
@@ -1249,7 +1308,7 @@ def _traiter_appels(appels, messages_agent, table_routage):
                 appel = futures[future]
                 resultat = future.result()
                 yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
-                sources = _extraire_sources_tavily(appel["name"], resultat)
+                sources = _extraire_sources(appel, resultat)
                 if sources:
                     yield {"type": "sources", "sources": sources}
                 messages_agent.append({
