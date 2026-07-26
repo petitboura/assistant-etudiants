@@ -33,14 +33,24 @@ GROQ_FALLBACKS = [
     "llama-3.3-70b-versatile",
     "qwen/qwen3.6-27b",
     "openai/gpt-oss-20b",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    # qwen3-32b a une limite de 6000 tokens/minute, souvent plus petite que
-    # la taille du prompt systeme + historique a elle seule (avant meme un
-    # appel d'outil) -> il echoue quasi systematiquement (413). On le garde
-    # en tout dernier recours plutot qu'en premier, pour ne pas gaspiller
-    # un aller-retour a chaque question.
-    "qwen/qwen3-32b",
+    # llama-4-scout-17b-16e-instruct et qwen3-32b retires par Groq le
+    # 17/06/2026 (voir console.groq.com/docs/deprecations) -- 404
+    # systematique, retires de la chaine le 26/07/2026. llama-3.1-8b-instant
+    # les remplace en TOUT dernier recours Groq (avant Gemini) : c'est le
+    # modele le plus permissif du plan gratuit (le moins susceptible d'etre
+    # a court de quota quand tout le reste sature), mais nettement moins
+    # capable -- voir MODELES_QUALITE_REDUITE plus bas, qui sert a prevenir
+    # l'utilisateur quand CE modele precis a genere la reponse, pour ne pas
+    # laisser juger la qualite de la plateforme sur lui.
+    "llama-3.1-8b-instant",
 ]
+
+# Modeles de secours dont la qualite de reponse est nettement en retrait par
+# rapport a GROQ_PRIMARY (utilises seulement quand tout le reste a echoue) --
+# quand un de ces modeles repond, on le signale explicitement a l'utilisateur
+# (evenement "meta", voir _agent_groq et le frontend) plutot que de laisser
+# une reponse plus faible passer pour une reponse normale de la plateforme.
+MODELES_QUALITE_REDUITE = {"llama-3.1-8b-instant"}
 MESSAGE_ERREUR = "Désolé, je rencontre un souci technique pour répondre. Merci de réessayer dans un instant."
 
 # Modération d'entrée (25/07) : verifie le message BRUT de l'utilisateur avant
@@ -104,14 +114,19 @@ MODELE_PROFIL = "llama-3.3-70b-versatile"
 # D'apres la doc Groq (console.groq.com/docs/reasoning), le parametre
 # reasoning_effort n'est reconnu que par certains modeles (GPT-OSS 20B/120B,
 # Qwen 3). Les autres modeles de GROQ_FALLBACKS (ex: llama-3.3-70b-versatile,
-# llama-4-scout) ne sont PAS des modeles de raisonnement : leur envoyer ce
-# parametre risque une erreur API plutot qu'un simple no-op. On ne l'active
-# donc que pour les modeles confirmes compatibles.
+# llama-3.1-8b-instant) ne sont PAS des modeles de raisonnement : leur
+# envoyer ce parametre risque une erreur API plutot qu'un simple no-op. On
+# ne l'active donc que pour les modeles confirmes compatibles -- ET la
+# valeur qui desactive/minimise le raisonnement DIFFERE selon la famille :
+# "none" pour Qwen 3 (raisonnement desactivable), mais GPT-OSS exige
+# obligatoirement low/medium/high (pas de "none") -- bug reel trouve le
+# 26/07/2026 : gpt-oss-20b recevait "none" et echouait a CHAQUE appel avec
+# une erreur 400 "`reasoning_effort` must be one of `low`, `medium`, or
+# `high`", le rendant inutilisable comme filet de secours depuis le debut.
 MODELES_AVEC_REASONING_EFFORT = {
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3-32b",
-    "qwen/qwen3.6-27b",  # successeur de qwen3-32b, a confirmer si le comportement differe
+    "openai/gpt-oss-20b": "low",       # pas de "none" chez GPT-OSS -- "low" pour rester rapide
+    "openai/gpt-oss-120b": "low",
+    "qwen/qwen3.6-27b": "none",        # Qwen 3 peut vraiment desactiver le raisonnement
 }
 
 # Nombre maximum d'aller-retours "outil" autorisés pour une seule question,
@@ -831,7 +846,16 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "structure au moment où il a été écrit, qui devient fausse dès que des "
     "fichiers sont ajoutés/supprimés sans que quelqu'un pense à le mettre à "
     "jour à la main. Le README est une bonne source pour \"que fait ce projet\", "
-    "jamais pour \"qu'est-ce qu'il contient exactement en ce moment\"."
+    "jamais pour \"qu'est-ce qu'il contient exactement en ce moment\".\n"
+    "NE DÉCRIS JAMAIS un appel d'outil dans ta réponse (ex. \"Appel de l'outil X "
+    "avec les arguments suivants :\", un bloc JSON de la requête envoyée, un bloc "
+    "JSON du résultat brut reçu). L'interface affiche déjà automatiquement, dans "
+    "sa propre bulle dédiée, quel outil a été utilisé et son résultat -- recopier "
+    "ça dans ta réponse est une pure redite sans valeur pour la personne qui lit, "
+    "et donne l'impression que tu ne sais pas rédiger de vraie réponse. Une fois "
+    "un outil utilisé, écris directement la réponse en langage naturel, comme si "
+    "tu connaissais déjà l'information -- jamais un compte-rendu de ce que tu as "
+    "fait techniquement pour l'obtenir."
 )
 
 
@@ -1412,14 +1436,27 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         reponse_directe = False
         appels_en_cours = {}  # index -> {"id", "name", "arguments"}
         # Filet de securite contre le bug Groq (_ressemble_a_du_json_casse,
-        # voir plus haut) : on retient les tout premiers caracteres avant de
-        # decider s'ils partent en "reponse" (affiches normalement) ou en
-        # "raisonnement" (masques du texte visible, le bug ressemble a du
-        # JSON d'appel d'outil rate). SEUIL_VERIF_JSON assez petit pour ne
-        # pas retarder perceptiblement le debut du streaming normal.
+        # voir plus haut) : on retient des fenetres de SEUIL_VERIF_JSON
+        # caracteres avant de decider si elles partent en "reponse"
+        # (affichees normalement) ou en "raisonnement" (masquees, le bug
+        # ressemble a du JSON d'appel d'outil rate ou a une recopie brute
+        # d'un resultat d'outil). SEUIL_VERIF_JSON assez petit pour ne pas
+        # retarder perceptiblement le streaming.
+        #
+        # IMPORTANT (bug trouve le 26/07/2026, signale par Bourama) : cette
+        # verification portait AVANT seulement sur les 60 tout premiers
+        # caracteres du flux, une seule fois -- une fois la reponse jugee
+        # "normale" au debut (cas frequent : le modele commence par une
+        # phrase d'intro legitime), plus RIEN ne revenait verifier le reste
+        # du flux, meme si un appel d'outil et son resultat brut etaient
+        # recopies plus loin dans la meme reponse. Desormais on re-verifie
+        # par fenetres glissantes de SEUIL_VERIF_JSON caracteres pendant
+        # TOUTE la duree du flux, pas juste au debut -- des qu'une fenetre
+        # est suspecte, tout ce qui suit dans ce passage bascule aussi en
+        # "raisonnement" (contenu_suspect devient definitif pour ce passage,
+        # comme avant).
         SEUIL_VERIF_JSON = 60
         buffer_debut = ""
-        buffer_verifie = False
         contenu_suspect = False
 
         for chunk in completion:
@@ -1433,17 +1470,15 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
                 reponse_directe = True
                 if contenu_suspect:
                     yield {"type": "raisonnement", "texte": delta.content}
-                elif buffer_verifie:
-                    yield {"type": "reponse", "texte": delta.content}
                 else:
                     buffer_debut += delta.content
                     if len(buffer_debut) >= SEUIL_VERIF_JSON:
-                        buffer_verifie = True
                         if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
                             contenu_suspect = True
                             yield {"type": "raisonnement", "texte": buffer_debut}
                         else:
                             yield {"type": "reponse", "texte": buffer_debut}
+                        buffer_debut = ""
 
             if delta.tool_calls:
                 for fragment in delta.tool_calls:
@@ -1458,9 +1493,10 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
                         if fragment.function.arguments:
                             etat["arguments"] += fragment.function.arguments
 
-        if buffer_debut and not buffer_verifie:
-            # Le flux s'est terminé avant d'atteindre SEUIL_VERIF_JSON
-            # (réponse très courte) -- on tranche avec ce qu'on a.
+        if buffer_debut:
+            # Reliquat de la dernière fenêtre, plus petite que
+            # SEUIL_VERIF_JSON (fin de flux atteinte avant l'avoir remplie)
+            # -- on tranche avec ce qu'on a.
             if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
                 yield {"type": "raisonnement", "texte": buffer_debut}
             else:
@@ -1520,8 +1556,11 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         timeout=DELAI_MAX_PAR_APPEL,
         **kwargs_reasoning,
     )
+    # Meme filtre que dans la boucle principale plus haut, etendu a tout le
+    # flux par fenetres glissantes (voir le commentaire detaille au premier
+    # bloc identique, plus haut dans cette fonction) -- corrige le meme bug
+    # ici aussi puisque ce chemin duplique la meme logique de streaming.
     buffer_debut = ""
-    buffer_verifie = False
     contenu_suspect = False
     for chunk in completion:
         delta = chunk.choices[0].delta
@@ -1532,18 +1571,16 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         if token:
             if contenu_suspect:
                 yield {"type": "raisonnement", "texte": token}
-            elif buffer_verifie:
-                yield {"type": "reponse", "texte": token}
             else:
                 buffer_debut += token
                 if len(buffer_debut) >= 60:
-                    buffer_verifie = True
                     if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
                         contenu_suspect = True
                         yield {"type": "raisonnement", "texte": buffer_debut}
                     else:
                         yield {"type": "reponse", "texte": buffer_debut}
-    if buffer_debut and not buffer_verifie:
+                    buffer_debut = ""
+    if buffer_debut:
         if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
             yield {"type": "raisonnement", "texte": buffer_debut}
         else:
@@ -1858,16 +1895,19 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
         # pour que Notion/Wolfram restent utilisables meme quand
         # GROQ_PRIMARY sature son quota TPM (ce qui est le cas le plus
         # frequent de bascule ici, pas une vraie panne du modele).
-        # reasoning_effort="none" : ces modeles (ex: qwen3) font du
-        # raisonnement par defaut, on le desactive pour rester rapide,
-        # comme avant cette modification.
+        # reasoning_pour_ce_modele vient de MODELES_AVEC_REASONING_EFFORT.get(model) :
+        # chaque modele recoit sa propre valeur valide ("none" pour Qwen 3,
+        # "low" pour GPT-OSS -- jamais "none" pour ce dernier, invalide cote
+        # API, voir la definition du dict plus haut), None (donc rien envoye)
+        # pour les modeles non-raisonnement comme llama-3.3-70b-versatile et
+        # llama-3.1-8b-instant.
         # IMPORTANT : on reutilise messages_agent tel quel (meme instance,
         # mutee en place par _agent_groq) d'un modele a l'autre — on ne le
         # reinitialise PAS a messages_base a chaque tour de boucle (voir
         # commentaire ci-dessus).
         for model in GROQ_FALLBACKS:
             try:
-                reasoning_pour_ce_modele = "none" if model in MODELES_AVEC_REASONING_EFFORT else None
+                reasoning_pour_ce_modele = MODELES_AVEC_REASONING_EFFORT.get(model)
                 yield from _capturer_reponse(
                     _agent_groq(
                         client_groq, messages_agent, outils_mcp, table_routage,
@@ -1876,8 +1916,17 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     reponse_accumulee,
                 )
                 ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
-                if ids_historique:
-                    yield {"type": "meta", **ids_historique}
+                # Signale au frontend quand la reponse vient d'un modele de
+                # qualite reduite (demande Bourama, 26/07) : evite que
+                # l'utilisateur juge la plateforme sur une reponse plus
+                # faible que la normale sans le savoir -- voir
+                # MODELES_QUALITE_REDUITE plus haut et StatutOutil.tsx /
+                # ChatIA.tsx cote frontend pour l'affichage.
+                meta_a_envoyer = dict(ids_historique) if ids_historique else {}
+                if model in MODELES_QUALITE_REDUITE:
+                    meta_a_envoyer["modele_qualite_reduite"] = True
+                if meta_a_envoyer:
+                    yield {"type": "meta", **meta_a_envoyer}
                 _mettre_a_jour_resume_si_besoin(user_id)
                 _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id)
                 return
