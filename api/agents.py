@@ -929,6 +929,11 @@ class TesterProactivitePayload(BaseModel):
 class TesterProactiviteReponse(BaseModel):
     relance: Optional[str] = None
     aucune_conversation: bool = False
+    # 25/07 : distingue une vraie décision "je ne relance pas" d'un échec
+    # technique (ex: quota Groq dépassé) -- les deux étaient auparavant
+    # indiscernables côté interface (voir _decider_relance,
+    # propager_erreurs).
+    erreur: Optional[str] = None
 
 
 @router.post("/{agent_id}/proactivite/tester", response_model=TesterProactiviteReponse)
@@ -987,7 +992,16 @@ def tester_proactivite(
     if not a_un_historique or not a_un_historique.data:
         return TesterProactiviteReponse(relance=None, aucune_conversation=True)
 
-    message = _decider_relance(agent_id, cible_user_id, instructions)
+    message = None
+    try:
+        message = _decider_relance(agent_id, cible_user_id, instructions, propager_erreurs=True)
+    except Exception as e:
+        logging.error(f"ERREUR test proactivité (agent={agent_id}, user={cible_user_id}) : {e}")
+        return TesterProactiviteReponse(
+            relance=None,
+            aucune_conversation=False,
+            erreur=f"Échec technique (pas une vraie décision de l'IA) : {e}",
+        )
     return TesterProactiviteReponse(relance=message, aucune_conversation=False)
 
 
