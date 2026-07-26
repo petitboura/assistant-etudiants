@@ -41,8 +41,7 @@ def lister_conversations(utilisateur=Depends(utilisateur_courant)):
     Pas de pagination pour l'instant : le nombre d'agents avec qui un même
     utilisateur discute reste naturellement borné (contrairement au feed
     public), donc pas de risque de volume immédiat -- à revisiter si ça
-    devient un problème réel (même remarque que pour le feed, voir
-    PIVOT_SOCIAL.md).
+    devient un problème réel (même remarque que pour le feed).
     """
     try:
         lignes = (
@@ -147,7 +146,7 @@ def obtenir_historique_agent(agent_id: str, utilisateur=Depends(utilisateur_cour
 
 # --- Fils de discussion (par conversation_id), ajouté le 2026-07-16 ------
 # Bourama : reproduire dans le chat Next.js la sidebar "Historique" du chat
-# Streamlit (faces/vues/chat.py), qui liste les fils de discussion
+# Streamlit (l'ancienne interface Streamlit), qui liste les fils de discussion
 # DISTINCTS avec un même agent (pas juste "un agent = une conversation",
 # comme le fait lister_conversations ci-dessus pour le tableau de bord).
 # Même logique de regroupement que _lister_conversations_passees côté

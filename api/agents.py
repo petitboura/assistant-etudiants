@@ -1,15 +1,14 @@
 """
-Étape 1 du plan (voir api/PLAN.md) : POST /api/agents.
+POST /api/agents.
 
-Équivalent du formulaire faces/vues/creer_agent.py, SANS l'upload de PDF
-(volontairement laissé à l'Étape 2 : POST /api/agents/{id}/documents —
+Équivalent de l'ancien formulaire Streamlit, SANS l'upload de PDF
+(volontairement séparé : POST /api/agents/{id}/documents —
 un fichier ne se transporte pas naturellement dans le même corps JSON
 qu'un formulaire structuré, et creer_agent.py traite déjà ces deux
 aspects comme deux blocs largement indépendants).
 
-Réutilise telle quelle la logique déjà partagée avec le formulaire
-Streamlit (core/creation_agent.py), pas de duplication (voir décision
-d'architecture #3 dans api/PLAN.md).
+Réutilise telle quelle la logique déjà partagée avec l'ancien formulaire
+Streamlit (core/creation_agent.py), pas de duplication.
 """
 
 import os
@@ -58,19 +57,18 @@ class ChampProfilUtilisateur(BaseModel):
 
 class UiConfig(BaseModel):
     """
-    Depuis le pivot social (2026-07-11, voir PIVOT_SOCIAL.md, section
-    "Ce qui change") : le thème visuel par agent est supprimé, un seul
+    Depuis le pivot social (2026-07-11) : le thème visuel par agent est supprimé, un seul
     thème fixe s'applique à toute la plateforme. Seul icone_page reste
     personnalisable ici — tous les anciens champs (couleurs, police,
     rayon des bulles, CSS avancé, style de titre multicolore...) sont
     retirés, pas juste ignorés, pour ne pas garder de code mort côté API.
     Cible finale de `agents.ui_config` en base (le nettoyage de la
     colonne elle-même, avec les agents déjà créés, reste une étape à
-    part, voir PIVOT_SOCIAL.md Étape B).
+    part).
     """
     icone_page: str = "🤖"
     # Ajouté le 2026-07-14 (Bourama : le formulaire n'avait aucune section
-    # pour ce champ, alors que faces/vues/chat.py le lit déjà depuis
+    # pour ce champ, alors que l'ancienne interface Streamlit le lit déjà depuis
     # ui_config.placeholder_saisie -- voir UI_CONFIG_PAR_DEFAUT). Le
     # formulaire Streamlit (creer_agent.py) l'avait déjà, seul le flow
     # Next.js en manquait.
@@ -112,7 +110,7 @@ class CreerAgentPayload(BaseModel):
     # différente : `description` = texte public de longueur libre (fiche
     # agent, SEO), `sous_titre` = courte phrase d'accueil affichée sous le
     # titre au premier écran du chat (équivalent du champ "Phrase
-    # d'accueil" du formulaire Streamlit, faces/vues/creer_agent.py).
+    # d'accueil" du formulaire Streamlit).
     # Fallback sur `description` uniquement si `sous_titre` est vide, pour
     # ne pas laisser un agent sans aucun sous-titre si le créateur ne
     # remplit pas ce nouveau champ.
@@ -190,7 +188,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
 
     # Depuis le pivot social : plus de personnalisation de thème par agent,
     # seuls titre/icône/emoji dérivés du nom et de l'icône restent écrits
-    # dans ui_config. faces/vues/chat.py retombe sur UI_CONFIG_PAR_DEFAUT
+    # dans ui_config. l'ancienne interface Streamlit retombe sur UI_CONFIG_PAR_DEFAUT
     # pour tout le reste (couleurs, police, rendu_visuel, etc.), ce qui
     # est le comportement voulu : un seul thème fixe pour la plateforme.
     ui = payload.ui_config
@@ -200,7 +198,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         "titre_accueil": f"{ui.icone_page.strip()} {payload.nom.strip()}",
         # Bug corrigé le 2026-07-12 (Bourama : "le sous-titre est
         # identique à tous, vraiment tous") : ce champ n'était jamais
-        # écrit ici, donc faces/vues/chat.py retombait systématiquement
+        # écrit ici, donc l'ancienne interface Streamlit retombait systématiquement
         # sur UI_CONFIG_PAR_DEFAUT["sous_titre_accueil"] (le texte de
         # l'agent maths historique) pour TOUS les agents créés via ce
         # flow, quel que soit leur sujet réel. Le formulaire Streamlit
@@ -214,7 +212,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         "emoji_reponse": ui.icone_page.strip(),
         # Point 5 (2026-07-14, Bourama) : texte de la barre de saisie du
         # chat, personnalisable par agent -- déjà lu tel quel côté
-        # faces/vues/chat.py (UI_CONFIG["placeholder_saisie"]), seul le
+        # l'ancienne interface Streamlit (UI_CONFIG["placeholder_saisie"]), seul le
         # flow de création Next.js ne l'écrivait pas encore.
         "placeholder_saisie": ui.placeholder_saisie.strip() or "Pose ta question...",
     }
@@ -235,8 +233,8 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         "knowledge_source": knowledge_source,
         "tools_enabled": payload.outils_choisis,
         "owner_id": utilisateur.id,
-        # Colonnes ajoutées par la migration pivot_social_etape_b_tables
-        # (voir PIVOT_SOCIAL.md, Étape B) : vitrine publique de l'agent,
+        # Colonnes ajoutées par la migration pivot_social_etape_b_tables :
+        # vitrine publique de l'agent,
         # distincte de knowledge_source.description (usage RAG interne).
         "image_vitrine_url": payload.image_vitrine_url,
         "description": payload.description.strip(),
@@ -323,7 +321,7 @@ class AgentDetailPublic(BaseModel):
     nom: str
     icone_page: str = "🤖"
     # Ajoutés le 2026-07-16 (Bourama : reproduire visuellement l'accueil du
-    # chat Streamlit -- faces/vues/chat.py:_rendre_titre_accueil -- dans le
+    # chat Streamlit -- dans le
     # chat Next.js, qui n'affichait jusqu'ici qu'un placeholder générique
     # "Pose ta question à {nomAgent}..." au lieu du titre/sous-titre propres
     # à chaque agent). Mêmes clés ui_config et mêmes valeurs de repli que
@@ -338,10 +336,9 @@ class AgentDetailPublic(BaseModel):
 @router.get("/{agent_id}", response_model=AgentDetailPublic)
 def obtenir_agent_public(agent_id: str):
     """
-    Détail public d'un agent, pour la page `/agent/[slug]` (voir
-    PIVOT_SOCIAL.md, Étape C, Étape E). Public, aucune auth requise, comme
+    Détail public d'un agent, pour la page `/agent/[slug]`. Public, aucune auth requise, comme
     `/api/feed`. `agent_id` sert de slug : pas de colonne `slug` dédiée
-    sur `agents` (voir PIVOT_SOCIAL.md, changelog "Étape B terminée").
+    sur `agents`.
 
     `owner_id` est renvoyé pour permettre au frontend de lier vers le
     portfolio créateur (`/u/[slug]`, Étape E) une fois `GET
@@ -353,7 +350,7 @@ def obtenir_agent_public(agent_id: str):
     False) : une page publique ne doit pas exister pour un agent
     désactivé, même en connaissant son id directement. Convention "True
     par défaut" si `actif` est absent/NULL, identique à
-    `faces/vues/chat.py:_agent_est_actif` et à `/api/feed`.
+    `l'ancienne interface Streamlit` et à `/api/feed`.
     """
     try:
         res = (
@@ -404,11 +401,11 @@ def mettre_a_jour_vitrine(
 ):
     """
     Mise à jour de la vitrine publique d'un agent (image + description),
-    depuis le dashboard "Mes agents" (voir PIVOT_SOCIAL.md, Étape F).
+    depuis le dashboard "Mes agents".
 
     Vérifie que `owner_id` du token correspond au propriétaire de l'agent
-    (403 sinon) — même exigence que celle notée pour l'upload de
-    documents à l'Étape 2 de `api/PLAN.md`, appliquée ici en premier
+    (403 sinon) — même exigence appliquée à l'upload de
+    documents, en premier
     puisque c'est le premier endpoint de modification (hors création) du
     pivot social.
     """
@@ -854,7 +851,7 @@ def modifier_agent(
     try:
         # .eq("owner_id", ...) en plus de .eq("id", ...) : sécurité
         # redondante avec le check ci-dessus, même précaution que
-        # faces/vues/mes_agents.py (qui scope aussi son .update() par
+        # l'ancienne interface Streamlit (qui scope aussi son .update() par
         # owner_id, pas seulement par un if avant).
         supabase.table("agents").update(mise_a_jour).eq("id", agent_id).eq(
             "owner_id", utilisateur.id
@@ -1013,22 +1010,22 @@ async def uploader_document(
     utilisateur=Depends(utilisateur_courant),
 ):
     """
-    Étape 2 de `api/PLAN.md`, jamais construite jusqu'ici — ajoutée le
-    2026-07-12 suite à un bug remonté par Bourama : le nouveau formulaire
-    de création (D.6 du pivot social) n'avait aucun moyen d'ajouter un
+    Ajoutée le 2026-07-12 suite à un bug remonté par Bourama : le nouveau formulaire
+    de création (étape D.6 du pivot social) n'avait aucun moyen d'ajouter un
     PDF, `POST /api/agents` ne le gère pas lui-même (voir docstring en
     tête de ce fichier). Appelé APRÈS `POST /api/agents` : l'agent doit
     déjà exister, on a besoin de son id pour indexer le document dessus.
 
     Réutilise telle quelle la logique déjà en place côté Streamlit
     (`indexers/storage.py:upload_document` +
-    `indexers/index_documents.py:indexer_document`) — pas de duplication,
-    même convention que `composer_system_prompt` (décision d'architecture
-    #3 de `api/PLAN.md`).
+    `indexers/index_documents.py:indexer_document`) — pas de duplication.
+    Corrigé le 26/07/2026 : `indexers/storage.py` écrivait dans un bucket
+    legacy ("IA pour etudiants") au lieu de "documents-agents", donc TOUS
+    les documents uploadés via cet endpoint atterrissaient au mauvais
+    endroit depuis le début.
 
     Vérifie la propriété de l'agent (même exigence que
-    `mettre_a_jour_vitrine`, notée dès l'Étape 1 comme prérequis pour ce
-    endpoint).
+    `mettre_a_jour_vitrine`).
     """
     if fichier.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés.")
@@ -1096,7 +1093,7 @@ def lister_documents(agent_id: str, utilisateur=Depends(utilisateur_courant)):
     `indexers/storage.py:list_documents` telle quelle (liste TOUT le
     bucket, pas de filtre côté Supabase Storage par préfixe) puis filtre
     en Python sur `{agent_id}__` — même approche que
-    `faces/vues/mes_agents.py` fait déjà, pas une nouvelle logique.
+    `l'ancienne interface Streamlit` fait déjà, pas une nouvelle logique.
     """
     try:
         res = (
@@ -1144,7 +1141,7 @@ def supprimer_document(agent_id: str, nom_stockage: str, request: Request, utili
     que A lui appartient. Supprime aussi les chunks vectorisés associés
     (`supprimer_chunks_existants`), sinon le RAG continuerait à retrouver
     le contenu d'un PDF qui n'existe plus dans le stockage — même
-    précaution que `faces/vues/mes_agents.py`.
+    précaution que `l'ancienne interface Streamlit`.
     """
     try:
         res = (
@@ -1348,7 +1345,7 @@ class NoterAgentPayload(BaseModel):
 @router.post("/{agent_id}/rating", status_code=204)
 def noter_agent(agent_id: str, payload: NoterAgentPayload, request: Request, utilisateur=Depends(utilisateur_courant)):
     """
-    Note un agent de 1 à 5 (table `agent_ratings`, voir PIVOT_SOCIAL.md :
+    Note un agent de 1 à 5 (table `agent_ratings`,
     contrainte unique `(agent_id, user_id)` — un utilisateur note un agent
     une seule fois mais peut modifier sa note). Upsert plutôt qu'insert
     pour porter ce comportement directement, sans 409 + endpoint PATCH
@@ -1390,7 +1387,7 @@ class NoteAgregee(BaseModel):
 def obtenir_note_agent(agent_id: str):
     """
     Note moyenne publique d'un agent, pour l'affichage "note 1-5" sur
-    `/agent/[slug]` (voir PIVOT_SOCIAL.md, tableau des pages du frontend).
+    `/agent/[slug]`.
     Public, aucune auth. `moyenne` reste `None` (pas 0) tant qu'aucune
     note n'existe, pour que le frontend distingue "pas encore noté" de
     "noté 0".
@@ -1427,8 +1424,8 @@ class Commentaire(BaseModel):
 @router.post("/{agent_id}/comments", response_model=Commentaire, status_code=201)
 def creer_commentaire(agent_id: str, payload: CommentaireCree, utilisateur=Depends(utilisateur_courant)):
     """
-    Ajoute un commentaire sur un agent (table `agent_comments`, voir
-    PIVOT_SOCIAL.md). Un commentaire par appel ; aucune limite de nombre
+    Ajoute un commentaire sur un agent (table `agent_comments`).
+    Un commentaire par appel ; aucune limite de nombre
     par utilisateur pour l'instant, aucune modération demandée par
     Bourama à ce stade — à revoir si besoin plus tard.
     """

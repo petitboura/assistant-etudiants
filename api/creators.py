@@ -1,7 +1,7 @@
 """
-Étape C du plan (voir PIVOT_SOCIAL.md) : suivre/ne plus suivre un
+Suivre/ne plus suivre un
 créateur (table `follows`), pour le bouton Follow du portfolio
-créateur (`/u/[slug]`, Étape E).
+créateur (`/u/[slug]`).
 
 Volontairement dans un fichier séparé de `api/agents.py` : ces routes
 portent sur un créateur (`user_id`), pas sur un agent, même si les deux
@@ -159,8 +159,7 @@ def obtenir_etat_follow(creator_id: str, utilisateur=Depends(utilisateur_optionn
 def suivre_createur(creator_id: str, request: Request, utilisateur=Depends(utilisateur_courant)):
     """
     Suit un créateur (table `follows`, contrainte unique
-    `(follower_id, creator_id)` — voir PIVOT_SOCIAL.md, section "Modèle
-    de données"). Upsert (idempotent) plutôt qu'insert : suivre deux fois
+    `(follower_id, creator_id)`). Upsert (idempotent) plutôt qu'insert : suivre deux fois
     de suite ne doit pas renvoyer une erreur 409 côté frontend, juste ne
     rien changer de plus.
     """

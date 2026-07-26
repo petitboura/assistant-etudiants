@@ -22,8 +22,8 @@ def get_secret(key):
 
 NOTION_TOKEN = get_secret("NOTION_TOKEN")
 
-# ÉTAPE 1 (généralisation multi-agent) : depuis que faces/app_etudiant.py
-# résout AGENT_ID dynamiquement (URL ?agent=... en priorité, secret en
+# ÉTAPE 1 (généralisation multi-agent) : depuis que l'API
+# résout AGENT_ID dynamiquement (auth utilisateur en priorité, secret en
 # repli) et le transmet explicitement à chaque appel de chat()/
 # get_system_prompt(), cette variable-ci n'est PLUS la source de vérité
 # de l'agent actif. Elle ne sert plus que de filet de sécurité si

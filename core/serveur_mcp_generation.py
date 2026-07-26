@@ -277,7 +277,7 @@ if modele_3d_disponible():
 # Enregistré conditionnellement, gate par FAL_KEY (voir
 # generation_video.py). IMPORTANT : la génération vidéo prend 1-3
 # minutes, donc en 2 outils separes (lancer + consulter), jamais un
-# seul outil bloquant -- l'agent doit dire a l'etudiant de revenir
+# seul outil bloquant -- l'agent doit dire a l'utilisateur de revenir
 # verifier un peu plus tard, pas rester bloque a attendre.
 if video_disponible():
     @mcp_generation.tool()

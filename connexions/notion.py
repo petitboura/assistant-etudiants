@@ -1,5 +1,5 @@
 """
-Connexion Notion par etudiant (OAuth 2.1 + PKCE + Dynamic Client Registration).
+Connexion Notion par utilisateur (OAuth 2.1 + PKCE + Dynamic Client Registration).
 
 POURQUOI CE FICHIER EST DIFFERENT DE auth.py (Google) :
 Google a un client OAuth fixe (cree une fois pour toutes sur la console
@@ -14,7 +14,7 @@ meme si on doit en enregistrer un nouveau pour les futures connexions.
 FLOW (identique dans l'esprit a demarrer_connexion_google /
 finaliser_connexion_google) :
 1. demarrer_connexion_notion(user_id, agent_id) -> URL a ouvrir. Range
-   code_verifier + state + agent_id dans notion_oauth_temp (l'etudiant
+   code_verifier + state + agent_id dans notion_oauth_temp (l'utilisateur
    quitte l'app, la session Streamlit redemarre a zero au retour).
    agent_id sert uniquement a savoir vers quel agent rediriger apres coup
    (notion_oauth_temp n'a pas ete modifie par le pivot), pas a scoper
@@ -26,7 +26,7 @@ finaliser_connexion_google) :
    automatiquement si proche de l'expiration (appele a chaque message
    dans registre_outils.py, pas seulement a la connexion).
 
-COMPTE UNIFIE (revirement du 2026-07-11, voir PIVOT_SOCIAL.md) : une
+COMPTE UNIFIE (revirement du 2026-07-11) : une
 connexion Notion vaut pour TOUS les agents de la plateforme, une fois
 etablie par un compte. Ce fichier scopait avant par (user_id, agent_id)
 ("Option A") ; c'est desormais scope par user_id seul sur
@@ -142,10 +142,10 @@ def _client_dcr_actif(metadata):
 def demarrer_connexion_notion(user_id, agent_id):
     """
     Premiere etape : genere l'URL d'autorisation Notion a ouvrir pour
-    l'etudiant. Retourne None si la config manque.
+    l'utilisateur. Retourne None si la config manque.
 
     agent_id est enregistre avec la tentative dans notion_oauth_temp
-    uniquement pour savoir vers quel agent rediriger l'etudiant une fois
+    uniquement pour savoir vers quel agent rediriger l'utilisateur une fois
     revenu (voir chat.py) -> le token obtenu, lui, vaut pour tous les
     agents de la plateforme (compte unifie, voir finaliser_connexion_notion).
     """
@@ -189,7 +189,7 @@ def demarrer_connexion_notion(user_id, agent_id):
 def etat_notion_en_attente(state):
     """
     Verifie si un `state` correspond a une tentative de connexion Notion en
-    cours (utile depuis app_etudiant.py pour distinguer un retour Notion
+    cours (utile pour distinguer un retour Notion
     d'un retour Google sur la meme URL de callback).
     """
     ligne = supabase.table("notion_oauth_temp").select("state").eq("state", state).execute()
@@ -298,7 +298,7 @@ def _rafraichir(connexion):
         tokens = reponse.json()
     except Exception as e:
         logging.warning(f"Rafraichissement Notion echoue pour user {connexion['user_id']} : {e}")
-        # invalid_grant ou similaire : la connexion est morte, l'etudiant
+        # invalid_grant ou similaire : la connexion est morte, l'utilisateur
         # devra se reconnecter. On ne supprime pas la ligne automatiquement
         # pour garder une trace ; obtenir_token_valide renverra juste None.
         return None
@@ -319,7 +319,7 @@ def obtenir_token_valide(user_id):
     """
     Retourne un access_token Notion utilisable pour ce compte, valable
     pour n'importe quel agent de la plateforme (compte unifie), en le
-    rafraichissant si besoin. Retourne None si l'etudiant n'a jamais
+    rafraichissant si besoin. Retourne None si l'utilisateur n'a jamais
     connecte son Notion, ou si la connexion est morte.
     Appelee a chaque message (voir registre_outils.py), pas seulement a la
     connexion, pour ne jamais utiliser un token perime.

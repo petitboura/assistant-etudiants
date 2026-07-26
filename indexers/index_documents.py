@@ -46,8 +46,8 @@ def extraire_texte_pdf(chemin_pdf):
 def supprimer_chunks_existants(agent_id, nom_fichier):
     """
     Supprime les chunks déjà indexés pour CE nom_fichier et CET agent avant
-    réindexation. Nécessaire pour le texte libre (faces/creer_agent.py et
-    faces/mes_agents.py, section "Base de connaissance") qui peut être
+    réindexation. Nécessaire pour le texte libre (l'ancien formulaire Streamlit et
+    l'ancienne interface Streamlit, section "Base de connaissance") qui peut être
     modifié et réenregistré plusieurs fois par le créateur : sans ça,
     chaque sauvegarde empilerait de nouveaux chunks au lieu de remplacer
     les anciens.

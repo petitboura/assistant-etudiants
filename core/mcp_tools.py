@@ -164,7 +164,7 @@ def lister_tous_les_outils(get_secret, user_id=None, agent_id=None, outil_force=
     Tavily, Wolfram) ; certains outils "par utilisateur" (ex: Notion) en
     ont besoin pour aller chercher le bon token. Notion specifiquement
     scope sa connexion par (user_id, agent_id) et non user_id seul
-    (Option A, juillet 2026) : un etudiant connecte a Notion pour un
+    (Option A, juillet 2026) : un utilisateur connecte a Notion pour un
     agent n'est PAS automatiquement connecte pour un autre -> voir
     connexions/notion.py. Si un outil necessite un utilisateur et qu'aucun
     n'est connecte (ou pas encore connecte a CET outil POUR CET AGENT), il

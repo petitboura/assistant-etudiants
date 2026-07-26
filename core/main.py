@@ -43,7 +43,7 @@ GROQ_FALLBACKS = [
 ]
 MESSAGE_ERREUR = "Désolé, je rencontre un souci technique pour répondre. Merci de réessayer dans un instant."
 
-# Modération d'entrée (25/07) : verifie le message BRUT de l'etudiant avant
+# Modération d'entrée (25/07) : verifie le message BRUT de l'utilisateur avant
 # tout le reste. IMPORTANT : Llama Guard 4 (meta-llama/llama-guard-4-12b)
 # a ete retire par Groq (deprecation du 10/02/2026, voir
 # console.groq.com/docs/deprecations) -- constate en prod le 25/07 (fail-
@@ -93,7 +93,7 @@ MODELE_RESUME = "llama-3.3-70b-versatile"  # rapide, pas besoin de raisonnement 
 # Profil utilisateur dynamique par agent (2026-07-21, voir
 # agents.profil_utilisateur_schema et _mettre_a_jour_profil_utilisateur_si_besoin
 # plus bas). Seuil plus bas que SEUIL_RESUME_MESSAGES : contrairement au
-# resume memoire (qui compte TOUS les messages de l'etudiant, tous agents
+# resume memoire (qui compte TOUS les messages de l'utilisateur, tous agents
 # confondus), celui-ci compte seulement les messages avec CET agent -- ils
 # s'accumulent donc plus lentement, un seuil identique mettrait
 # potentiellement des semaines a se declencher pour un agent utilise
@@ -159,15 +159,15 @@ def _ressemble_a_du_json_casse(texte: str) -> bool:
     Bourama (24/07) : "souvent il donne dans le chat le json qu'il reçoit".
     Pas un bug corrige par un parametre (arrive meme avec reasoning_format=
     "hidden" d'apres les rapports) -- on ne peut que le detecter et masquer
-    le debut suspect plutot que l'afficher tel quel a l'etudiant.
+    le debut suspect plutot que l'afficher tel quel a l'utilisateur.
 
     IMPORTANT (retour Bourama, 25/07) : ne PAS juste tester "ca commence par
-    { ou [" -- si l'etudiant demande explicitement un vrai JSON ("donne-moi
+    { ou [" -- si l'utilisateur demande explicitement un vrai JSON ("donne-moi
     un JSON avec..."), sa reponse legitime commence pareil et serait masquee
     a tort. On exige donc en plus la signature precise d'un appel d'outil
     Groq rate (les cles "name" ET "arguments" pres du debut, la structure
     interne que Groq utilise pour le tool calling) -- un vrai JSON demande
-    par l'etudiant a quasiment jamais ces deux cles precises ensemble.
+    par l'utilisateur a quasiment jamais ces deux cles precises ensemble.
     """
     debut = texte.lstrip()
     if not (debut.startswith("{") or debut.startswith("[")):
@@ -553,8 +553,8 @@ REGLE_CONTEXTE_INVISIBLE = (
 def _charger_resume_memoire(user_id):
     """
     Recupere le resume long-terme (table conversation_summaries) de cet
-    etudiant, valable pour tous les agents de la plateforme (compte
-    unifie, juillet 2026). Retourne "" si l'etudiant n'est pas connecte
+    utilisateur, valable pour tous les agents de la plateforme (compte
+    unifie, juillet 2026). Retourne "" si l'utilisateur n'est pas connecte
     (user_id=None) ou si aucun resume n'existe encore.
     """
     if not user_id:
@@ -732,8 +732,7 @@ def _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id):
 
 
 INSTRUCTIONS_LONGUEUR_REPONSE = {
-    # Migration Next.js (voir MIGRATION_CHAT_VERS_NEXTJS.md, section 3.3) :
-    # sélecteur Courte/Moyenne/Longue dans la barre de saisie, modifiable
+    # Sélecteur Courte/Moyenne/Longue dans la barre de saisie, modifiable
     # à chaque message. "moyenne" = comportement historique (pas
     # d'instruction ajoutée), pour ne rien changer par défaut.
     "courte": (
@@ -758,7 +757,7 @@ INSTRUCTIONS_LONGUEUR_REPONSE = {
 #      encore configurée -> l'outil n'est pas dans outils_mcp, donc
 #      injoignable. Pas de solution ici tant que la clé n'est pas ajoutée.
 #   2. Carte/graphique/widget interactif N'ONT JAMAIS eu d'outil dédié --
-#      le frontend (djiguign--ai) sait déjà rendre ces trois blocs
+#      le frontend (djiguigne-frontend) sait déjà rendre ces trois blocs
 #      nativement (voir CarteMessage.tsx, GraphiqueDonnees.tsx,
 #      WidgetSandbox.tsx), il manquait juste la convention ici.
 INSTRUCTIONS_FORMATS_AFFICHAGE = (
@@ -874,7 +873,7 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
         system_final += f"\n\n{contexte_docs}"
     system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
     if recherche_forcee:
-        # Icône de recherche dans la barre de saisie (djiguign--ai) --
+        # Icône de recherche dans la barre de saisie (djiguigne-frontend) --
         # forçage manuel pour CE message précis (voir docstring de
         # chat()). Le modèle peut de toute façon décider seul d'utiliser
         # Tavily sans ce flag (tool-calling normal) ; ceci garantit que
@@ -1015,7 +1014,7 @@ MAX_PASSAGES_CASCADE = 2  # on ne retente toute la cascade que si TOUT a timeout
 def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale, conversation_id=None):
     """
     Persiste l'echange (question + reponse) dans `conversations`, pour la
-    memoire long-terme. Ignore silencieusement si l'etudiant n'est pas
+    memoire long-terme. Ignore silencieusement si l'utilisateur n'est pas
     connecte (user_id=None) ou si la reponse est vide (ex: message
     d'erreur technique, qu'on ne veut pas polluer la memoire avec).
     """
@@ -1573,33 +1572,32 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
       meme echange (plusieurs recherches) -- l'appelant accumule/fusionne, ne remplace pas.
     - {"type": "reponse", "texte": "..."}        -> morceau de la reponse finale (streaming)
     - {"type": "confirmation_requise", ...}      -> un outil qui MODIFIE les donnees de
-      l'etudiant (ex: creer une page Notion) attend une confirmation avant de s'executer.
-      Contient "nom_lisible", "arguments" (a afficher a l'etudiant), et "etat_reprise"
+      l'utilisateur (ex: creer une page Notion) attend une confirmation avant de s'executer.
+      Contient "nom_lisible", "arguments" (a afficher a l'utilisateur), et "etat_reprise"
       (a repasser tel quel a chat(reprise=...) une fois la decision prise).
     - {"type": "meta", "message_id_user": ..., "message_id_assistant": ...,
       "created_at_assistant": ...}                -> DERNIER evenement emis, une fois
       l'echange persiste dans historique_conversations (voir _sauvegarder_echange).
-      Ids necessaires cote appelant (API de migration Next.js) pour indexer un
-      feedback like/dislike sur CE message precis (voir
-      MIGRATION_CHAT_VERS_NEXTJS.md, section 3.2). Absent si l'etudiant n'est pas
+      Ids necessaires cote appelant (API du frontend Next.js) pour indexer un
+      feedback like/dislike sur CE message precis. Absent si l'utilisateur n'est pas
       connecte (user_id=None) : dans ce cas aucun feedback n'est possible non plus.
 
-    faces/app_etudiant.py doit distinguer ces types pour savoir quoi afficher, et ne
+    Le frontend doit distinguer ces types pour savoir quoi afficher, et ne
     garder que "reponse" dans l'historique de conversation.
 
     `longueur_reponse` (optionnel, "courte" | "moyenne" | "longue", defaut
     "moyenne" = comportement historique inchange) pilote la longueur de la
     reponse generee via une consigne ajoutee au prompt systeme (voir
     INSTRUCTIONS_LONGUEUR_REPONSE). Migration Next.js, section 3.3 :
-    modifiable a chaque message par l'etudiant.
+    modifiable a chaque message par l'utilisateur.
 
-    `user_id` (session.user.id de Supabase Auth, ou None si l'etudiant n'est
+    `user_id` (session.user.id de Supabase Auth, ou None si l'utilisateur n'est
     pas connecte) est transmis au registre d'outils pour que les outils "par
     utilisateur" (ex: Notion) sachent pour qui aller chercher un token. Il sert
     aussi a scoper la memoire long-terme (conversation_summaries, scope par
     user_id seul depuis le compte unifie de juillet 2026 -> le resume suit
-    l'etudiant d'un agent a l'autre, pas cloisonne par agent) : sans user_id
-    (etudiant non connecte), rien n'est lu ni ecrit en memoire.
+    l'utilisateur d'un agent a l'autre, pas cloisonne par agent) : sans user_id
+    (utilisateur non connecte), rien n'est lu ni ecrit en memoire.
 
     `agent_id` (optionnel) determine quel prompt systeme et quelles donnees
     RAG utiliser (voir configuration.py / retriever.py). Si non fourni, on
@@ -1631,9 +1629,9 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     retry cascade complet comme pour le texte : un seul modele disponible).
 
     `localisation` (optionnel, 2026-07-20) : dict {"latitude":..., "longitude":...}
-    transmis explicitement par l'etudiant (bouton dedie, jamais automatique).
+    transmis explicitement par l'utilisateur (bouton dedie, jamais automatique).
     Injecte en fin de prompt systeme, jamais traite comme un fait dit par
-    l'etudiant. N'affecte ni le cascade ni le choix de modele.
+    l'utilisateur. N'affecte ni le cascade ni le choix de modele.
 
     `fuseau_horaire` (optionnel, 2026-07-20) : nom de fuseau IANA lu depuis
     le navigateur (Intl.DateTimeFormat().resolvedOptions().timeZone, voir
@@ -1650,7 +1648,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     dans message_utilisateur par le frontend, avant l'appel à chat().
 
     `recherche_forcee` (optionnel, 2026-07-23, defaut False) : icône de
-    recherche dans la barre de saisie (djiguign--ai) -- force une
+    recherche dans la barre de saisie (djiguigne-frontend) -- force une
     consigne de recherche web systematique pour CE message. Le modele
     peut de toute facon decider seul d'utiliser Tavily sans ce flag
     (tool-calling normal, des lors que le serveur "tavily" est active
@@ -1887,7 +1885,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
 
         # 3. Gemini 2.5 Flash — tout dernier recours, sans outils MCP.
         # Utile seulement si TOUS les modeles Groq (principal + fallbacks)
-        # sont indisponibles en meme temps ; dans ce cas l'etudiant a au
+        # sont indisponibles en meme temps ; dans ce cas l'utilisateur a au
         # moins une reponse texte, mais sans acces a Notion/Wolfram.
         try:
             client_google = genai.Client(api_key=get_secret("GOOGLE_API_KEY"))

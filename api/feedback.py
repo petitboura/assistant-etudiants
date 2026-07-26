@@ -1,6 +1,5 @@
 """
 Feedback (like/dislike) sur les messages assistant.
-Voir MIGRATION_CHAT_VERS_NEXTJS.md, section 3.2, pour la spec complète.
 
 Règle de confidentialité stricte : le créateur ne reçoit JAMAIS le contenu
 d'une conversation par défaut. Cette route n'expose le contenu de la
@@ -81,8 +80,7 @@ def envoyer_feedback(payload: EnvoyerFeedbackPayload, utilisateur=Depends(utilis
     return FeedbackCree(id=lignes[0]["id"])
 
 
-# Catégories de retour négatif (menu déroulant du popup, voir
-# MIGRATION_CHAT_VERS_NEXTJS.md section 3.2 -- "à définir selon le
+# Catégories de retour négatif (menu déroulant du popup -- "à définir selon le
 # contexte Djiguignè AI"). Décision provisoire, à ajuster avec Bourama ;
 # exposée via une route dédiée pour que le frontend n'ait pas à les
 # dupliquer en dur.

@@ -1,8 +1,8 @@
 """
-Route de chat en streaming pour le frontend Next.js (djiguign--ai).
+Route de chat en streaming pour le frontend Next.js (djiguigne-frontend).
 
-Chaînon manquant identifié pendant la migration Streamlit -> Next.js (voir
-MIGRATION_CHAT_VERS_NEXTJS.md, section 0) : jusqu'ici, la fonction chat()
+Chaînon manquant identifié pendant la migration Streamlit -> Next.js :
+jusqu'ici, la fonction chat()
 (core/main.py) n'était appelée qu'en interne par chat.py (Streamlit), en
 process. Cette route l'expose en HTTP, via Server-Sent Events (SSE), pour
 que la nouvelle page de chat React puisse lui parler à distance.
@@ -56,8 +56,7 @@ class EnvoyerMessagePayload(BaseModel):
     agent_id: Optional[str] = None
     historique: List[MessageHistorique] = []
     conversation_id: Optional[str] = None
-    # Barre de saisie migrée (MIGRATION_CHAT_VERS_NEXTJS.md, section 3.3) :
-    # sélecteur Courte/Moyenne/Longue, modifiable à chaque message.
+    # Barre de saisie migrée : sélecteur Courte/Moyenne/Longue, modifiable à chaque message.
     longueur_reponse: Literal["courte", "moyenne", "longue"] = "moyenne"
     # Image jointe au message (URL publique renvoyée par
     # POST /api/uploads/image-chat, voir uploads.py). Quand présente,
@@ -76,7 +75,7 @@ class EnvoyerMessagePayload(BaseModel):
     # api/uploads.py:uploader_video_chat). Combinable avec image_url mais
     # rarement les deux en même temps en pratique.
     images_base64: Optional[List[str]] = None
-    # Icône de recherche web dans la barre de saisie (djiguign--ai,
+    # Icône de recherche web dans la barre de saisie (djiguigne-frontend,
     # 2026-07-23) -- forçage manuel EN PLUS de l'activation automatique
     # déjà possible : le modèle peut de toute façon décider seul
     # d'utiliser Tavily (tool-calling normal, voir INSTRUCTIONS_RECHERCHE_FORCEE
@@ -91,7 +90,7 @@ class EnvoyerMessagePayload(BaseModel):
     # Ajouté (2026-07-20) pour exposer le chemin de reprise de chat() --
     # jusqu'ici accessible seulement en appel Python interne (chat.py
     # Streamlit), jamais via cette route HTTP. Voir StatutOutil.tsx /
-    # ChatIA.tsx côté djiguign--ai pour le flux de confirmation d'outil.
+    # ChatIA.tsx côté djiguigne-frontend pour le flux de confirmation d'outil.
     reprise: Optional[RepriseConfirmation] = None
 
 

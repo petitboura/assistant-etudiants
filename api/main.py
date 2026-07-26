@@ -1,6 +1,5 @@
 """
-Backend API — remplace progressivement les interfaces Streamlit.
-Voir api/PLAN.md pour la séquence complète et l'état d'avancement.
+Backend API du frontend Next.js (Streamlit entièrement retiré depuis le 25/07/2026).
 
 Lancement local : uvicorn api.main:app --reload --port 8000
 """
@@ -111,7 +110,7 @@ app.mount("/mcp/github", mcp_github.streamable_http_app())
 # Domaines autorisés à appeler cette API. "http://localhost:3000" est le
 # port par defaut de `npm run dev` en Next.js, a garder tant que le
 # frontend n'est pas deploye. A completer avec le vrai domaine une fois
-# app.djiguigne.com cree (Etape 5 du PLAN.md).
+# app.djiguigne.com cree. Sous-domaine par agent : pas encore fait.
 # Domaines fixes autorisés (pas de motif possible pour ceux-la).
 ORIGINES_AUTORISEES = [
     "http://localhost:3000",
@@ -198,11 +197,11 @@ def feed(
 ):
     """
     Liste paginée des agents publiés, pour le feed de découverte de la
-    page `/` (voir PIVOT_SOCIAL.md). Public, aucune auth requise.
+    page `/`. Public, aucune auth requise.
 
     Un agent est considéré publié si `actif` est True OU absent/NULL
-    (même convention de "True par défaut" que
-    faces/vues/chat.py:_agent_est_actif, pour ne pas faire disparaître du
+    (même convention de "True par défaut" que dans l'ancienne interface
+    Streamlit, pour ne pas faire disparaître du
     feed des agents créés avant l'ajout de cette colonne).
 
     `categorie` (ajouté 2026-07-15, système de catégories) : filtre par

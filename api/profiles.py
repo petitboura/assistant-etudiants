@@ -1,9 +1,9 @@
 """
-Étape C du plan (voir PIVOT_SOCIAL.md) : portfolio public d'un créateur
+Portfolio public d'un créateur
 et édition de son propre profil (table `profiles`).
 
 Décision prise faute de réponse tranchée sur la génération de
-`profiles.slug` (voir PIVOT_SOCIAL.md, Étape B, "pas décidé encore") :
+`profiles.slug` (pas décidé encore) :
 ces routes utilisent `user_id` directement comme clé d'URL, PAS un
 slug. Même repli que celui déjà fait pour `GET /api/agents/{agent_id}`
 (qui utilise `agents.id`, pas une colonne slug dédiée non plus). À
@@ -161,8 +161,8 @@ def mettre_a_jour_mon_profil(
     Crée ou met à jour le profil de l'utilisateur courant. Upsert, pas un
     simple update : rien ne garantit qu'une ligne `profiles` existe déjà
     pour ce `user_id` (pas de trigger de création automatique à
-    l'inscription — voir PIVOT_SOCIAL.md, Étape B, "profiles.slug...
-    rien ne la remplit encore"). Le premier appel de ce endpoint sert
+    l'inscription, et la génération de `profiles.slug` n'est toujours
+    pas décidée). Le premier appel de ce endpoint sert
     donc aussi de création de profil.
 
     PATCH partiel : un champ omis (None) n'est pas modifié.

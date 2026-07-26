@@ -1,7 +1,7 @@
 """
-Étape C du plan (voir PIVOT_SOCIAL.md) : recherche pour la barre du feed
-(`/`, voir tableau des pages). Recherche simple par nom (`ilike`), pas de
-moteur dédié — la note de PIVOT_SOCIAL.md dit explicitement "pas besoin
+Recherche pour la barre du feed
+(`/`). Recherche simple par nom (`ilike`), pas de
+moteur dédié — décision explicite de Bourama : "pas besoin
 de moteur de recherche dédié pour une v1".
 
 Résultats créateurs identifiés par `user_id`, pas par `profiles.slug`

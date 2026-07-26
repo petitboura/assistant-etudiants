@@ -2,8 +2,7 @@
 Verifie le token Supabase envoye par le frontend Next.js (en-tete
 `Authorization: Bearer <access_token>`), sans jamais gerer de mot de
 passe cote API : l'inscription/connexion se font entierement dans
-Next.js via le SDK JS Supabase (voir la decision d'architecture #1 dans
-api/PLAN.md).
+Next.js via le SDK JS Supabase.
 """
 
 import os
@@ -41,8 +40,8 @@ def utilisateur_courant(authorization: str = Header(default=None)):
 
     Leve une 401 si le token est absent, mal forme, ou invalide/expire.
     Ne verifie PAS de permissions metier (ex: "est-ce le proprietaire de
-    cet agent ?") : ca reste a la charge de chaque route (voir Etape 2 du
-    PLAN.md, verification owner_id).
+    cet agent ?") : ca reste a la charge de chaque route (verification
+    owner_id).
     """
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Token d'authentification manquant")
@@ -70,8 +69,8 @@ def utilisateur_optionnel(authorization: str = Header(default=None)):
     connexion pour afficher un compteur, mais renvoie en plus "est-ce que
     JE suis ce créateur" si un token valide est fourni). Ne lève jamais :
     renvoie None si le token est absent, mal forme, ou invalide/expire,
-    plutot qu'une 401. Ajoutee pour l'Etape D.4 du pivot social (portfolio
-    créateur), voir PIVOT_SOCIAL.md.
+    plutot qu'une 401. Ajoutee pour le portfolio créateur (étape D.4 du
+    pivot social).
     """
     if not authorization or not authorization.startswith("Bearer "):
         return None

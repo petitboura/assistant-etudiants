@@ -16,17 +16,17 @@ Chaque *_builder est une fonction qui recoit (get_secret, user_id, agent_id)
 et retourne soit une URL (str), soit des headers (dict), soit None. Les
 parametres user_id/agent_id sont ignores par la plupart des outils (cle
 API globale, comme Tavily/Wolfram) ; ils ne sont utiles que pour un outil
-"par utilisateur" (cle "necessite_utilisateur": True), ou chaque etudiant
+"par utilisateur" (cle "necessite_utilisateur": True), ou chaque utilisateur
 connecte son propre compte plutot que d'utiliser une cle partagee par
 toute l'app. Pour Notion specifiquement, la connexion est scopee par
-user_id seul (compte unifie, juillet 2026) : un etudiant connecte a
+user_id seul (compte unifie, juillet 2026) : un utilisateur connecte a
 Notion depuis n'importe quel agent l'est automatiquement pour tous les
 autres agents de la plateforme -> voir connexions/notion.py.
 
 POUR UN OUTIL "PAR UTILISATEUR" (ex: Notion) :
 Ajoute "necessite_utilisateur": True dans son entree. Le dispatcher
-(mcp_tools.py) l'ignore alors automatiquement si aucun etudiant n'est
-connecte a l'app, ou si headers_builder renvoie None (etudiant connecte a
+(mcp_tools.py) l'ignore alors automatiquement si aucun utilisateur n'est
+connecte a l'app, ou si headers_builder renvoie None (utilisateur connecte a
 l'app mais pas encore a CET outil POUR CET AGENT) -> pas de bloc if/else
 a ecrire ici.
 """
@@ -136,13 +136,13 @@ SERVEURS_MCP = [
         # tier Groq gratuit (8000 TPM) une fois cumulee avec Tavily ->
         # 413 Payload Too Large systematique, qui faisait basculer sur
         # le fallback Gemini SANS AUCUN outil (ni Notion ni Tavily).
-        # Un etudiant n'a besoin que de consulter son Notion, pas de le
+        # Un utilisateur n'a besoin que de consulter son Notion, pas de le
         # modifier -> on ne garde que les outils de lecture pour l'instant.
         "outils_autorises": ["notion-search"],
     },
 ]
 
-# Outils qui MODIFIENT reellement quelque chose chez l'etudiant (creation,
+# Outils qui MODIFIENT reellement quelque chose chez l'utilisateur (creation,
 # edition, suppression, deplacement...). main.py interrompt le flux et
 # demande une confirmation explicite avant d'executer l'un de ces outils,
 # quel que soit le serveur MCP dont il provient. Pour l'instant aucun

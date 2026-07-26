@@ -2,7 +2,7 @@
 Upload d'images (image de vitrine d'un agent, avatar de profil). Ajouté
 le 2026-07-12 suite à un bug remonté par Bourama : les champs "URL image"
 demandaient de coller un lien à la main, pas utilisable pour quelqu'un de
-non-technique (voir PIVOT_SOCIAL.md, section Étape D). Remplacés côté
+non-technique. Remplacés côté
 frontend par un vrai bouton d'upload (components/ChampImage.tsx), qui
 passe par ce endpoint.
 

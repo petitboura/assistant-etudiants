@@ -1,12 +1,12 @@
 """
 Logique pure de création d'agent : génération d'id, extraction d'id
 Notion, composition du system prompt. Zéro dépendance à Streamlit —
-importable aussi bien depuis faces/vues/creer_agent.py (formulaire
-Streamlit) que depuis api/agents.py (endpoint FastAPI), pour que les
-deux ne dupliquent jamais cette logique (voir api/PLAN.md, décision #3).
+importable aussi bien depuis l'ancien formulaire Streamlit que depuis
+api/agents.py (endpoint FastAPI), pour que les
+deux ne dupliquent jamais cette logique.
 
-Extrait de faces/vues/creer_agent.py au moment de construire l'API
-(Étape 1 du plan), sans changement de comportement.
+Extrait de l'ancien formulaire Streamlit au moment de construire l'API,
+sans changement de comportement.
 """
 
 import re
@@ -79,7 +79,7 @@ def composer_system_prompt(
     "Nature de la connaissance" est retiré du formulaire Next.js) : la
     ligne correspondante n'apparaît dans le prompt QUE si une valeur est
     fournie, pour ne pas afficher une classification vide de sens à
-    l'agent. Le formulaire Streamlit (faces/vues/creer_agent.py), qui
+    l'agent. Le formulaire Streamlit (l'ancien formulaire Streamlit), qui
     garde ce champ pour l'instant, continue de fonctionner à l'identique.
 
     Reste modifiable tel quel ensuite par le créateur depuis "Mes

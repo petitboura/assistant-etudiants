@@ -1,10 +1,10 @@
 """
-Authentification etudiant (email/mot de passe + Google), via Supabase Auth.
+Authentification utilisateur (email/mot de passe + Google), via Supabase Auth.
 
 STATUT (25/07/2026) : ce fichier n'est actuellement importe nulle part
 dans le depot (ni api/, ni core/, ni connexions/). La connexion
 email/mot de passe reelle se fait aujourd'hui cote frontend Next.js,
-directement contre Supabase (voir djiguign--ai/lib/authFallback.ts),
+directement contre Supabase (voir djiguigne-frontend/lib/authFallback.ts),
 sans passer par ce module. Garde intentionnellement : "Se connecter
 avec Google" doit etre remis en place plus tard (Bourama). Pour
 l'activer, il faudra des identifiants OAuth Google (Client ID + Secret,
@@ -13,7 +13,7 @@ Providers -> Google -- rien a faire cote Railway pour ca.
 
 A noter avant de reutiliser ce module tel quel : le flux PKCE fait a la
 main ici (voir NOTE TECHNIQUE plus bas) contournait une limite propre a
-Streamlit (un seul process partage par plusieurs etudiants a la fois).
+Streamlit (un seul process partage par plusieurs utilisateurs a la fois).
 Cote Next.js, chaque utilisateur a deja sa propre session navigateur,
 donc l'appel client standard supabase.auth.signInWithOAuth({provider:
 "google"}) depuis le frontend suffirait probablement, sans ce detour
@@ -21,11 +21,11 @@ Python -- a evaluer le moment venu plutot que de reactiver ce fichier
 par defaut.
 
 Le compte reste OPTIONNEL : le chat fonctionne sans connexion. On ne pousse
-l'etudiant a se connecter que quand une fonctionnalite en a vraiment besoin
+l'utilisateur a se connecter que quand une fonctionnalite en a vraiment besoin
 (ex: connecter son Notion plus tard).
 
 POURQUOI UNE TABLE oauth_temp POUR GOOGLE :
-Quand l'etudiant clique "Se connecter avec Google", il quitte entierement
+Quand l'utilisateur clique "Se connecter avec Google", il quitte entierement
 l'app pour aller sur Google, puis revient. Ce depart/retour redemarre la
 session Streamlit a zero (nouvelle session_state vide). Le "code_verifier"
 PKCE genere avant le depart doit donc etre range quelque part qui survit a
@@ -37,7 +37,7 @@ les fonctions PKCE publiques de supabase-auth (generate_pkce_verifier,
 generate_pkce_challenge) plutot que d'utiliser sign_in_with_oauth() de la
 librairie. Raison : cette derniere stocke le code_verifier dans un espace
 memoire interne au client, pense pour UN SEUL utilisateur a la fois (ex:
-une appli mobile) - pas adapte a un backend qui sert plusieurs etudiants
+une appli mobile) - pas adapte a un backend qui sert plusieurs utilisateurs
 en meme temps sur la meme instance.
 """
 
@@ -72,7 +72,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_SECRET)
 
 def inscription(email, mot_de_passe, redirection=None):
     """
-    Cree un compte etudiant par email/mot de passe.
+    Cree un compte utilisateur par email/mot de passe.
     Retourne (succes: bool, resultat).
 
     `redirection` (optionnel) : URL vers laquelle Supabase renverra la
@@ -80,12 +80,12 @@ def inscription(email, mot_de_passe, redirection=None):
     email (paypal-like "email_redirect_to"). Sans ce parametre, Supabase
     utilise la "Site URL" par defaut configuree dans le projet (Authentication
     > URL Configuration), qui est UNIQUE pour tout le projet -> impossible de
-    distinguer un createur (doit revenir sur la plateforme) d'un etudiant
+    distinguer un createur (doit revenir sur la plateforme) d'un utilisateur
     utilisant un agent precis (doit revenir sur CET agent, ?agent=xxx).
     D'ou l'interet de le preciser explicitement a chaque appel :
-    - depuis faces/vues/creer_agent.py / mes_agents.py (createur) :
+    - depuis l'ancien formulaire Streamlit / mes_agents.py (createur) :
       l'URL de base de la plateforme.
-    - depuis faces/vues/chat.py (etudiant) : l'URL de base + "?agent=<id de
+    - depuis l'ancienne interface Streamlit (utilisateur) : l'URL de base + "?agent=<id de
       cet agent>", pour qu'il retombe directement sur le bon chat.
 
     `resultat` est soit :
@@ -113,7 +113,7 @@ def inscription(email, mot_de_passe, redirection=None):
 
 def connexion(email, mot_de_passe):
     """
-    Connecte un etudiant deja inscrit par email/mot de passe.
+    Connecte un utilisateur deja inscrit par email/mot de passe.
     Retourne (succes: bool, session_ou_message).
     En cas de succes, le deuxieme element est la session Supabase
     (contient session.user.id, session.access_token, etc.).
@@ -157,7 +157,7 @@ def connexion_depuis_jetons(access_token, refresh_token):
 def demarrer_connexion_google():
     """
     Premiere etape de la connexion Google : genere l'URL vers laquelle
-    rediriger l'etudiant, et range le code_verifier dans oauth_temp sous
+    rediriger l'utilisateur, et range le code_verifier dans oauth_temp sous
     une cle aleatoire (state) qu'on retrouvera au retour.
 
     Retourne l'URL a ouvrir (str), ou None si la config manque.
@@ -240,7 +240,7 @@ def deconnexion():
 #   1. demarrer_reinitialisation_mot_de_passe() : envoie l'email.
 #   2. La personne clique le lien -> atterrit sur notre page avec
 #      ?token_hash=xxx&type=recovery en query string NORMALE (pas un
-#      fragment #... comme avant). Voir faces/vues/recuperation_mdp.py :
+#      fragment #... comme avant). Voir l'ancienne interface Streamlit :
 #      le token n'est PAS consomme a la simple ouverture de la page, ce
 #      qui est le point important. Avant, on utilisait le lien tout fait
 #      de Supabase ({{ .ConfirmationURL }}), qui valide -et donc consomme-
@@ -268,7 +268,7 @@ def demarrer_reinitialisation_mot_de_passe(email, redirection=None):
     (donc deja un "?" dans l'URL, ex: ".../?agent=xxx" ou ".../?ctx=..."),
     pour que le template email puisse lui accoler "&token_hash=..." sans
     produire une URL invalide (deux "?"). Voir les appelants
-    (faces/vues/creer_agent.py, mes_agents.py, chat.py).
+    (l'ancien formulaire Streamlit, mes_agents.py, chat.py).
     """
     try:
         options = {"redirect_to": redirection} if redirection else {}
@@ -281,7 +281,7 @@ def demarrer_reinitialisation_mot_de_passe(email, redirection=None):
 def etablir_session_depuis_token_hash(token_hash, type_otp="recovery"):
     """
     Deuxieme etape : appelee uniquement quand la personne clique sur le
-    bouton "Confirmer" (voir faces/vues/recuperation_mdp.py) -> c'est ce
+    bouton "Confirmer" (voir l'ancienne interface Streamlit) -> c'est ce
     clic explicite, et rien avant, qui consomme le token. Authentifie la
     session Supabase correspondante, prealable indispensable a
     mettre_a_jour_mot_de_passe() (on ne peut pas changer le mot de passe
