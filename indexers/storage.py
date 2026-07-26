@@ -1,6 +1,6 @@
 """
 Utilitaires de gestion des documents dans le stockage Supabase
-(bucket "IA pour etudiants").
+(bucket "documents-agents").
 """
 
 import os
@@ -16,7 +16,7 @@ SUPABASE_SECRET = get_secret("SUPABASE_SECRET")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_SECRET)
 
-BUCKET = "IA pour etudiants"
+BUCKET = "documents-agents"
 
 
 def upload_document(file_path, file_name):
