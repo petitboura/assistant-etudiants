@@ -1275,6 +1275,25 @@ def _sources_github_depuis_arguments(appel):
     return [{"titre": repo, "url": url}]
 
 
+def _resultat_pour_affichage(resultat_brut, max_chars=3000):
+    """
+    Tronque le resultat brut d'un outil pour l'evenement SSE
+    "outil_resultat" (2026-07-26, demande Bourama : afficher ce qui a ete
+    execute/le resultat pour CHAQUE outil, dans une section dediee avec
+    l'icone de l'outil, distincte du raisonnement libre du modele -- voir
+    OutilResultatBulle.tsx). Purement un affront de securite d'affichage
+    (un depot GitHub explore ou un JSON de recherche peuvent faire
+    plusieurs dizaines de Ko) : le contenu COMPLET reste envoye au modele
+    via messages_agent, cette troncature ne concerne QUE ce qui est
+    montre a la personne.
+    """
+    if not isinstance(resultat_brut, str):
+        resultat_brut = str(resultat_brut)
+    if len(resultat_brut) <= max_chars:
+        return resultat_brut
+    return resultat_brut[:max_chars] + f"\n... (tronqué, {len(resultat_brut)} caractères au total)"
+
+
 def _extraire_sources(appel, resultat_brut):
     """
     Construit les sources ({"titre", "url"}) d'un appel d'outil pour
@@ -1335,6 +1354,15 @@ def _traiter_appels(appels, messages_agent, table_routage):
                 appel = futures[future]
                 resultat = future.result()
                 yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
+                # Généralisé (26/07, demande Bourama) : pour N'IMPORTE QUEL
+                # outil, présent ou futur -- pas de liste à maintenir, voir
+                # docstring de _resultat_pour_affichage.
+                yield {
+                    "type": "outil_resultat",
+                    "nom_outil": appel["name"],
+                    "nom_lisible": _nom_lisible(appel["name"]),
+                    "resultat": _resultat_pour_affichage(resultat),
+                }
                 sources = _extraire_sources(appel, resultat)
                 if sources:
                     yield {"type": "sources", "sources": sources}
@@ -1607,6 +1635,12 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
     - {"type": "statut_termine", "texte": "..."} -> cet outil a fini (ou a ete annule)
+    - {"type": "outil_resultat", "nom_outil": "...", "nom_lisible": "...", "resultat": "..."}
+      -> ce que CET outil a concretement execute/retourne (tronque a 3000 caracteres pour
+      l'affichage, voir _resultat_pour_affichage -- le contenu complet reste envoye au
+      modele separement). Generalise a tout outil, present ou futur (26/07) : distinct du
+      raisonnement libre du modele, qui lui peut paraphraser/melanger ce contenu avec
+      d'autres reflexions dans son propre texte -- voir OutilResultatBulle.tsx cote frontend.
     - {"type": "raisonnement", "texte": "..."}   -> fragment de raisonnement interne du modele, avant la reponse finale (modeles de MODELES_AVEC_REASONING_EFFORT uniquement)
     - {"type": "sources", "sources": [{"titre": "...", "url": "..."}]} -> resultats d'une
       recherche web (Tavily) utilisee pour repondre. Peut etre emis plusieurs fois dans le
@@ -1726,6 +1760,12 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 arguments = {}
             resultat = appeler_outil(appel["name"], arguments, table_routage)
             yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
+            yield {
+                "type": "outil_resultat",
+                "nom_outil": appel["name"],
+                "nom_lisible": _nom_lisible(appel["name"]),
+                "resultat": _resultat_pour_affichage(resultat),
+            }
         else:
             resultat = "Action annulée par l'utilisateur : cet outil n'a pas été exécuté."
             yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} annulée"}
