@@ -1478,7 +1478,17 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         completion = client_groq.chat.completions.create(
             model=modele,
             messages=messages_agent,
-            max_completion_tokens=None,
+            # Bug en cours d'investigation (27/07, signalé par Bourama) :
+            # une réponse finale après appel d'outil s'arrête parfois net
+            # en plein milieu (ex: URL d'un fichier généré coupée avant sa
+            # fin) -- suspect : sur gpt-oss-120b, le raisonnement (CoT) et
+            # le texte de réponse partagent le MÊME budget de tokens de
+            # sortie, et laisser max_completion_tokens=None laissait Groq
+            # choisir un défaut qui peut s'avérer trop juste une fois le
+            # raisonnement déduit. La doc Groq elle-même recommande de
+            # toujours fixer une valeur explicite pour ce modèle (exemple
+            # officiel : 8192) plutôt que de compter sur un défaut implicite.
+            max_completion_tokens=8192,
             tools=outils_mcp if outils_mcp else None,
             stream=True,
             timeout=DELAI_MAX_PAR_APPEL,
@@ -1510,8 +1520,20 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         SEUIL_VERIF_JSON = 60
         buffer_debut = ""
         contenu_suspect = False
+        dernier_finish_reason = None
+        dernier_usage = None
 
         for chunk in completion:
+            # Diagnostic du bug de troncature (27/07) : le dernier chunk
+            # du flux porte finish_reason ("stop" = fin normale, "length" =
+            # coupé faute de budget de tokens) et parfois x_groq.usage
+            # (tokens consommés) -- on les garde pour les logger une fois
+            # le flux terminé, plutôt que de deviner la cause à l'aveugle.
+            if chunk.choices and chunk.choices[0].finish_reason:
+                dernier_finish_reason = chunk.choices[0].finish_reason
+            if getattr(chunk, "x_groq", None) and getattr(chunk.x_groq, "usage", None):
+                dernier_usage = chunk.x_groq.usage
+
             delta = chunk.choices[0].delta
 
             raisonnement = getattr(delta, "reasoning", None)
@@ -1544,6 +1566,13 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
                             etat["name"] += fragment.function.name
                         if fragment.function.arguments:
                             etat["arguments"] += fragment.function.arguments
+
+        if dernier_finish_reason == "length":
+            logging.error(
+                f"TRONCATURE (finish_reason=length) sur {modele} -- usage : {dernier_usage}"
+            )
+        elif dernier_finish_reason and dernier_finish_reason != "stop":
+            logging.info(f"Fin de flux {modele} avec finish_reason={dernier_finish_reason} (usage : {dernier_usage})")
 
         if buffer_debut:
             # Reliquat de la dernière fenêtre, plus petite que
