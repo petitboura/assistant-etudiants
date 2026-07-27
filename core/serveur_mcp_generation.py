@@ -27,6 +27,7 @@ from core.generation_documents import (
     generer_pptx as _generer_pptx,
 )
 from core.generation_code import generer_zip_depuis_fichiers
+from core.generation_latex import generer_fichier_latex as _generer_fichier_latex
 from core.generation_archives import generer_bundle as _generer_bundle
 from core.generation_donnees import exporter_donnees as _exporter_donnees
 from core.generation_signature import (
@@ -153,6 +154,25 @@ def generer_code(nom_projet: str, fichiers: dict) -> str:
     except Exception as e:
         logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : la génération du fichier a échoué, réessaie."
+
+
+@mcp_generation.tool()
+def generer_document_latex(titre: str, contenu_latex: str) -> str:
+    """
+    Génère un fichier LaTeX (.tex) téléchargeable -- distinct de
+    l'affichage à l'écran (les formules $...$/$$...$$ rendues en KaTeX
+    dans le chat) : ici un vrai fichier source réutilisable dans
+    Overleaf ou un éditeur LaTeX. `contenu_latex` : le corps du document
+    (formules, texte, éventuellement \\ce{...} pour la chimie), OU un
+    document complet si tu inclus toi-même \\documentclass (sinon un
+    préambule standard "article" avec amsmath/amssymb/mhchem est ajouté
+    automatiquement). Renvoie l'URL publique du fichier .tex.
+    """
+    try:
+        return f"Fichier LaTeX généré : {_generer_fichier_latex(titre, contenu_latex)}"
+    except Exception as e:
+        logging.error(f"ERREUR outil generation : {e}")
+        return "Erreur : la génération du fichier LaTeX a échoué, réessaie."
 
 
 @mcp_generation.tool()
