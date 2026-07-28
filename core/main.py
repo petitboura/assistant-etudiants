@@ -13,7 +13,7 @@ from google.genai import types
 from supabase import create_client
 from configuration import get_system_prompt
 from retriever import chercher_candidats
-from mcp_tools import lister_tous_les_outils, appeler_outil
+from mcp_tools import lister_tous_les_outils, lister_outils_autorises_pour_agent, appeler_outil
 from registre_outils import OUTILS_SENSIBLES
 
 logging.basicConfig(level=logging.INFO)
@@ -110,6 +110,13 @@ MODELE_RESUME = "llama-3.3-70b-versatile"  # rapide, pas besoin de raisonnement 
 # occasionnellement.
 SEUIL_PROFIL_MESSAGES = 10
 MODELE_PROFIL = "llama-3.3-70b-versatile"
+
+# Routeur d'outils (2026-07-28, demande Bourama) : premier appel LLM
+# séparé, rapide, qui juge quels outils seraient pertinents pour la
+# question -- voir _router_outils plus bas. Même modèle que
+# MODELE_PROFIL/MODELE_RESUME : tâche de classification simple, pas
+# besoin de raisonnement.
+MODELE_ROUTEUR_OUTILS = "llama-3.3-70b-versatile"
 
 # D'apres la doc Groq (console.groq.com/docs/reasoning), le parametre
 # reasoning_effort n'est reconnu que par certains modeles (GPT-OSS 20B/120B,
@@ -881,6 +888,70 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "tu connaissais déjà l'information -- jamais un compte-rendu de ce que tu as "
     "fait techniquement pour l'obtenir."
 )
+
+
+def _router_outils(message_utilisateur, outils_disponibles):
+    """
+    Bouton Outils, couche de suggestion automatique (2026-07-28, demande
+    Bourama). Coexiste avec la sélection manuelle (BarreDeSaisie.tsx) sans
+    la remplacer : les deux retombent sur le même mécanisme final
+    (outil_force -> lister_tous_les_outils -> system prompt).
+
+    Premier appel LLM séparé, rapide (pas le modèle qui répond à
+    l'utilisateur), qui juge lesquels des outils RÉELLEMENT autorisés
+    pour cet agent (outils_disponibles, déjà filtré par
+    lister_tous_les_outils AVANT le filtre outil_force -- jamais le
+    catalogue brut du registre) seraient pertinents pour la question. Ne
+    répond jamais à la question lui-même, ne décide rien à la place de
+    l'utilisateur : le résultat sert juste à proposer des boutons côté
+    frontend (voir chat(), événement SSE "outils_suggeres"), que
+    l'utilisateur clique ou ignore.
+
+    Renvoie une liste de noms d'outils (sous-ensemble de
+    outils_disponibles, éventuellement vide). Fail-safe strict : toute
+    erreur ou réponse mal formée renvoie une liste vide plutôt que de
+    bloquer la réponse normale -- ce routeur ne doit jamais empêcher
+    l'utilisateur d'obtenir une réponse.
+    """
+    if not outils_disponibles or not message_utilisateur:
+        return []
+
+    noms_valides = {o["function"]["name"] for o in outils_disponibles}
+    catalogue = "\n".join(
+        f"- {o['function']['name']} : {o['function']['description']}"
+        for o in outils_disponibles
+    )
+    prompt_routeur = (
+        "Tu es un routeur d'outils : tu ne réponds JAMAIS à la question "
+        "toi-même, tu décides seulement quels outils (parmi la liste "
+        "ci-dessous) seraient utiles pour y répondre. Si aucun outil "
+        "n'est pertinent (question générale, conversation normale, "
+        "salutation...), renvoie une liste vide -- ne force jamais un "
+        "outil par défaut ni \"au cas où\".\n\n"
+        f"Outils disponibles :\n{catalogue}\n\n"
+        f"Question de l'utilisateur : {message_utilisateur}\n\n"
+        "Réponds UNIQUEMENT avec un objet JSON de la forme "
+        '{"outils": ["nom_outil_1", "nom_outil_2"]} (noms EXACTEMENT '
+        "comme listés ci-dessus, liste vide si rien n'est pertinent)."
+    )
+
+    try:
+        client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
+        completion = client_groq.chat.completions.create(
+            model=MODELE_ROUTEUR_OUTILS,
+            messages=[{"role": "user", "content": prompt_routeur}],
+            response_format={"type": "json_object"},
+            max_completion_tokens=200,
+            timeout=DELAI_MAX_PAR_APPEL,
+        )
+        brut = completion.choices[0].message.content.strip()
+        suggestion = json.loads(brut)
+        outils_suggeres = [n for n in suggestion.get("outils", []) if n in noms_valides]
+        logging.info(f"Routeur d'outils -> suggérés : {outils_suggeres or '(aucun)'}")
+        return outils_suggeres
+    except Exception as e:
+        logging.error(f"ERREUR routeur outils : {e}")
+        return []
 
 
 def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None, recherche_forcee=False, outil_force=None):
@@ -1699,6 +1770,13 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
       recherche web (Tavily) utilisee pour repondre. Peut etre emis plusieurs fois dans le
       meme echange (plusieurs recherches) -- l'appelant accumule/fusionne, ne remplace pas.
     - {"type": "reponse", "texte": "..."}        -> morceau de la reponse finale (streaming)
+    - {"type": "outils_suggeres", "outils": ["nom_outil", ...]} -> routeur d'outils (28/07,
+      _router_outils) : DERNIER evenement de l'echange (rien n'est sauvegarde, aucune
+      reponse n'est generee ce tour-ci). Emis a la place d'une reponse quand aucun
+      outil n'est deja force (ni menu manuel, ni suggestion precedente) ET que le
+      routeur juge au moins un outil pertinent. Le frontend affiche un bouton par
+      outil ; un clic renvoie la MEME question avec ce nom dans outil_force, exactement
+      comme une selection manuelle -- voir BarreDeSaisie.tsx / ChatIA.tsx.
     - {"type": "confirmation_requise", ...}      -> un outil qui MODIFIE les donnees de
       l'utilisateur (ex: creer une page Notion) attend une confirmation avant de s'executer.
       Contient "nom_lisible", "arguments" (a afficher a l'utilisateur), et "etat_reprise"
@@ -1861,6 +1939,20 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
 
     if agent_id is None:
         agent_id = get_secret("AGENT_ID") or AGENT_ID_PAR_DEFAUT
+
+    # Routeur d'outils (2026-07-28, demande Bourama) : voir _router_outils
+    # plus haut pour la doc complète. Ne se déclenche QUE si rien n'est
+    # déjà forcé (ni sélection manuelle via BarreDeSaisie.tsx, ni clic sur
+    # une suggestion précédente qui a renvoyé outil_force lui-même) --
+    # sinon on tournerait en boucle. Pas de chemin image/vidéo (Gemini,
+    # aucun outil MCP dans cette branche de toute façon, voir plus bas) ni
+    # de reprise (déjà retournée avant ce point).
+    if not outil_force and message_utilisateur and not image_url and not images_base64:
+        outils_disponibles_agent, _ = lister_outils_autorises_pour_agent(get_secret, user_id, agent_id)
+        outils_suggeres = _router_outils(message_utilisateur, outils_disponibles_agent)
+        if outils_suggeres:
+            yield {"type": "outils_suggeres", "outils": outils_suggeres}
+            return
 
     system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire, recherche_forcee, outil_force)
 

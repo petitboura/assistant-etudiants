@@ -139,16 +139,22 @@ async def _appeler_outil_async(url, nom_outil, arguments, headers=None):
     return ""
 
 
-def lister_tous_les_outils(get_secret, user_id=None, agent_id=None, outil_force=None):
+def lister_outils_autorises_pour_agent(get_secret, user_id=None, agent_id=None):
     """
     Se connecte a chaque serveur MCP du registre AUTORISE POUR CET AGENT
     (voir agents.tools_enabled) et retourne :
     - outils_pour_llm : la liste des outils au format attendu par l'API
-      Groq (parametre tools=...), pour que le modele decide seul s'il
-      les utilise
+      Groq (parametre tools=...)
     - table_routage : un dictionnaire {nom_outil: {"url":..., "headers":...}},
       pour pouvoir rappeler le bon serveur plus tard (avec la bonne
       authentification) sans aucun if/else en dur
+
+    Catalogue BRUT, non filtre par outil_force -- c'est
+    lister_tous_les_outils() (juste en dessous) qui applique ce filtre
+    pour la reponse normale. Cette fonction existe separement depuis le
+    28/07 pour que _router_outils() (core/main.py) puisse juger de la
+    pertinence des outils REELLEMENT autorises pour cet agent, sans
+    dupliquer toute la logique de connexion aux serveurs MCP.
 
     `agent_id` determine quels serveurs de SERVEURS_MCP sont meme
     interroges (filtre AVANT tout appel reseau, categories 2/3) : un
@@ -230,6 +236,17 @@ def lister_tous_les_outils(get_secret, user_id=None, agent_id=None, outil_force=
                 table_routage[outil.name] = {"url": url, "headers": headers}
         except Exception as e:
             logging.error(f"ERREUR MCP listing ({nom}): {e}")
+
+    return outils_pour_llm, table_routage
+
+
+def lister_tous_les_outils(get_secret, user_id=None, agent_id=None, outil_force=None):
+    """
+    Reprend lister_outils_autorises_pour_agent() (catalogue brut pour cet
+    agent) puis applique le filtre "bouton Outils" ci-dessous. Signature
+    et comportement inchangés pour tous les appelants existants.
+    """
+    outils_pour_llm, table_routage = lister_outils_autorises_pour_agent(get_secret, user_id, agent_id)
 
     # Mode "bouton Outils" (2026-07-25, GLOBAL -- décision définitive de
     # Bourama, initialement testé sur l'agent nucleos seul puis étendu à
