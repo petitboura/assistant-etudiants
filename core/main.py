@@ -848,20 +848,21 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
     "pour un contenu que tu n'as pas réellement obtenu. Si on te demande une image et "
     "qu'aucun outil de génération d'image n'est disponible dans cette conversation, "
     "dis-le clairement plutôt que d'inventer un lien.\n"
-    "À L'INVERSE, dès qu'un outil de génération (image, document, code, site, "
-    "bundle, données, audio, vidéo, 3D...) te renvoie une URL réelle, tu DOIS "
-    "l'inclure dans ta réponse, sans exception : ![description](url) pour une "
-    "image, ou [nom du fichier](url) pour tout autre type de fichier. Ne décris "
-    "jamais un résultat généré sans donner le lien correspondant.\n"
-    "IMPORTANT sur la syntaxe elle-même : le crochet fermant `]` et la "
-    "parenthèse ouvrante `(` doivent être COLLÉS l'un à l'autre, sans espace "
-    "ni retour à la ligne entre les deux -- même si le texte du lien est long. "
-    "Un retour à la ligne à cet endroit précis casse la syntaxe markdown : le "
-    "lien s'affiche alors en texte brut cassé (crochets et parenthèse visibles "
-    "tels quels) au lieu d'un lien cliquable (repéré en test réel, 27/07 : "
-    "lien vers un fichier LaTeX généré affiché cassé pour cette raison). Si le "
-    "texte du lien est long, ne le coupe jamais avant la parenthèse -- écris "
-    "tout `[texte du lien](url)` d'un bloc.\n"
+    "À L'INVERSE, dès qu'un outil de génération de fichier (document, code, "
+    "site, bundle, données, image, audio, vidéo, 3D...) te renvoie une URL "
+    "réelle, NE LA RÉÉCRIS PAS toi-même dans ta réponse (changement de "
+    "fonctionnement du 2026-07-28) : l'interface détecte désormais "
+    "automatiquement ce lien dans le résultat de l'outil et l'affiche à la "
+    "fin de ta réponse sous forme de carte cliquable (aperçu PDF intégré, "
+    "carte de téléchargement Word/Excel/image/etc.), sans dépendre de ce que "
+    "tu écris. Contente-toi de confirmer normalement que le fichier a été "
+    "créé (ex. \"Voici ton document\", \"C'est généré\"), SANS répéter l'URL "
+    "brute ni la mettre entre crochets/parenthèses -- la réécrire ferait "
+    "doublon avec la carte déjà affichée automatiquement juste après. Cette "
+    "règle concerne UNIQUEMENT les fichiers produits par un outil de "
+    "génération : pour tout le reste (résultat d'une recherche web, lien "
+    "d'un dépôt GitHub, etc.), les règles ci-dessus (ne jamais inventer un "
+    "lien) restent valables telles quelles.\n"
     "MÊME RÈGLE pour toute question factuelle vérifiable par un outil (structure "
     "d'un dépôt GitHub, contenu d'un fichier, liste de fichiers, nombre exact "
     "d'éléments...) : appelle TOUJOURS l'outil correspondant et réponds "
@@ -1414,6 +1415,44 @@ def _extraire_sources(appel, resultat_brut):
     return []
 
 
+# Mêmes extensions que EXTENSIONS_FICHIER dans FichierChip.tsx (frontend)
+# -- si une extension est ajoutée d'un côté, l'ajouter aussi de l'autre.
+EXTENSIONS_FICHIER_GENERE = (
+    "pdf", "docx", "doc", "xlsx", "xls", "csv", "pptx", "ppt", "zip", "json",
+    "xml", "png", "jpg", "jpeg", "webp", "glb", "tex",
+)
+REGEX_FICHIER_GENERE = re.compile(
+    r"https?://[^\s<>\"'\)\]]+\.(?:" + "|".join(EXTENSIONS_FICHIER_GENERE) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _extraire_fichiers_generes(resultat_brut):
+    """
+    Detecte, dans le resultat brut d'un outil, tout lien vers un fichier
+    genere -- generique par FORME d'URL (extension connue), pas par nom
+    d'outil : aucune liste d'outils de generation a maintenir ici, un
+    futur outil de generation est couvert automatiquement du moment que
+    son URL se termine par une extension listee ci-dessus (2026-07-28,
+    demande Bourama : le lien ne doit plus dependre de la fidelite du
+    modele a le recopier correctement dans sa propre reponse -- voir
+    evenement SSE "fichiers_generes" emis par _traiter_appels ci-dessous,
+    et son rendu cote frontend qui reutilise FichierChip.tsx tel quel).
+    Best-effort : jamais d'exception, renvoie [] si rien trouve.
+    """
+    if not isinstance(resultat_brut, str):
+        return []
+    vus = set()
+    fichiers = []
+    for match in REGEX_FICHIER_GENERE.finditer(resultat_brut):
+        url = match.group(0)
+        if url in vus:
+            continue
+        vus.add(url)
+        fichiers.append({"url": url, "nom": url.rsplit("/", 1)[-1]})
+    return fichiers
+
+
 def _traiter_appels(appels, messages_agent, table_routage):
     """
     Execute une liste d'appels d'outils, en ajoutant le resultat de chacun
@@ -1458,6 +1497,18 @@ def _traiter_appels(appels, messages_agent, table_routage):
                     "nom_lisible": _nom_lisible(appel["name"]),
                     "resultat": _resultat_pour_affichage(resultat),
                 }
+                # Garanti indépendamment de ce que le modèle écrira ensuite
+                # dans sa propre réponse -- voir _extraire_fichiers_generes
+                # et INSTRUCTIONS_FORMATS_AFFICHAGE (le modèle est instruit
+                # de ne plus réécrire ce lien lui-même, pour éviter le
+                # doublon).
+                fichiers_generes = _extraire_fichiers_generes(resultat)
+                if fichiers_generes:
+                    yield {
+                        "type": "fichiers_generes",
+                        "nom_outil": appel["name"],
+                        "fichiers": fichiers_generes,
+                    }
                 sources = _extraire_sources(appel, resultat)
                 if sources:
                     yield {"type": "sources", "sources": sources}
@@ -1546,6 +1597,26 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             return
 
     for _ in range(MAX_ETAPES_OUTILS):
+        # Forçage réel de l'appel d'outil (2026-07-28, correction demandée
+        # par Bourama) : jusqu'ici, un outil sélectionné (bouton Outils ou
+        # clic sur une suggestion du routeur) n'était qu'"encouragé" via une
+        # instruction texte dans le system prompt (voir plus haut, "OUTIL(S)
+        # ACTIF(S) POUR CE MESSAGE") -- rien n'empêchait le modèle de
+        # répondre sans l'appeler malgré tout (confirmé en test réel :
+        # aucun appel d'outil dans certains tours pourtant sélectionnés).
+        # tool_choice="required" oblige réellement l'API à renvoyer un
+        # appel d'outil plutôt qu'une réponse texte -- mais UNIQUEMENT tant
+        # qu'aucun outil n'a encore été appelé ce tour-ci (sinon la 2e
+        # itération de cette même boucle, censée rédiger la réponse finale
+        # après coup, serait forcée de rappeler un outil en boucle, sans
+        # jamais pouvoir conclure). On revérifie l'état RÉEL de
+        # messages_agent à chaque itération plutôt qu'un simple booléen
+        # "premier passage" : ça couvre aussi bien le cas normal que la
+        # reprise après confirmation (appels_en_cours_a_finir, traité juste
+        # au-dessus) où un message "tool" existe déjà avant même la
+        # première itération de cette boucle.
+        outil_deja_appele = any(m.get("role") == "tool" for m in messages_agent)
+        kwargs_tool_choice = {"tool_choice": "required"} if (outils_mcp and not outil_deja_appele) else {}
         completion = client_groq.chat.completions.create(
             model=modele,
             messages=messages_agent,
@@ -1564,6 +1635,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             stream=True,
             timeout=DELAI_MAX_PAR_APPEL,
             **kwargs_reasoning,
+            **kwargs_tool_choice,
         )
 
         reponse_directe = False
@@ -1770,6 +1842,11 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
       recherche web (Tavily) utilisee pour repondre. Peut etre emis plusieurs fois dans le
       meme echange (plusieurs recherches) -- l'appelant accumule/fusionne, ne remplace pas.
     - {"type": "reponse", "texte": "..."}        -> morceau de la reponse finale (streaming)
+    - {"type": "fichiers_generes", "nom_outil": "...", "fichiers": [{"url": "...", "nom": "..."}]}
+      -> (28/07) emis des qu'un outil produit un fichier telechargeable (detecte par
+      extension d'URL, voir _extraire_fichiers_generes) -- INDEPENDANT de ce que le
+      modele ecrit dans sa reponse texte, garanti a chaque fois. Le frontend l'affiche
+      en carte fichier (FichierChip.tsx) a la fin du message assistant.
     - {"type": "outils_suggeres", "outils": ["nom_outil", ...]} -> routeur d'outils (28/07,
       _router_outils) : DERNIER evenement de l'echange (rien n'est sauvegarde, aucune
       reponse n'est generee ce tour-ci). Emis a la place d'une reponse quand aucun
