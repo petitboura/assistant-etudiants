@@ -113,10 +113,13 @@ MODELE_PROFIL = "llama-3.3-70b-versatile"
 
 # Routeur d'outils (2026-07-28, demande Bourama) : premier appel LLM
 # séparé, rapide, qui juge quels outils seraient pertinents pour la
-# question -- voir _router_outils plus bas. Même modèle que
-# MODELE_PROFIL/MODELE_RESUME : tâche de classification simple, pas
-# besoin de raisonnement.
-MODELE_ROUTEUR_OUTILS = "llama-3.3-70b-versatile"
+# question -- voir _router_outils plus bas. Tâche de classification
+# simple (pas besoin de raisonnement) -- llama-3.1-8b-instant plutôt que
+# MODELE_PROFIL/MODELE_RESUME (llama-3.3-70b-versatile) : demande
+# explicite de Bourama (28/07) : "un petit rapide et open source, le
+# plus rapide possible" -- ce modèle est déjà le plus rapide de la
+# cascade Groq existante (voir GROQ_FALLBACKS).
+MODELE_ROUTEUR_OUTILS = "llama-3.1-8b-instant"
 
 # D'apres la doc Groq (console.groq.com/docs/reasoning), le parametre
 # reasoning_effort n'est reconnu que par certains modeles (GPT-OSS 20B/120B,
