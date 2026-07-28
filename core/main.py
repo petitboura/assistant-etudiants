@@ -227,37 +227,140 @@ def _debut_provient_d_un_resultat_outil(debut: str, messages_agent) -> bool:
     return False
 
 
-def _ressemble_a_un_pseudo_appel_outil(texte: str) -> bool:
-    """
-    Troisieme cas de fuite signale par Bourama (28/07), distinct des deux
-    precedents : au lieu d'un JSON casse ou d'une recopie de resultat, le
-    modele ecrit carrement un FAUX appel d'outil sous forme de bloc de code
-    cloture ```TOOL_CODE ... ``` (ex: print(generer_image(prompt='...'))) --
-    au lieu d'utiliser le vrai mecanisme de tool calling de l'API. Aucun
-    outil n'est reellement execute dans ce cas : l'utilisateur voit du code
-    brut a la place d'une reponse ou d'un fichier genere. Signature tres
-    specifique (tag de langage "TOOL_CODE"), donc aucun risque de masquer un
-    vrai bloc de code demande par l'utilisateur.
-    """
-    debut = texte.lstrip()
-    if not debut.startswith("```"):
-        return False
-    lignes = debut.splitlines()
-    if not lignes:
-        return False
-    return lignes[0].strip("`").strip().lower() == "tool_code"
+_RE_DEBUT_TOOL_CODE = re.compile(r"```\s*tool_code\b", re.IGNORECASE)
 
 
-def _reponse_suspecte(buffer_debut: str, messages_agent) -> bool:
-    """Regroupe les 3 filets de securite contre les bugs Groq connus (voir
-    _ressemble_a_du_json_casse, _debut_provient_d_un_resultat_outil et
-    _ressemble_a_un_pseudo_appel_outil ci-dessus) -- un seul point d'appel
-    pour les 4 endroits du flux qui en avaient besoin."""
+def _trouver_debut_tool_code(texte: str):
+    """
+    Troisieme cas de fuite signale par Bourama (28/07) : au lieu d'un JSON
+    casse ou d'une recopie de resultat, le modele ecrit carrement un FAUX
+    appel d'outil sous forme de bloc de code cloture ```TOOL_CODE ... ```
+    (ex: print(generer_image(prompt='...'))) au lieu d'utiliser le vrai
+    mecanisme de tool calling de l'API.
+
+    CORRECTION (29/07, signalee par Bourama) : l'ancienne version
+    (_ressemble_a_un_pseudo_appel_outil) ne regardait que le tout DEBUT du
+    texte -- si une phrase legitime precedait le faux bloc dans la meme
+    fenetre de streaming (ex: "Je lance les operations pour le reste.\n\n
+    ```TOOL_CODE"), la verification voyait une phrase normale en premier et
+    laissait tout passer, faux bloc inclus. Cette fonction cherche desormais
+    le marqueur ```TOOL_CODE N'IMPORTE OU dans le texte et retourne sa
+    position (ou None si absent), pour permettre de ne masquer QUE le bloc
+    lui-meme -- pas la phrase legitime qui le precede.
+    """
+    m = _RE_DEBUT_TOOL_CODE.search(texte)
+    return m.start() if m else None
+
+
+def _reponse_suspecte_generique(buffer_debut: str, messages_agent) -> bool:
+    """Les 2 filets de securite "tout ou rien" contre les bugs Groq connus
+    (JSON casse, recopie brute d'un resultat d'outil) -- le 3e cas (faux
+    bloc TOOL_CODE) est gere a part via _trouver_debut_tool_code, qui
+    permet de ne masquer que le bloc precis plutot que tout le passage."""
     return (
         _ressemble_a_du_json_casse(buffer_debut)
         or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent)
-        or _ressemble_a_un_pseudo_appel_outil(buffer_debut)
     )
+
+
+SEUIL_VERIF_JSON = 60
+# Marge de securite (29/07) : ```TOOL_CODE fait ~12 caracteres ("```" + espace
+# eventuel + "tool_code"). Si on flush tout le buffer des que SEUIL_VERIF_JSON
+# est atteint, on risque de couper le motif en deux pile au mauvais moment
+# (ex: le buffer contient juste "``" quand le seuil est atteint) -- les 2
+# premiers caracteres partiraient en "reponse" normale et le reste du motif,
+# arrivant dans le fragment suivant, ne serait plus jamais reconnu comme un
+# bloc TOOL_CODE (les backticks manquants sont deja partis). On garde donc
+# toujours les RESERVE_SUFFIXE derniers caracteres du buffer en attente,
+# jamais flushes tant qu'on n'est pas sur qu'ils ne sont pas le debut d'un
+# motif TOOL_CODE.
+RESERVE_SUFFIXE = 24
+
+
+def _nouvel_etat_filtre_texte():
+    """Etat initial pour _traiter_fragment_texte / _finaliser_fragment_texte
+    (voir ces fonctions). Un etat par passage de streaming Groq."""
+    return {
+        "phase": "avant",   # "avant" (texte normal en cours de verification) ou "dans_bloc" (faux TOOL_CODE en cours)
+        "buffer": "",       # texte en attente de decision, phase "avant"
+        "bloc_buffer": "",  # texte du faux bloc en cours, phase "dans_bloc"
+        "tool_code_detecte": False,  # devient True des qu'un faux bloc a ete vu (partiel ou complet)
+    }
+
+
+def _traiter_fragment_texte(etat, fragment, messages_agent):
+    """
+    Traite un nouveau fragment de texte recu du streaming Groq, en isolant
+    precisement un eventuel faux bloc ```TOOL_CODE ... ``` (voir
+    _trouver_debut_tool_code) : tout ce qui est AVANT le bloc est affiche
+    normalement ("reponse"), le bloc lui-meme est masque ("raisonnement"),
+    et tout ce qui vient APRES redevient visible normalement -- au lieu de
+    l'ancien comportement "tout ou rien" ou une fois suspect, tout le reste
+    du passage restait cache.
+
+    Retourne la liste des evenements a yield. Mute `etat` en place.
+    """
+    evenements = []
+
+    if etat["phase"] == "dans_bloc":
+        etat["bloc_buffer"] += fragment
+        fin = etat["bloc_buffer"].find("```", 3)  # cherche la fermeture APRES l'ouvrant (3 premiers caracteres)
+        if fin == -1:
+            return evenements  # bloc toujours en cours, rien a afficher pour l'instant
+        fin += 3
+        evenements.append({"type": "raisonnement", "texte": etat["bloc_buffer"][:fin]})
+        reste = etat["bloc_buffer"][fin:]
+        etat["phase"] = "avant"
+        etat["buffer"] = ""
+        etat["bloc_buffer"] = ""
+        if reste:
+            evenements.extend(_traiter_fragment_texte(etat, reste, messages_agent))
+        return evenements
+
+    etat["buffer"] += fragment
+    position = _trouver_debut_tool_code(etat["buffer"])
+    if position is not None:
+        avant = etat["buffer"][:position]
+        if avant:
+            evenements.append({"type": "reponse", "texte": avant})
+        etat["tool_code_detecte"] = True
+        etat["phase"] = "dans_bloc"
+        etat["bloc_buffer"] = etat["buffer"][position:]
+        etat["buffer"] = ""
+        evenements.extend(_traiter_fragment_texte(etat, "", messages_agent))
+        return evenements
+
+    if len(etat["buffer"]) >= SEUIL_VERIF_JSON + RESERVE_SUFFIXE:
+        # On ne flush que le buffer MOINS la marge de securite finale, pour
+        # ne jamais couper un motif TOOL_CODE en cours de formation (voir
+        # le commentaire de RESERVE_SUFFIXE plus haut).
+        a_flusher = etat["buffer"][:-RESERVE_SUFFIXE]
+        etat["buffer"] = etat["buffer"][-RESERVE_SUFFIXE:]
+        if _reponse_suspecte_generique(a_flusher, messages_agent):
+            evenements.append({"type": "raisonnement", "texte": a_flusher})
+        else:
+            evenements.append({"type": "reponse", "texte": a_flusher})
+    return evenements
+
+
+def _finaliser_fragment_texte(etat, messages_agent):
+    """A appeler une fois le flux Groq termine : vide le reliquat de
+    `etat`, quelle que soit la phase en cours. Si le flux s'est arrete en
+    plein milieu d'un faux bloc TOOL_CODE (fermeture jamais recue), le
+    reliquat est tout de meme masque et tool_code_detecte reste True."""
+    evenements = []
+    if etat["phase"] == "dans_bloc":
+        if etat["bloc_buffer"]:
+            evenements.append({"type": "raisonnement", "texte": etat["bloc_buffer"]})
+        etat["tool_code_detecte"] = True
+        etat["bloc_buffer"] = ""
+    elif etat["buffer"]:
+        if _reponse_suspecte_generique(etat["buffer"], messages_agent):
+            evenements.append({"type": "raisonnement", "texte": etat["buffer"]})
+        else:
+            evenements.append({"type": "reponse", "texte": etat["buffer"]})
+        etat["buffer"] = ""
+    return evenements
 # Nouvel outil = ajouter une ligne ici (optionnel, sinon le nom brut s'affiche).
 NOMS_OUTILS_LISIBLES = {
     "tavily_search": "Recherche sur le web",
@@ -1587,7 +1690,8 @@ def _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, 
 
 
 def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
-                 appels_en_cours_a_finir=None, modele=GROQ_PRIMARY, reasoning_effort=None, agent_nom=None):
+                 appels_en_cours_a_finir=None, modele=GROQ_PRIMARY, reasoning_effort=None, agent_nom=None,
+                 rattrapage_tool_code_restant=1):
     """
     Boucle d'agent generique sur le modele Groq utilise (par defaut
     GROQ_PRIMARY, mais peut recevoir n'importe quel modele Groq qui sait
@@ -1609,6 +1713,18 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
     il faut d'abord finir le lot d'outils du tour precedent (executer les
     appels restants, ou re-demander confirmation si l'un d'eux est aussi
     sensible) avant de redemander une reponse au modele.
+
+    `rattrapage_tool_code_restant` (29/07, demande Bourama) : quand le
+    modele ecrit un faux appel d'outil (bloc ```TOOL_CODE, voir
+    _trouver_debut_tool_code) au lieu d'utiliser le vrai mecanisme de tool
+    calling, l'ancien comportement se contentait de masquer le texte a
+    l'utilisateur SANS jamais executer l'action demandee -- meme quand la
+    detection fonctionnait, le vrai probleme (rien n'est execute) restait
+    entier. Desormais, une detection de ce cas declenche UNE tentative de
+    rattrapage automatique : un message correctif est injecte et le modele
+    est relance avec ce budget decremente a 0, pour eviter toute boucle. Si
+    le meme bug se reproduit malgre le rattrapage, un message d'erreur clair
+    est affiche a l'utilisateur plutot que de le laisser sans reponse.
     """
     kwargs_reasoning = {"reasoning_effort": reasoning_effort} if reasoning_effort else {}
     # reasoning_format="parsed" separe le raisonnement (delta.reasoning) du
@@ -1673,29 +1789,23 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
 
         reponse_directe = False
         appels_en_cours = {}  # index -> {"id", "name", "arguments"}
-        # Filet de securite contre le bug Groq (_ressemble_a_du_json_casse,
-        # voir plus haut) : on retient des fenetres de SEUIL_VERIF_JSON
-        # caracteres avant de decider si elles partent en "reponse"
-        # (affichees normalement) ou en "raisonnement" (masquees, le bug
-        # ressemble a du JSON d'appel d'outil rate ou a une recopie brute
-        # d'un resultat d'outil). SEUIL_VERIF_JSON assez petit pour ne pas
-        # retarder perceptiblement le streaming.
+        # Filet de securite contre les bugs Groq connus (JSON casse, recopie
+        # brute d'un resultat d'outil, faux bloc ```TOOL_CODE) : voir
+        # _traiter_fragment_texte / _finaliser_fragment_texte plus haut.
         #
         # IMPORTANT (bug trouve le 26/07/2026, signale par Bourama) : cette
         # verification portait AVANT seulement sur les 60 tout premiers
         # caracteres du flux, une seule fois -- une fois la reponse jugee
-        # "normale" au debut (cas frequent : le modele commence par une
-        # phrase d'intro legitime), plus RIEN ne revenait verifier le reste
-        # du flux, meme si un appel d'outil et son resultat brut etaient
-        # recopies plus loin dans la meme reponse. Desormais on re-verifie
-        # par fenetres glissantes de SEUIL_VERIF_JSON caracteres pendant
-        # TOUTE la duree du flux, pas juste au debut -- des qu'une fenetre
-        # est suspecte, tout ce qui suit dans ce passage bascule aussi en
-        # "raisonnement" (contenu_suspect devient definitif pour ce passage,
-        # comme avant).
-        SEUIL_VERIF_JSON = 60
-        buffer_debut = ""
-        contenu_suspect = False
+        # "normale" au debut, plus RIEN ne revenait verifier le reste du
+        # flux. Desormais on re-verifie en continu pendant TOUTE la duree
+        # du flux, pas juste au debut.
+        #
+        # CORRECTION (29/07, signalee par Bourama) : pour le cas specifique
+        # du faux bloc TOOL_CODE, on ne masque plus que le bloc lui-meme
+        # (bornes precises, voir _traiter_fragment_texte) -- le texte avant
+        # ET apres le bloc reste visible, au lieu de tout basculer en
+        # "raisonnement" des la detection et jusqu'a la fin du passage.
+        etat_filtre = _nouvel_etat_filtre_texte()
         dernier_finish_reason = None
         dernier_usage = None
 
@@ -1718,17 +1828,8 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
 
             if delta.content:
                 reponse_directe = True
-                if contenu_suspect:
-                    yield {"type": "raisonnement", "texte": delta.content}
-                else:
-                    buffer_debut += delta.content
-                    if len(buffer_debut) >= SEUIL_VERIF_JSON:
-                        if _reponse_suspecte(buffer_debut, messages_agent):
-                            contenu_suspect = True
-                            yield {"type": "raisonnement", "texte": buffer_debut}
-                        else:
-                            yield {"type": "reponse", "texte": buffer_debut}
-                        buffer_debut = ""
+                for evenement in _traiter_fragment_texte(etat_filtre, delta.content, messages_agent):
+                    yield evenement
 
             if delta.tool_calls:
                 for fragment in delta.tool_calls:
@@ -1750,14 +1851,44 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         elif dernier_finish_reason and dernier_finish_reason != "stop":
             logging.info(f"Fin de flux {modele} avec finish_reason={dernier_finish_reason} (usage : {dernier_usage})")
 
-        if buffer_debut:
-            # Reliquat de la dernière fenêtre, plus petite que
-            # SEUIL_VERIF_JSON (fin de flux atteinte avant l'avoir remplie)
-            # -- on tranche avec ce qu'on a.
-            if _reponse_suspecte(buffer_debut, messages_agent):
-                yield {"type": "raisonnement", "texte": buffer_debut}
+        for evenement in _finaliser_fragment_texte(etat_filtre, messages_agent):
+            yield evenement
+
+        if etat_filtre["tool_code_detecte"] and not appels_en_cours:
+            # Faux appel d'outil détecté (bloc ```TOOL_CODE) et aucun vrai
+            # tool_calls reçu ce tour-ci : rien n'a été réellement exécuté.
+            # Voir la docstring de _agent_groq pour le mécanisme de
+            # rattrapage.
+            if rattrapage_tool_code_restant > 0 and outils_mcp:
+                logging.warning(
+                    f"Faux appel d'outil (bloc TOOL_CODE) détecté sur {modele} -- rattrapage automatique déclenché."
+                )
+                messages_agent.append({
+                    "role": "system",
+                    "content": (
+                        "Tu viens d'écrire un faux appel d'outil sous forme de bloc de "
+                        "code (```TOOL_CODE...```) au lieu d'utiliser le vrai mécanisme "
+                        "d'appel d'outil de l'API. Cela n'exécute rien du tout. Si tu "
+                        "veux exécuter un outil, utilise IMPÉRATIVEMENT le vrai "
+                        "mécanisme d'appel d'outil (tool_calls), jamais de bloc de "
+                        "code. N'écris plus jamais de bloc ```TOOL_CODE```."
+                    ),
+                })
+                yield from _agent_groq(
+                    client_groq, messages_agent, outils_mcp, table_routage,
+                    modele=modele, reasoning_effort=reasoning_effort, agent_nom=agent_nom,
+                    rattrapage_tool_code_restant=rattrapage_tool_code_restant - 1,
+                )
+                return
             else:
-                yield {"type": "reponse", "texte": buffer_debut}
+                logging.error(
+                    f"Faux appel d'outil (bloc TOOL_CODE) détecté à nouveau sur {modele} après rattrapage (ou sans outil dispo) -- abandon."
+                )
+                yield {
+                    "type": "reponse",
+                    "texte": "Désolé, je n'ai pas réussi à exécuter l'action demandée. Peux-tu réessayer ou reformuler ta demande ?",
+                }
+                return
 
         if reponse_directe and not appels_en_cours:
             # Cas normal : reponse texte pure, aucun outil appele -- on
@@ -1813,12 +1944,13 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         timeout=DELAI_MAX_PAR_APPEL,
         **kwargs_reasoning,
     )
-    # Meme filtre que dans la boucle principale plus haut, etendu a tout le
-    # flux par fenetres glissantes (voir le commentaire detaille au premier
-    # bloc identique, plus haut dans cette fonction) -- corrige le meme bug
-    # ici aussi puisque ce chemin duplique la meme logique de streaming.
-    buffer_debut = ""
-    contenu_suspect = False
+    # Meme filtre que dans la boucle principale plus haut (voir
+    # _traiter_fragment_texte / _finaliser_fragment_texte) -- corrige le
+    # meme bug ici aussi puisque ce chemin duplique la meme logique de
+    # streaming. Pas de rattrapage ici : le budget MAX_ETAPES_OUTILS est
+    # deja epuise, on affiche directement un message d'erreur si un faux
+    # bloc TOOL_CODE est quand meme detecte, plutot que de relancer encore.
+    etat_filtre = _nouvel_etat_filtre_texte()
     for chunk in completion:
         delta = chunk.choices[0].delta
         raisonnement = getattr(delta, "reasoning", None)
@@ -1826,22 +1958,16 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             yield {"type": "raisonnement", "texte": raisonnement}
         token = delta.content or ""
         if token:
-            if contenu_suspect:
-                yield {"type": "raisonnement", "texte": token}
-            else:
-                buffer_debut += token
-                if len(buffer_debut) >= 60:
-                    if _reponse_suspecte(buffer_debut, messages_agent):
-                        contenu_suspect = True
-                        yield {"type": "raisonnement", "texte": buffer_debut}
-                    else:
-                        yield {"type": "reponse", "texte": buffer_debut}
-                    buffer_debut = ""
-    if buffer_debut:
-        if _reponse_suspecte(buffer_debut, messages_agent):
-            yield {"type": "raisonnement", "texte": buffer_debut}
-        else:
-            yield {"type": "reponse", "texte": buffer_debut}
+            for evenement in _traiter_fragment_texte(etat_filtre, token, messages_agent):
+                yield evenement
+    for evenement in _finaliser_fragment_texte(etat_filtre, messages_agent):
+        yield evenement
+    if etat_filtre["tool_code_detecte"]:
+        logging.error(f"Faux appel d'outil (bloc TOOL_CODE) détecté sur {modele} (budget d'étapes épuisé) -- abandon.")
+        yield {
+            "type": "reponse",
+            "texte": "Désolé, je n'ai pas réussi à exécuter l'action demandée. Peux-tu réessayer ou reformuler ta demande ?",
+        }
     logging.info(f"Réponse via GROQ (avec outil): {modele}")
 
 
