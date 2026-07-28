@@ -227,7 +227,37 @@ def _debut_provient_d_un_resultat_outil(debut: str, messages_agent) -> bool:
     return False
 
 
-# Noms lisibles affichés à l'utilisateur pendant qu'un outil MCP est utilisé.
+def _ressemble_a_un_pseudo_appel_outil(texte: str) -> bool:
+    """
+    Troisieme cas de fuite signale par Bourama (28/07), distinct des deux
+    precedents : au lieu d'un JSON casse ou d'une recopie de resultat, le
+    modele ecrit carrement un FAUX appel d'outil sous forme de bloc de code
+    cloture ```TOOL_CODE ... ``` (ex: print(generer_image(prompt='...'))) --
+    au lieu d'utiliser le vrai mecanisme de tool calling de l'API. Aucun
+    outil n'est reellement execute dans ce cas : l'utilisateur voit du code
+    brut a la place d'une reponse ou d'un fichier genere. Signature tres
+    specifique (tag de langage "TOOL_CODE"), donc aucun risque de masquer un
+    vrai bloc de code demande par l'utilisateur.
+    """
+    debut = texte.lstrip()
+    if not debut.startswith("```"):
+        return False
+    lignes = debut.splitlines()
+    if not lignes:
+        return False
+    return lignes[0].strip("`").strip().lower() == "tool_code"
+
+
+def _reponse_suspecte(buffer_debut: str, messages_agent) -> bool:
+    """Regroupe les 3 filets de securite contre les bugs Groq connus (voir
+    _ressemble_a_du_json_casse, _debut_provient_d_un_resultat_outil et
+    _ressemble_a_un_pseudo_appel_outil ci-dessus) -- un seul point d'appel
+    pour les 4 endroits du flux qui en avaient besoin."""
+    return (
+        _ressemble_a_du_json_casse(buffer_debut)
+        or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent)
+        or _ressemble_a_un_pseudo_appel_outil(buffer_debut)
+    )
 # Nouvel outil = ajouter une ligne ici (optionnel, sinon le nom brut s'affiche).
 NOMS_OUTILS_LISIBLES = {
     "tavily_search": "Recherche sur le web",
@@ -1693,7 +1723,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
                 else:
                     buffer_debut += delta.content
                     if len(buffer_debut) >= SEUIL_VERIF_JSON:
-                        if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
+                        if _reponse_suspecte(buffer_debut, messages_agent):
                             contenu_suspect = True
                             yield {"type": "raisonnement", "texte": buffer_debut}
                         else:
@@ -1724,7 +1754,7 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             # Reliquat de la dernière fenêtre, plus petite que
             # SEUIL_VERIF_JSON (fin de flux atteinte avant l'avoir remplie)
             # -- on tranche avec ce qu'on a.
-            if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
+            if _reponse_suspecte(buffer_debut, messages_agent):
                 yield {"type": "raisonnement", "texte": buffer_debut}
             else:
                 yield {"type": "reponse", "texte": buffer_debut}
@@ -1801,14 +1831,14 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             else:
                 buffer_debut += token
                 if len(buffer_debut) >= 60:
-                    if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
+                    if _reponse_suspecte(buffer_debut, messages_agent):
                         contenu_suspect = True
                         yield {"type": "raisonnement", "texte": buffer_debut}
                     else:
                         yield {"type": "reponse", "texte": buffer_debut}
                     buffer_debut = ""
     if buffer_debut:
-        if _ressemble_a_du_json_casse(buffer_debut) or _debut_provient_d_un_resultat_outil(buffer_debut, messages_agent):
+        if _reponse_suspecte(buffer_debut, messages_agent):
             yield {"type": "raisonnement", "texte": buffer_debut}
         else:
             yield {"type": "reponse", "texte": buffer_debut}
