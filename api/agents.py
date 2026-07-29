@@ -21,7 +21,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from api.auth import utilisateur_courant, supabase, get_secret
+from api.auth import utilisateur_courant, utilisateur_optionnel, supabase, get_secret
 from api.journal import journaliser
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
@@ -30,6 +30,7 @@ from creation_agent import generer_id_depuis_nom, extraire_id_notion, composer_s
 from index_documents import indexer_texte, indexer_document, supprimer_chunks_existants  # noqa: E402
 from storage import upload_document, list_documents, delete_document, get_document_url  # noqa: E402
 from bibliotheque_fichiers import enregistrer_fichier, lister_fichiers, supprimer_fichier  # noqa: E402
+from mcp_tools import lister_outils_autorises_pour_agent  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
@@ -445,6 +446,42 @@ def obtenir_agent_public(agent_id: str):
         description=ligne.get("description") or "",
         owner_id=ligne["owner_id"],
     )
+
+
+@router.get("/{agent_id}/outils-disponibles")
+def obtenir_outils_disponibles(agent_id: str, utilisateur=Depends(utilisateur_optionnel)):
+    """
+    Correctif demande par Bourama le 29/07/2026 : la barre de saisie
+    (BarreDeSaisie.tsx, liste OUTILS_DISPONIBLES) affichait TOUS les
+    boutons d'outils pour TOUS les agents, sans jamais verifier ceux
+    reellement autorises en base pour l'agent en cours (agents_outils_
+    generation / agents_serveurs, voir core/registre_outils.py et
+    DroitsAgentCreation.tsx pour la configuration cote createur). Un
+    outil desactive par le createur restait donc cliquable dans le chat
+    -- un clic dessus le faisait disparaitre SILENCIEUSEMENT de la
+    requete reelle envoyee a Groq (deja corrige le 29/07 cote system
+    prompt, voir chat() dans core/main.py), le modele croyant a tort
+    qu'il etait disponible et pouvant halluciner un faux appel d'outil
+    en texte plutot que d'utiliser le vrai mecanisme.
+
+    Reutilise TEL QUEL lister_outils_autorises_pour_agent (meme fonction
+    qui construit la vraie liste envoyee a Groq, voir core/mcp_tools.py)
+    -- aucune logique dupliquee, donc aucune desynchronisation possible
+    entre ce que ce endpoint annonce et ce qui est reellement autorise.
+
+    Public (utilisateur_optionnel, comme le chat lui-meme) : un visiteur
+    non connecte doit pouvoir voir les boutons d'un agent public, meme
+    si certains outils "par utilisateur" (ex: Notion) resteront filtres
+    en l'absence de connexion -- comportement identique a une vraie
+    conversation.
+    """
+    user_id = utilisateur.id if utilisateur else None
+    try:
+        outils_pour_llm, _ = lister_outils_autorises_pour_agent(get_secret, user_id, agent_id)
+    except Exception as e:
+        logging.error(f"ERREUR (outils disponibles agent {agent_id}) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger les outils disponibles pour le moment.")
+    return {"outils": [o["function"]["name"] for o in outils_pour_llm]}
 
 
 class MettreAJourVitrinePayload(BaseModel):
