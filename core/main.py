@@ -2190,7 +2190,26 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
             yield {"type": "outils_suggeres", "outils": outils_suggeres}
             return
 
-    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire, recherche_forcee, outil_force)
+    # CORRECTION (29/07, Bourama) : la liste réelle d'outils (celle qui
+    # part dans tools=... vers Groq, filtrée par autorisation agent en
+    # base) doit être calculée AVANT le system prompt, et c'est ELLE qui
+    # doit servir à annoncer "OUTIL(S) ACTIF(S)" -- jamais outil_force brut
+    # (sélection frontend non vérifiée). Avant ce fix : si un outil
+    # sélectionné (ex: generer_code) n'était pas autorisé en base pour cet
+    # agent, il disparaissait silencieusement de outils_mcp mais le system
+    # prompt continuait d'affirmer au modèle qu'il était "disponible et
+    # prêt à être appelé" -- contradiction qui pouvait pousser le modèle à
+    # halluciner un faux appel (bloc TOOL_CODE) plutôt que d'utiliser un
+    # vrai outil absent de son schéma technique réel.
+    if image_url or images_base64:
+        # Chemin image = Gemini, aucun outil MCP jamais utilisé ici (voir
+        # plus bas) -- inutile d'interroger les serveurs MCP pour rien.
+        outils_mcp, table_routage = [], {}
+        outil_force_verifie = outil_force
+    else:
+        outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id, agent_id, outil_force)
+        outil_force_verifie = [o["function"]["name"] for o in outils_mcp] if outil_force else outil_force
+    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire, recherche_forcee, outil_force_verifie)
 
     if localisation and localisation.get("latitude") is not None and localisation.get("longitude") is not None:
         # Contexte "système/environnement" (2026-07-20) : position GPS
@@ -2272,7 +2291,6 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
         return
 
     client_groq = Groq(api_key=get_secret("GROQ_API_KEY"), max_retries=0)
-    outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id, agent_id, outil_force)
     # Nom affiché de l'agent (ex. "Nucleos"), calculé UNE fois ici -- voir
     # _nom_agent, utilisé pour que la confirmation d'une action sensible
     # dise "Nucleos veut faire X" plutôt qu'une description générique.
