@@ -1189,7 +1189,12 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
             "(chercher une info récente, générer un fichier, explorer un dépôt...) "
             "au prétexte de tes limitations générales de modèle de langage : la "
             "présence réelle de ce(s) outil(s) dans cette conversation prime toujours sur "
-            "ce que tu crois savoir de tes propres capacités par défaut."
+            "ce que tu crois savoir de tes propres capacités par défaut. Pour appeler un "
+            "outil, utilise UNIQUEMENT le vrai mécanisme d'appel d'outil de l'API -- "
+            "jamais de texte imitant un appel dans ta réponse visible (pas de bloc de "
+            "code type TOOL_CODE, pas de nom_outil(...)/print(...), pas de "
+            "nom_outil{...} ni call:nom_outil{...}). Si tu écris quoi que ce soit qui "
+            "ressemble à un appel d'outil en texte, c'est une erreur."
         )
     if not outils_forces:
         # Bouton Outils (2026-07-25, suite) : sans cette instruction, le
@@ -1210,7 +1215,12 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
             "faire' ou équivalent, NE dresse PAS une liste de capacités générique "
             "d'assistant IA : dis clairement que tu n'as aucun outil actif "
             "actuellement, et que la personne doit cliquer sur le bouton Outils (icône "
-            "clé) pour en activer un si elle a besoin d'une de ces capacités. Tu "
+            "clé) pour en activer un si elle a besoin d'une de ces capacités. Si tu "
+            "penses qu'un outil serait utile ici, ne l'invente JAMAIS et n'écris JAMAIS "
+            "de fausse syntaxe d'appel d'outil dans ta réponse (pas de bloc de code type "
+            "TOOL_CODE, pas de nom_outil(...)/print(...), pas de nom_outil{...} ni "
+            "call:nom_outil{...}) : contente-toi de dire en texte normal que tu n'as pas "
+            "cette capacité actuellement. Tu "
             "restes en revanche capable de répondre normalement par le texte "
             "(explications, code écrit dans la réponse sans l'exécuter, etc.), et les "
             "blocs ```mermaid/```chart/```carte/```widget/```geometrie ci-dessus restent "
