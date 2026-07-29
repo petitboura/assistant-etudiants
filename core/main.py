@@ -252,6 +252,79 @@ def _trouver_debut_tool_code(texte: str):
     return m.start() if m else None
 
 
+_RE_DEBUT_CALL_OUTIL = re.compile(r"\bcall:[A-Za-z_][A-Za-z0-9_]*\{")
+
+
+def _trouver_debut_call_outil(texte: str):
+    """
+    Quatrieme cas de fuite signale par Bourama (29/07, captures d'ecran a
+    l'appui), distinct du bloc ```TOOL_CODE``` : le modele ecrit un faux
+    appel d'outil directement dans le texte visible, sans backticks ni
+    print(), sous la forme "call:nom_outil{...json...}", ex :
+        call:generer_image{"prompt":"Un chat elegant..."}
+        call:tavily_search{"query":"informations sur les chats"}
+    Ni _trouver_debut_tool_code (cherche des backticks) ni
+    _reponse_suspecte_generique (cherche des cles "name"/"arguments" dans
+    un JSON qui commence en debut de fenetre) ne detectaient ce motif --
+    confirme en le testant contre les 3 captures d'ecran recues. Cherche
+    le marqueur "call:nom_outil{" n'importe ou dans le texte et retourne
+    sa position (ou None si absent) ; meme logique de decoupage precis
+    que _trouver_debut_tool_code (ne masque que le faux appel, jamais le
+    texte legitime autour).
+    """
+    m = _RE_DEBUT_CALL_OUTIL.search(texte)
+    return m.start() if m else None
+
+
+def _position_fin_bloc_call_outil(bloc_buffer: str):
+    """
+    A appeler uniquement sur un bloc_buffer qui commence par un motif
+    detecte via _trouver_debut_call_outil. Compte les accolades une par
+    une (au lieu de s'arreter a la premiere "}" venue) pour gerer un
+    argument JSON lui-meme imbrique, ex: call:generer_code{"nom_projet":
+    "x","fichiers":{"main.py":"..."}} -- s'arreter a la premiere "}"
+    couperait avant la vraie fin.
+
+    Si un autre "call:nom{" enchaine juste apres (espaces/retours a la
+    ligne autorises entre les deux, comme les plusieurs print() d'un
+    bloc TOOL_CODE), il est absorbe dans le meme bloc a masquer plutot
+    que de rouvrir un nouveau passage "reponse" au milieu.
+
+    Retourne la position de fin (exclusive) une fois sur qu'aucun autre
+    appel n'enchaine juste apres, ou None si le bloc est encore en cours
+    de reception (JSON pas complet, ou fin de fragment ambigue en plein
+    milieu d'espaces -- on attend alors la suite du streaming plutot que
+    de risquer une coupure trop tot).
+    """
+    position = 0
+    while True:
+        m = _RE_DEBUT_CALL_OUTIL.match(bloc_buffer, position)
+        if not m:
+            return position if position > 0 else None
+        profondeur = 0
+        fin_accolade = None
+        i = m.end() - 1  # position du "{" ouvrant qui vient d'etre matche
+        while i < len(bloc_buffer):
+            if bloc_buffer[i] == "{":
+                profondeur += 1
+            elif bloc_buffer[i] == "}":
+                profondeur -= 1
+                if profondeur == 0:
+                    fin_accolade = i + 1
+                    break
+            i += 1
+        if fin_accolade is None:
+            return None  # JSON de cet appel pas encore complet
+        suite = bloc_buffer[fin_accolade:]
+        suite_sans_espaces = suite.lstrip(" \t\r\n")
+        if not suite_sans_espaces:
+            return None  # ambigu : un autre appel pourrait suivre juste apres, on attend la suite
+        if _RE_DEBUT_CALL_OUTIL.match(suite_sans_espaces):
+            position = fin_accolade + (len(suite) - len(suite_sans_espaces))
+            continue
+        return fin_accolade
+
+
 def _reponse_suspecte_generique(buffer_debut: str, messages_agent) -> bool:
     """Les 2 filets de securite "tout ou rien" contre les bugs Groq connus
     (JSON casse, recopie brute d'un resultat d'outil) -- le 3e cas (faux
@@ -264,26 +337,30 @@ def _reponse_suspecte_generique(buffer_debut: str, messages_agent) -> bool:
 
 
 SEUIL_VERIF_JSON = 60
-# Marge de securite (29/07) : ```TOOL_CODE fait ~12 caracteres ("```" + espace
-# eventuel + "tool_code"). Si on flush tout le buffer des que SEUIL_VERIF_JSON
-# est atteint, on risque de couper le motif en deux pile au mauvais moment
-# (ex: le buffer contient juste "``" quand le seuil est atteint) -- les 2
-# premiers caracteres partiraient en "reponse" normale et le reste du motif,
-# arrivant dans le fragment suivant, ne serait plus jamais reconnu comme un
-# bloc TOOL_CODE (les backticks manquants sont deja partis). On garde donc
-# toujours les RESERVE_SUFFIXE derniers caracteres du buffer en attente,
-# jamais flushes tant qu'on n'est pas sur qu'ils ne sont pas le debut d'un
-# motif TOOL_CODE.
-RESERVE_SUFFIXE = 24
+# Marge de securite (29/07, elargie le 29/07 pour couvrir aussi le motif
+# "call:nom_outil{", voir _trouver_debut_call_outil). Le plus long nom
+# d'outil enregistre (ex: "generer_document_powerpoint") donne un motif
+# "call:generer_document_powerpoint{" d'environ 34 caracteres -- largement
+# plus long que "```TOOL_CODE" (~12 caracteres). Si on flush tout le
+# buffer des que SEUIL_VERIF_JSON est atteint, on risque de couper un
+# motif en deux pile au mauvais moment (ex: le buffer contient juste
+# "call:generer_doc" quand le seuil est atteint) -- le debut partirait en
+# "reponse" normale et le reste, arrivant dans le fragment suivant, ne
+# serait plus jamais reconnu comme un faux appel (le debut manquant est
+# deja parti). On garde donc toujours les RESERVE_SUFFIXE derniers
+# caracteres du buffer en attente, jamais flushes tant qu'on n'est pas
+# sur qu'ils ne sont pas le debut d'un motif.
+RESERVE_SUFFIXE = 50
 
 
 def _nouvel_etat_filtre_texte():
     """Etat initial pour _traiter_fragment_texte / _finaliser_fragment_texte
     (voir ces fonctions). Un etat par passage de streaming Groq."""
     return {
-        "phase": "avant",   # "avant" (texte normal en cours de verification) ou "dans_bloc" (faux TOOL_CODE en cours)
+        "phase": "avant",   # "avant" (texte normal en cours de verification) ou "dans_bloc" (faux appel en cours)
         "buffer": "",       # texte en attente de decision, phase "avant"
         "bloc_buffer": "",  # texte du faux bloc en cours, phase "dans_bloc"
+        "type_bloc": None,  # "tool_code" ou "call_outil" -- decide comment reperer la fin du bloc
         "tool_code_detecte": False,  # devient True des qu'un faux bloc a ete vu (partiel ou complet)
     }
 
@@ -291,12 +368,13 @@ def _nouvel_etat_filtre_texte():
 def _traiter_fragment_texte(etat, fragment, messages_agent):
     """
     Traite un nouveau fragment de texte recu du streaming Groq, en isolant
-    precisement un eventuel faux bloc ```TOOL_CODE ... ``` (voir
-    _trouver_debut_tool_code) : tout ce qui est AVANT le bloc est affiche
-    normalement ("reponse"), le bloc lui-meme est masque ("raisonnement"),
-    et tout ce qui vient APRES redevient visible normalement -- au lieu de
-    l'ancien comportement "tout ou rien" ou une fois suspect, tout le reste
-    du passage restait cache.
+    precisement un eventuel faux appel d'outil -- soit un bloc ```TOOL_CODE
+    ... ``` (voir _trouver_debut_tool_code), soit un motif call:nom{...}
+    (voir _trouver_debut_call_outil) : tout ce qui est AVANT le faux appel
+    est affiche normalement ("reponse"), le faux appel lui-meme est masque
+    ("raisonnement"), et tout ce qui vient APRES redevient visible
+    normalement -- au lieu d'un comportement "tout ou rien" ou une fois
+    suspect, tout le reste du passage restait cache.
 
     Retourne la liste des evenements a yield. Mute `etat` en place.
     """
@@ -304,27 +382,37 @@ def _traiter_fragment_texte(etat, fragment, messages_agent):
 
     if etat["phase"] == "dans_bloc":
         etat["bloc_buffer"] += fragment
-        fin = etat["bloc_buffer"].find("```", 3)  # cherche la fermeture APRES l'ouvrant (3 premiers caracteres)
-        if fin == -1:
+        if etat["type_bloc"] == "call_outil":
+            fin = _position_fin_bloc_call_outil(etat["bloc_buffer"])
+        else:
+            fin = etat["bloc_buffer"].find("```", 3)  # cherche la fermeture APRES l'ouvrant (3 premiers caracteres)
+            fin = None if fin == -1 else fin + 3
+        if fin is None:
             return evenements  # bloc toujours en cours, rien a afficher pour l'instant
-        fin += 3
         evenements.append({"type": "raisonnement", "texte": etat["bloc_buffer"][:fin]})
         reste = etat["bloc_buffer"][fin:]
         etat["phase"] = "avant"
         etat["buffer"] = ""
         etat["bloc_buffer"] = ""
+        etat["type_bloc"] = None
         if reste:
             evenements.extend(_traiter_fragment_texte(etat, reste, messages_agent))
         return evenements
 
     etat["buffer"] += fragment
-    position = _trouver_debut_tool_code(etat["buffer"])
-    if position is not None:
+    position_tool_code = _trouver_debut_tool_code(etat["buffer"])
+    position_call_outil = _trouver_debut_call_outil(etat["buffer"])
+    positions = [
+        (p, t) for p, t in ((position_tool_code, "tool_code"), (position_call_outil, "call_outil")) if p is not None
+    ]
+    if positions:
+        position, type_bloc = min(positions, key=lambda pt: pt[0])
         avant = etat["buffer"][:position]
         if avant:
             evenements.append({"type": "reponse", "texte": avant})
         etat["tool_code_detecte"] = True
         etat["phase"] = "dans_bloc"
+        etat["type_bloc"] = type_bloc
         etat["bloc_buffer"] = etat["buffer"][position:]
         etat["buffer"] = ""
         evenements.extend(_traiter_fragment_texte(etat, "", messages_agent))
@@ -332,8 +420,8 @@ def _traiter_fragment_texte(etat, fragment, messages_agent):
 
     if len(etat["buffer"]) >= SEUIL_VERIF_JSON + RESERVE_SUFFIXE:
         # On ne flush que le buffer MOINS la marge de securite finale, pour
-        # ne jamais couper un motif TOOL_CODE en cours de formation (voir
-        # le commentaire de RESERVE_SUFFIXE plus haut).
+        # ne jamais couper un motif en cours de formation (voir le
+        # commentaire de RESERVE_SUFFIXE plus haut).
         a_flusher = etat["buffer"][:-RESERVE_SUFFIXE]
         etat["buffer"] = etat["buffer"][-RESERVE_SUFFIXE:]
         if _reponse_suspecte_generique(a_flusher, messages_agent):
@@ -346,14 +434,16 @@ def _traiter_fragment_texte(etat, fragment, messages_agent):
 def _finaliser_fragment_texte(etat, messages_agent):
     """A appeler une fois le flux Groq termine : vide le reliquat de
     `etat`, quelle que soit la phase en cours. Si le flux s'est arrete en
-    plein milieu d'un faux bloc TOOL_CODE (fermeture jamais recue), le
-    reliquat est tout de meme masque et tool_code_detecte reste True."""
+    plein milieu d'un faux appel (TOOL_CODE ou call:outil{...}, fermeture
+    jamais recue), le reliquat est tout de meme masque et
+    tool_code_detecte reste True."""
     evenements = []
     if etat["phase"] == "dans_bloc":
         if etat["bloc_buffer"]:
             evenements.append({"type": "raisonnement", "texte": etat["bloc_buffer"]})
         etat["tool_code_detecte"] = True
         etat["bloc_buffer"] = ""
+        etat["type_bloc"] = None
     elif etat["buffer"]:
         if _reponse_suspecte_generique(etat["buffer"], messages_agent):
             evenements.append({"type": "raisonnement", "texte": etat["buffer"]})
