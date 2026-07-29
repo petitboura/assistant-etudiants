@@ -11,7 +11,7 @@ trafilatura
 youtube-transcript-api
 google-genai
 groq
-mcp
+mcp==2.0.0
 httpx
 weasyprint
 markdown

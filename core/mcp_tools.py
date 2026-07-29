@@ -31,7 +31,7 @@ import asyncio
 import logging
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client, create_mcp_http_client
 from supabase import create_client
 
 from registre_outils import SERVEURS_MCP
@@ -121,21 +121,28 @@ def _outils_generation_actifs_pour_agent(agent_id):
 
 
 async def _lister_outils_async(url, headers=None):
-    async with streamablehttp_client(url, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            reponse = await session.list_tools()
-            return reponse.tools
+    # CORRECTION (29/07) : mcp 2.0.0 a renomme streamablehttp_client en
+    # streamable_http_client ET retire le parametre headers= direct -- les
+    # headers (cle API, token...) passent desormais par un httpx2.AsyncClient
+    # preconfigure via create_mcp_http_client (voir doc de la lib). La
+    # fonction ne renvoie plus que 2 flux (read, write), plus 3.
+    async with create_mcp_http_client(headers=headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                reponse = await session.list_tools()
+                return reponse.tools
 
 
 async def _appeler_outil_async(url, nom_outil, arguments, headers=None):
-    async with streamablehttp_client(url, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            resultat = await session.call_tool(nom_outil, arguments=arguments)
-            for bloc in resultat.content:
-                if hasattr(bloc, "text"):
-                    return bloc.text
+    async with create_mcp_http_client(headers=headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                resultat = await session.call_tool(nom_outil, arguments=arguments)
+                for bloc in resultat.content:
+                    if hasattr(bloc, "text"):
+                        return bloc.text
     return ""
 
 
