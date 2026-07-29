@@ -237,7 +237,14 @@ def lister_outils_autorises_pour_agent(get_secret, user_id=None, agent_id=None):
                     "function": {
                         "name": outil.name,
                         "description": outil.description or "",
-                        "parameters": outil.inputSchema,
+                        # CORRECTION (29/07) : mcp 2.0.0 a renomme inputSchema en
+                        # input_schema sur l'objet Tool retourne par list_tools() --
+                        # meme famille de bug que streamable_http_client (voir plus
+                        # haut). Sans ce fix, chaque appel MCP plantait
+                        # silencieusement (AttributeError attrape par le except plus
+                        # bas) et la liste d'outils envoyee au LLM restait vide, quel
+                        # que soit l'outil selectionne via le bouton Outils.
+                        "parameters": outil.input_schema,
                     },
                 })
                 table_routage[outil.name] = {"url": url, "headers": headers}
