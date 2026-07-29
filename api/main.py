@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, supabase
-from api.agents import router as agents_router
+from api.agents import router as agents_router, MATIERES
 from api.creators import router as creators_router
 from api.profiles import router as profiles_router
 from api.search import router as search_router
@@ -289,3 +289,31 @@ def lister_categories(seulement_utilisees: bool = Query(False)):
         categories = [c for c in categories if c["id"] in ids_utilisees]
 
     return [CategorieItem(**ligne) for ligne in categories]
+
+
+class MatiereItem(BaseModel):
+    nom: str
+    disponible: bool
+
+
+@app.get("/api/matieres", response_model=List[MatiereItem])
+def lister_matieres():
+    """
+    Système "matière" (2026-07-29), indépendant du système "catégorie"
+    ci-dessus (aucun lien, aucune migration entre les deux). Une seule IA
+    par matière (Bourama : "dès qu'une matière est prise, elle disparaît
+    de la liste") -- `disponible=False` pour toute matière déjà prise par
+    un agent. "Autre" est traitée comme une matière normale : elle aussi
+    ne peut être prise que par une seule IA à la fois (voir la contrainte
+    UNIQUE agents_matiere_unique et matiere_detail pour le texte libre
+    associé). Public, aucune auth requise (même statut que /api/categories).
+    """
+    try:
+        res = supabase.table("agents").select("matiere").not_.is_("matiere", "null").execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture matières prises) : {e}")
+        raise HTTPException(status_code=500, detail="Impossible de charger les matières pour le moment.")
+
+    prises = {ligne["matiere"] for ligne in (res.data or [])}
+    toutes = list(MATIERES) + ["Autre"]
+    return [MatiereItem(nom=m, disponible=m not in prises) for m in toutes]

@@ -35,6 +35,57 @@ logging.basicConfig(level=logging.INFO)
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 
+# Liste fixe des matières (Bourama, 2026-07-29) -- miroir exact de MATIERES
+# dans djiguigne-frontend/lib/matieres.ts, à garder synchronisée à la main
+# si la liste change. Système INDÉPENDANT de categorie_id/table categories
+# (aucun lien, aucune migration entre les deux -- deux classifications
+# distinctes qui cohabitent). "Autre" n'en fait pas partie ici : c'est une
+# valeur à part entière de la colonne `matiere` (texte libre associé dans
+# `matiere_detail`), voir _valider_et_verifier_disponibilite_matiere.
+MATIERES = [
+    "Informatique",
+    "Physique",
+    "Économie",
+    "Chimie",
+    "Anglais",
+    "SVT (Biologie)",
+    "Français",
+    "Gestion",
+    "Arabe",
+]
+
+
+def _valider_et_verifier_disponibilite_matiere(
+    matiere: Optional[str],
+    matiere_detail: Optional[str],
+    agent_id_a_exclure: Optional[str] = None,
+) -> None:
+    """
+    Une seule IA par matière (Bourama, 2026-07-29), "Autre" inclus (une
+    seule IA "Autre" au total, peu importe matiere_detail). La contrainte
+    UNIQUE en base (agents_matiere_unique) est le garde-fou final contre
+    les cas concurrents ; cette vérification ici sert à renvoyer un
+    message clair plutôt qu'une erreur SQL brute à l'appelant.
+    `agent_id_a_exclure` : lors d'une modification, un agent ne doit pas
+    se bloquer lui-même s'il garde la même matière.
+    """
+    if matiere is None:
+        return
+    if matiere != "Autre" and matiere not in MATIERES:
+        raise HTTPException(status_code=422, detail="Matière inconnue.")
+    if matiere == "Autre" and not (matiere_detail or "").strip():
+        raise HTTPException(status_code=422, detail='Précise la matière dans "Autre".')
+    try:
+        requete = supabase.table("agents").select("id").eq("matiere", matiere)
+        if agent_id_a_exclure:
+            requete = requete.neq("id", agent_id_a_exclure)
+        deja_prise = requete.execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (vérification disponibilité matière={matiere}) : {e}")
+        deja_prise = None
+    if deja_prise and deja_prise.data:
+        raise HTTPException(status_code=422, detail="Cette matière est déjà prise par une autre IA.")
+
 
 class LigneComportement(BaseModel):
     type_requete: str = ""
@@ -91,10 +142,18 @@ class CreerAgentPayload(BaseModel):
     lien_notion: Optional[str] = None
     texte_libre: str = ""
     ui_config: UiConfig = Field(default_factory=UiConfig)
-    # Ajouté le 2026-07-15 (Bourama : système de catégories) : obligatoire
-    # à la création (voir validation plus bas), doit référencer une ligne
-    # existante de la table `categories`.
-    categorie_id: str
+    # Ajouté le 2026-07-15 (Bourama : système de catégories). Devenu
+    # optionnel le 2026-07-29 : le picker manuel a été retiré des deux
+    # formulaires au profit du système "matière" ci-dessous (indépendant,
+    # aucun lien entre les deux) -- categorie_id n'est plus envoyé par le
+    # frontend, mais reste accepté/validé s'il est fourni.
+    categorie_id: Optional[str] = None
+    # Système "matière" (2026-07-29), voir MATIERES et
+    # _valider_et_verifier_disponibilite_matiere plus haut. `matiere` est
+    # une des valeurs fixes ou "Autre" ; `matiere_detail` est le texte
+    # libre associé, utilisé seulement quand matiere = "Autre".
+    matiere: Optional[str] = None
+    matiere_detail: Optional[str] = None
     # Nouveau flow de création (pivot social) : image de vitrine et
     # description publique de la page agent, distinctes de
     # description_connaissance qui reste un usage interne au RAG.
@@ -142,22 +201,24 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
             status_code=422,
             detail="Remplis au moins la posture générale ou les limites globales.",
         )
-    if not payload.categorie_id.strip():
-        raise HTTPException(status_code=422, detail="La catégorie est obligatoire.")
+    # categorie_id n'est plus obligatoire (voir CreerAgentPayload) : validé
+    # contre la table `categories` uniquement s'il est fourni.
+    if payload.categorie_id is not None and payload.categorie_id.strip():
+        try:
+            categorie_existe = (
+                supabase.table("categories")
+                .select("id")
+                .eq("id", payload.categorie_id)
+                .maybe_single()
+                .execute()
+            )
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (vérification catégorie={payload.categorie_id}) : {e}")
+            categorie_existe = None
+        if not categorie_existe or not categorie_existe.data:
+            raise HTTPException(status_code=422, detail="Catégorie inconnue.")
 
-    try:
-        categorie_existe = (
-            supabase.table("categories")
-            .select("id")
-            .eq("id", payload.categorie_id)
-            .maybe_single()
-            .execute()
-        )
-    except Exception as e:
-        logging.error(f"ERREUR SUPABASE (vérification catégorie={payload.categorie_id}) : {e}")
-        categorie_existe = None
-    if not categorie_existe or not categorie_existe.data:
-        raise HTTPException(status_code=422, detail="Catégorie inconnue.")
+    _valider_et_verifier_disponibilite_matiere(payload.matiere, payload.matiere_detail)
 
     agent_id = generer_id_depuis_nom(payload.nom)
 
@@ -239,6 +300,8 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         "image_vitrine_url": payload.image_vitrine_url,
         "description": payload.description.strip(),
         "categorie_id": payload.categorie_id,
+        "matiere": payload.matiere,
+        "matiere_detail": (payload.matiere_detail or "").strip() or None if payload.matiere == "Autre" else None,
         "profil_utilisateur_schema": [c.model_dump() for c in payload.profil_utilisateur_schema],
         # Colonne ajoutée le 2026-07-12 (Bourama : le formulaire de
         # modification doit contenir tous les champs de la création).
@@ -522,6 +585,8 @@ class AgentEditable(BaseModel):
     placeholder_saisie: str = "Pose ta question..."
     actif: bool = True
     categorie_id: Optional[str] = None
+    matiere: Optional[str] = None
+    matiere_detail: Optional[str] = None
     profil_utilisateur_schema: List[ChampProfilUtilisateur] = Field(default_factory=list)
     # Proactivité (25/07) : le créateur décide QUAND (délai d'inactivité),
     # à quelle fréquence max, et POURQUOI/COMMENT (instructions libres,
@@ -548,7 +613,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id, categorie_id, profil_utilisateur_schema, "
+                "actif, owner_id, categorie_id, matiere, matiere_detail, profil_utilisateur_schema, "
                 "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
                 "proactivite_instructions"
             )
@@ -586,6 +651,8 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         ),
         actif=ligne.get("actif", True),
         categorie_id=ligne.get("categorie_id"),
+        matiere=ligne.get("matiere"),
+        matiere_detail=ligne.get("matiere_detail"),
         profil_utilisateur_schema=[
             ChampProfilUtilisateur(**c) for c in (ligne.get("profil_utilisateur_schema") or [])
         ],
@@ -626,6 +693,8 @@ class ModifierAgentPayload(BaseModel):
     description: Optional[str] = None
     actif: Optional[bool] = None
     categorie_id: Optional[str] = None
+    matiere: Optional[str] = None
+    matiere_detail: Optional[str] = None
     profil_utilisateur_schema: Optional[List[ChampProfilUtilisateur]] = None
     # Proactivité (25/07) : voir AgentEditable ci-dessus.
     proactivite_active: Optional[bool] = None
@@ -657,7 +726,7 @@ def modifier_agent(
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id, categorie_id, profil_utilisateur_schema, "
+                "actif, owner_id, categorie_id, matiere, matiere_detail, profil_utilisateur_schema, "
                 "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
                 "proactivite_instructions"
             )
@@ -845,6 +914,15 @@ def modifier_agent(
             raise HTTPException(status_code=422, detail="Catégorie inconnue.")
         mise_a_jour["categorie_id"] = payload.categorie_id
 
+    if payload.matiere is not None:
+        _valider_et_verifier_disponibilite_matiere(
+            payload.matiere, payload.matiere_detail, agent_id_a_exclure=agent_id
+        )
+        mise_a_jour["matiere"] = payload.matiere
+        mise_a_jour["matiere_detail"] = (
+            (payload.matiere_detail or "").strip() or None if payload.matiere == "Autre" else None
+        )
+
     if not mise_a_jour:
         raise HTTPException(status_code=422, detail="Rien à modifier.")
 
@@ -902,6 +980,8 @@ def modifier_agent(
         sous_titre=ui_config.get("sous_titre_accueil", ""),
         actif=mise_a_jour.get("actif", ligne.get("actif", True)),
         categorie_id=mise_a_jour.get("categorie_id", ligne.get("categorie_id")),
+        matiere=mise_a_jour.get("matiere", ligne.get("matiere")),
+        matiere_detail=mise_a_jour.get("matiere_detail", ligne.get("matiere_detail")),
         proactivite_active=mise_a_jour.get("proactivite_active", ligne.get("proactivite_active", False)),
         proactivite_delai_jours=mise_a_jour.get("proactivite_delai_jours", ligne.get("proactivite_delai_jours", 4)),
         proactivite_cooldown_jours=mise_a_jour.get(
