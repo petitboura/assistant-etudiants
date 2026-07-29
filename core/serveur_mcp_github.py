@@ -29,7 +29,7 @@ Trois outils :
 import logging
 
 import requests
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 from connexions.oauth_generique import obtenir_token_valide
 

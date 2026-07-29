@@ -18,7 +18,7 @@ optionnelle -- voir generation_images.py, mis à jour le 21/07/2026).
 
 import logging
 
-from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.mcpserver import MCPServer as FastMCP, Context
 
 from core.generation_documents import (
     generer_pdf_depuis_markdown,
