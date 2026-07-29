@@ -98,14 +98,17 @@ app = FastAPI(title="Djiguigne API", version="0.1.0", lifespan=_lifespan)
 # Serveur MCP interne (documents/code/images), monté en sous-application
 # ASGI : voir core/serveur_mcp_generation.py pour le detail des outils, et
 # registre_outils.py pour son enregistrement côté agent (nom "generation").
-# streamable_http_path="/" (configuré dans le serveur lui-même) fait que
+# CORRECTION (29/07) : mcp 2.0.0 a deplace stateless_http et
+# streamable_http_path du constructeur MCPServer(...) vers
+# streamable_http_app(...) -- voir les 2 fichiers serveur_mcp_*.py, qui ne
+# les passent plus a la construction. streamable_http_path="/" fait que
 # le point d'entree final est bien /mcp/generation, sans /mcp en trop.
-app.mount("/mcp/generation", mcp_generation.streamable_http_app())
+app.mount("/mcp/generation", mcp_generation.streamable_http_app(stateless_http=True, streamable_http_path="/"))
 
 # Serveur MCP interne (exploration/lecture/écriture GitHub) : voir
 # core/serveur_mcp_github.py, monté de la même façon que "generation"
 # ci-dessus. registre_outils.py l'enregistre sous le nom "github".
-app.mount("/mcp/github", mcp_github.streamable_http_app())
+app.mount("/mcp/github", mcp_github.streamable_http_app(stateless_http=True, streamable_http_path="/"))
 
 # Domaines autorisés à appeler cette API. "http://localhost:3000" est le
 # port par defaut de `npm run dev` en Next.js, a garder tant que le

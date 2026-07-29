@@ -36,11 +36,7 @@ from connexions.oauth_generique import obtenir_token_valide
 TAILLE_MAX_ARBORESCENCE = 300  # entrées max listées, pour un gros dépôt
 LONGUEUR_MAX_FICHIER = 20_000  # caractères, par fichier lu
 
-mcp_github = FastMCP(
-    name="github",
-    stateless_http=True,
-    streamable_http_path="/",
-)
+mcp_github = FastMCP(name="github")
 
 
 def _get_secret(key):

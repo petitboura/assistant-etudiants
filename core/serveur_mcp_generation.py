@@ -57,11 +57,7 @@ from core.generation_site import (
 )
 from core.bibliotheque_fichiers import chercher_fichiers as _chercher_fichiers
 
-mcp_generation = FastMCP(
-    name="generation",
-    stateless_http=True,
-    streamable_http_path="/",
-)
+mcp_generation = FastMCP(name="generation")
 
 
 @mcp_generation.tool()
