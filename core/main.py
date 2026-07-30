@@ -1804,20 +1804,38 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
         # première itération de cette boucle.
         outil_deja_appele = any(m.get("role") == "tool" for m in messages_agent)
         kwargs_tool_choice = {"tool_choice": "required"} if (outils_mcp and not outil_deja_appele) else {}
+
+        # Reserve de tokens de sortie (2026-07-30, correction demandee par
+        # Bourama) : jusqu'ici 8192 fixe pour TOUS les appels, principal
+        # comme fallbacks, meme quand un outil est force. Or Groq compare
+        # cette reserve demandee (pas l'usage reel) a la limite TPM du
+        # modele AVANT meme de generer quoi que ce soit -- plusieurs
+        # modeles de la cascade plafonnent autour de 8000 TPM cote gratuit,
+        # donc demander 8192 fait echouer l'appel des le depart, meme sur
+        # un premier message tout simple (ex: "genere-moi une image"),
+        # constate par Bourama le 30/07. Trois cas distincts desormais :
+        #   1. Outil force, pas encore appele ce tour-ci (tool_choice=
+        #      "required" ci-dessus) : le modele ne fait qu'emettre un
+        #      appel structure, pas de prose -- reserve minimale.
+        #   2. Reponse texte normale sur GROQ_PRIMARY (gpt-oss-120b) :
+        #      garder 8192, c'est le fix d'origine (27/07) contre les
+        #      reponses coupees en plein milieu (raisonnement + texte
+        #      partagent le meme budget sur ce modele).
+        #   3. Reponse texte normale sur un modele de secours : reduit a
+        #      4096 -- ces modeles servent justement a economiser du
+        #      debit quand le principal sature, pas de raison de leur
+        #      reserver autant que lui.
+        if kwargs_tool_choice:
+            reserve_tokens = 512
+        elif modele == GROQ_PRIMARY:
+            reserve_tokens = 8192
+        else:
+            reserve_tokens = 4096
+
         completion = client_groq.chat.completions.create(
             model=modele,
             messages=messages_agent,
-            # Bug en cours d'investigation (27/07, signalé par Bourama) :
-            # une réponse finale après appel d'outil s'arrête parfois net
-            # en plein milieu (ex: URL d'un fichier généré coupée avant sa
-            # fin) -- suspect : sur gpt-oss-120b, le raisonnement (CoT) et
-            # le texte de réponse partagent le MÊME budget de tokens de
-            # sortie, et laisser max_completion_tokens=None laissait Groq
-            # choisir un défaut qui peut s'avérer trop juste une fois le
-            # raisonnement déduit. La doc Groq elle-même recommande de
-            # toujours fixer une valeur explicite pour ce modèle (exemple
-            # officiel : 8192) plutôt que de compter sur un défaut implicite.
-            max_completion_tokens=8192,
+            max_completion_tokens=reserve_tokens,
             tools=outils_mcp if outils_mcp else None,
             stream=True,
             timeout=DELAI_MAX_PAR_APPEL,
