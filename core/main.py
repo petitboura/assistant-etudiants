@@ -200,6 +200,54 @@ def _ressemble_a_du_json_casse(texte: str) -> bool:
     return '"name"' in debut and '"arguments"' in debut
 
 
+def _urls_generation_manquantes(reponse_texte: str, messages_agent) -> list:
+    """
+    Filet de securite (31/07, demande Bourama) : quand GROQ_PRIMARY sature
+    son quota TPM, la cascade bascule sur un modele de secours (ex.
+    llama-3.3-70b-versatile) pour rediger la reponse finale -- avec le
+    meme contexte, y compris le resultat d'un outil de generation
+    (image/pdf/code...) deja execute ce tour-ci. Ce modele plus simple
+    "oublie" parfois de reprendre le lien dans sa reponse alors que le
+    fichier a bien ete genere avec succes (l'appel outil, lui, n'a pas
+    echoue). Cette fonction repere ces URLs "orphelines" : presentes dans
+    un resultat d'outil de CE TOUR mais absentes du texte final envoye a
+    l'utilisateur -- pour qu'on puisse les rajouter nous-memes plutot que
+    de dependre du modele.
+    """
+    urls_manquantes = []
+    for message in reversed(messages_agent):
+        if message.get("role") != "tool":
+            break  # les messages "tool" d'un meme tour sont toujours groupes en fin de liste
+        contenu = message.get("content")
+        if not isinstance(contenu, str) or not _ressemble_a_une_simple_url(contenu):
+            continue
+        correspondance = re.search(r"https?://\S+", contenu)
+        if not correspondance:
+            continue
+        url = correspondance.group(0).rstrip(").,;\"'")
+        if url and url not in reponse_texte and url not in urls_manquantes:
+            urls_manquantes.append(url)
+    return urls_manquantes
+
+
+def _completer_liens_manquants(reponse_accumulee, messages_agent):
+    """
+    A appeler juste apres une reponse finale reussie (voir
+    _urls_generation_manquantes) : si des liens de fichiers generes ce
+    tour-ci manquent dans la reponse, les rajoute a la fois dans le texte
+    envoye a l'utilisateur ("reponse", pour l'affichage immediat) ET dans
+    `reponse_accumulee` (pour que l'historique sauvegarde en garde trace).
+    Retourne l'evenement a yielder, ou None si rien ne manquait.
+    """
+    texte_actuel = "".join(reponse_accumulee)
+    manquantes = _urls_generation_manquantes(texte_actuel, messages_agent)
+    if not manquantes:
+        return None
+    ajout = "".join(f"\n\n[Voir le fichier généré]({url})" for url in manquantes)
+    reponse_accumulee.append(ajout)
+    return {"type": "reponse", "texte": ajout}
+
+
 def _ressemble_a_une_simple_url(contenu: str) -> bool:
     """
     Vrai si le resultat d'un outil n'est (essentiellement) qu'un lien nu,
@@ -2527,6 +2575,9 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 _agent_groq(client_groq, messages_agent, outils_mcp, table_routage, agent_nom=agent_nom),
                 reponse_accumulee,
             )
+            evenement_lien_manquant = _completer_liens_manquants(reponse_accumulee, messages_agent)
+            if evenement_lien_manquant:
+                yield evenement_lien_manquant
             ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
             if ids_historique:
                 yield {"type": "meta", **ids_historique}
@@ -2562,6 +2613,9 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     ),
                     reponse_accumulee,
                 )
+                evenement_lien_manquant = _completer_liens_manquants(reponse_accumulee, messages_agent)
+                if evenement_lien_manquant:
+                    yield evenement_lien_manquant
                 ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
                 # Signale au frontend quand la reponse vient d'un modele de
                 # qualite reduite (demande Bourama, 26/07) : evite que
