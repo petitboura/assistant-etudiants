@@ -200,6 +200,20 @@ def _ressemble_a_du_json_casse(texte: str) -> bool:
     return '"name"' in debut and '"arguments"' in debut
 
 
+def _ressemble_a_une_simple_url(contenu: str) -> bool:
+    """
+    Vrai si le resultat d'un outil n'est (essentiellement) qu'un lien nu,
+    comme le renvoient generer_image/generer_document/generer_code/
+    generer_site_zip/deployer_site... -- typiquement une courte phrase
+    d'accompagnement suivie d'une URL, sans structure JSON. Sert a
+    exclure ces resultats de _debut_provient_d_un_resultat_outil : les
+    reutiliser dans la reponse est le comportement normal et voulu, pas
+    une fuite a masquer.
+    """
+    c = contenu.strip()
+    return ("http://" in c or "https://" in c) and "{" not in c and "\"name\"" not in c
+
+
 def _debut_provient_d_un_resultat_outil(debut: str, messages_agent) -> bool:
     """
     Deuxieme cas signale par Bourama (25/07), distinct de
@@ -222,7 +236,28 @@ def _debut_provient_d_un_resultat_outil(debut: str, messages_agent) -> bool:
         if message.get("role") != "tool":
             break  # les messages "tool" d'un meme tour sont toujours groupes en fin de liste
         contenu = message.get("content")
-        if isinstance(contenu, str) and debut[:40] in contenu:
+        # CORRECTION (31/07, signalee par Bourama -- lien image/pdf tronque
+        # a l'affichage) : l'ancienne comparaison (`debut[:40] in contenu`)
+        # declenchait un faux positif des qu'une URL renvoyee par un outil
+        # de generation (image/pdf/code...) etait reutilisee -- normalement
+        # -- par le modele dans sa reponse markdown : cette URL apparait
+        # par definition dans le contenu de l'outil, meme quand le modele
+        # l'integre proprement dans une phrase. Ancrer la comparaison sur
+        # le DEBUT du contenu de l'outil ne suffit pas non plus : quand le
+        # buffer de streaming est coupe pile au debut de l'URL (cf
+        # _position_sure_pour_flush), ce debut coincide quand meme avec le
+        # debut du resultat de l'outil. La vraie distinction est donc :
+        # un resultat d'outil qui n'est QU'une URL nue (generer_image,
+        # generer_document, generer_code...) est fait pour etre reutilise
+        # tel quel -- ce n'est jamais une "fuite" -- alors qu'un resultat
+        # structure (JSON de GitHub/Notion/Tavily/Wolfram...) recopie
+        # verbatim, lui, est bien le bug vise ici. On ignore donc les
+        # resultats d'outils qui ne sont qu'un lien.
+        if not isinstance(contenu, str):
+            continue
+        if _ressemble_a_une_simple_url(contenu):
+            continue
+        if debut[:40] in contenu:
             return True
     return False
 
@@ -353,6 +388,30 @@ SEUIL_VERIF_JSON = 60
 RESERVE_SUFFIXE = 50
 
 
+_CARACTERES_FIN_URL = (" ", "\n", "\t", ")", "]", '"', "'")
+
+
+def _position_sure_pour_flush(buffer: str, position_max: int) -> int:
+    """
+    Renvoie une position <= position_max a laquelle on peut flusher sans
+    risquer de couper une URL en plein milieu (bug signale par Bourama le
+    31/07 : lien d'image/pdf tronque et casse a l'affichage cote
+    frontend). Cherche la derniere occurrence de "http" avant
+    position_max ; si rien entre ce "http" et position_max ne ressemble a
+    une fin d'URL (espace, retour a la ligne, guillemet, parenthese ou
+    crochet fermant), on considere l'URL encore en cours de formation et
+    on recule le point de flush jusqu'a son debut -- elle sera flushee
+    d'un seul bloc une fois complete, au prochain passage.
+    """
+    dernier_http = buffer.rfind("http", 0, position_max)
+    if dernier_http == -1:
+        return position_max
+    segment = buffer[dernier_http:position_max]
+    if any(caractere in segment for caractere in _CARACTERES_FIN_URL):
+        return position_max  # l'URL semble deja terminee avant position_max
+    return dernier_http
+
+
 def _nouvel_etat_filtre_texte():
     """Etat initial pour _traiter_fragment_texte / _finaliser_fragment_texte
     (voir ces fonctions). Un etat par passage de streaming Groq."""
@@ -422,12 +481,25 @@ def _traiter_fragment_texte(etat, fragment, messages_agent):
         # On ne flush que le buffer MOINS la marge de securite finale, pour
         # ne jamais couper un motif en cours de formation (voir le
         # commentaire de RESERVE_SUFFIXE plus haut).
-        a_flusher = etat["buffer"][:-RESERVE_SUFFIXE]
-        etat["buffer"] = etat["buffer"][-RESERVE_SUFFIXE:]
-        if _reponse_suspecte_generique(a_flusher, messages_agent):
-            evenements.append({"type": "raisonnement", "texte": a_flusher})
-        else:
-            evenements.append({"type": "reponse", "texte": a_flusher})
+        position_max = len(etat["buffer"]) - RESERVE_SUFFIXE
+        # SECURITE SUPPLEMENTAIRE (31/07, signalee par Bourama -- lien
+        # image/pdf tronque a l'affichage) : ne jamais flusher en plein
+        # milieu d'une URL non terminee (ex. "...supabase.co/storage/v1/
+        # object" sans le reste du chemin ni la parenthese fermante du
+        # markdown) -- meme si la classification reponse/raisonnement est
+        # correcte, couper une URL en deux casse le rendu du lien ou de
+        # l'image cote frontend. Si le dernier "http" avant position_max
+        # ne semble pas encore termine (aucun espace/saut de ligne/") ]"
+        # apres), on recule le point de flush jusqu'au debut de cette URL
+        # et on attend la suite du streaming pour la flusher d'un bloc.
+        position_flush = _position_sure_pour_flush(etat["buffer"], position_max)
+        a_flusher = etat["buffer"][:position_flush]
+        etat["buffer"] = etat["buffer"][position_flush:]
+        if a_flusher:
+            if _reponse_suspecte_generique(a_flusher, messages_agent):
+                evenements.append({"type": "raisonnement", "texte": a_flusher})
+            else:
+                evenements.append({"type": "reponse", "texte": a_flusher})
     return evenements
 
 
