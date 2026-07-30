@@ -2024,50 +2024,23 @@ def _agent_groq(client_groq, messages_agent, outils_mcp, table_routage,
             yield _evenement_confirmation(attente, messages_agent, outils_mcp, table_routage, modele, reasoning_effort, agent_nom)
             return
 
-        # Flux autonome (2026-07-29, demande Bourama, suite au bug "Le
-        # Chien" -- voir docstring de OUTILS_AUTONOMES dans
-        # registre_outils.py). Si TOUS les outils de ce lot sont des
-        # outils de generation/action pure, le modele n'a besoin d'aucun
-        # retour : il savait deja, en emettant l'appel, ce que le
-        # resultat allait contenir (c'est lui qui a choisi le contenu a
-        # generer). Le rappeler ne fait que risquer un doublon/une
-        # invention -- on s'arrete donc ici plutot que de continuer la
-        # boucle vers un nouvel appel Groq. Le texte deja streame ce
-        # tour-ci (s'il y en a -- reponse_directe, voir plus haut) sert
-        # d'annonce, et le resultat s'affiche via les evenements
-        # outil_resultat/fichiers_generes deja emis par _traiter_appels,
-        # independamment de ce texte.
+        # (2026-07-30, demande Bourama : retour au round-trip standard
+        # apres execution des outils -- meme pour les outils de
+        # generation/OUTILS_AUTONOMES. On ne s'arrete plus ici : la
+        # boucle `for` continue naturellement vers un nouvel appel Groq
+        # avec les resultats d'outils ajoutes a messages_agent, pour que
+        # le modele formule sa reponse finale a partir d'eux -- le
+        # fonctionnement standard du tool calling.
         #
-        # Lot MIXTE (un outil autonome + un outil qui a besoin d'un
-        # retour, ex. tavily_search) : NON couvert ici par choix -- on
-        # garde le round-trip existant pour tout le lot dans ce cas, plus
-        # sur qu'une refonte complete du traitement sequentiel (un outil
-        # a la fois) qui toucherait aussi le mecanisme de confirmation et
-        # la cascade de fallback. A traiter separement si besoin.
-        if appels and all(appel["name"] in OUTILS_AUTONOMES for appel in appels):
-            ids_de_ce_lot = {appel["id"] for appel in appels}
-            resultats_par_id = {
-                m["tool_call_id"]: m["content"]
-                for m in messages_agent
-                if m.get("role") == "tool" and m.get("tool_call_id") in ids_de_ce_lot
-            }
-            echecs = [
-                appel["name"] for appel in appels
-                if str(resultats_par_id.get(appel["id"], "")).startswith("Erreur")
-            ]
-            if echecs:
-                yield {
-                    "type": "reponse",
-                    "texte": (
-                        "Désolé, l'action a échoué. Tu peux réessayer."
-                        if len(echecs) == 1 else
-                        "Désolé, certaines actions ont échoué. Tu peux réessayer."
-                    ),
-                }
-            logging.info(
-                f"Flux autonome ({modele}) -- pas de retour au modèle pour {[a['name'] for a in appels]}"
-            )
-            return
+        # La reponse du modele n'est PLUS filtree/masquee cote backend
+        # (choix explicite de Bourama, 2026-07-30) : si le modele
+        # recopie/casse un lien, tant pis, sa reponse s'affiche telle
+        # quelle. Le vrai resultat fiable de l'outil (URL correcte
+        # comprise) reste disponible independamment, via les evenements
+        # outil_resultat/fichiers_generes deja emis par _traiter_appels
+        # -- voir OutilResultatBulle.tsx/FichierChip.tsx cote frontend
+        # pour leur affichage en menu repliable en bas de la reponse.
+
 
     # MAX_ETAPES_OUTILS epuise sans reponse directe : on force une reponse
     # finale (sans autoriser de nouvel appel d'outil).
