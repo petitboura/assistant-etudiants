@@ -39,8 +39,9 @@ def lire_registre_outils(utilisateur=Depends(utilisateur_courant)):
         logging.error(f"ERREUR SUPABASE (lecture registre_outils_plateforme) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de charger le registre pour le moment.")
     generation = [l for l in (res.data or []) if l["categorie"] == 1]
-    serveurs = [l for l in (res.data or []) if l["categorie"] != 1]
-    return {"generation": generation, "serveurs": serveurs}
+    serveurs = [l for l in (res.data or []) if l["categorie"] in (2, 3)]
+    actions_locales = [l for l in (res.data or []) if l["categorie"] == 4]
+    return {"generation": generation, "serveurs": serveurs, "actions_locales": actions_locales}
 
 
 def _verifier_proprietaire(agent_id: str, user_id: str):
@@ -64,8 +65,9 @@ class OutilPlateforme(BaseModel):
 
 
 class DroitsAgentReponse(BaseModel):
-    generation: List[OutilPlateforme]  # categorie 1, par outil
-    serveurs: List[OutilPlateforme]    # categories 2/3, par serveur (un seul outil "serveur_x" chacun)
+    generation: List[OutilPlateforme]       # categorie 1, par outil
+    serveurs: List[OutilPlateforme]         # categories 2/3, par serveur (un seul outil "serveur_x" chacun)
+    actions_locales: List[OutilPlateforme]  # categorie 4, par action (pas envoyees au LLM, juste UI chat)
 
 
 @router.get("", response_model=DroitsAgentReponse)
@@ -80,19 +82,28 @@ def lire_droits_agent(agent_id: str, utilisateur=Depends(utilisateur_courant)):
         coches_serveurs_res = (
             supabase.table("agents_serveurs").select("nom_serveur").eq("agent_id", agent_id).execute()
         )
+        coches_locales_res = (
+            supabase.table("agents_actions_locales").select("nom_action").eq("agent_id", agent_id).execute()
+        )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture droits agent={agent_id}) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de charger les droits pour le moment.")
 
     noms_generation_coches = {l["nom_outil"] for l in (coches_generation_res.data or [])}
     noms_serveurs_coches = {l["nom_serveur"] for l in (coches_serveurs_res.data or [])}
+    noms_locales_coches = {l["nom_action"] for l in (coches_locales_res.data or [])}
 
-    generation, serveurs = [], []
+    generation, serveurs, actions_locales = [], [], []
     for ligne in (registre_res.data or []):
         if ligne["categorie"] == 1:
             generation.append(OutilPlateforme(
                 nom_outil=ligne["nom_outil"], categorie=1, nom_serveur=ligne["nom_serveur"],
                 disponible=ligne["disponible"], coche=ligne["nom_outil"] in noms_generation_coches,
+            ))
+        elif ligne["categorie"] == 4:
+            actions_locales.append(OutilPlateforme(
+                nom_outil=ligne["nom_outil"], categorie=4, nom_serveur=ligne["nom_serveur"],
+                disponible=ligne["disponible"], coche=ligne["nom_outil"] in noms_locales_coches,
             ))
         else:
             serveurs.append(OutilPlateforme(
@@ -100,12 +111,13 @@ def lire_droits_agent(agent_id: str, utilisateur=Depends(utilisateur_courant)):
                 disponible=ligne["disponible"], coche=ligne["nom_serveur"] in noms_serveurs_coches,
             ))
 
-    return DroitsAgentReponse(generation=generation, serveurs=serveurs)
+    return DroitsAgentReponse(generation=generation, serveurs=serveurs, actions_locales=actions_locales)
 
 
 class ModifierDroitsPayload(BaseModel):
-    outils_generation: List[str] = []  # noms d'outils categorie 1 coches
-    serveurs: List[str] = []           # noms de serveurs categories 2/3 coches
+    outils_generation: List[str] = []   # noms d'outils categorie 1 coches
+    serveurs: List[str] = []            # noms de serveurs categories 2/3 coches
+    actions_locales: List[str] = []     # noms d'actions categorie 4 coches (pas envoyees au LLM)
     informer_utilisateurs: bool = True  # case cochee par defaut (agent_updates)
 
 
@@ -120,11 +132,19 @@ def modifier_droits_agent(agent_id: str, payload: ModifierDroitsPayload, utilisa
         avant_srv_res = (
             supabase.table("agents_serveurs").select("nom_serveur").eq("agent_id", agent_id).execute()
         )
-        avant = {l["nom_outil"] for l in (avant_gen_res.data or [])} | {l["nom_serveur"] for l in (avant_srv_res.data or [])}
-        apres = set(payload.outils_generation) | set(payload.serveurs)
+        avant_loc_res = (
+            supabase.table("agents_actions_locales").select("nom_action").eq("agent_id", agent_id).execute()
+        )
+        avant = (
+            {l["nom_outil"] for l in (avant_gen_res.data or [])}
+            | {l["nom_serveur"] for l in (avant_srv_res.data or [])}
+            | {l["nom_action"] for l in (avant_loc_res.data or [])}
+        )
+        apres = set(payload.outils_generation) | set(payload.serveurs) | set(payload.actions_locales)
 
         supabase.table("agents_outils_generation").delete().eq("agent_id", agent_id).execute()
         supabase.table("agents_serveurs").delete().eq("agent_id", agent_id).execute()
+        supabase.table("agents_actions_locales").delete().eq("agent_id", agent_id).execute()
 
         if payload.outils_generation:
             supabase.table("agents_outils_generation").insert(
@@ -134,6 +154,23 @@ def modifier_droits_agent(agent_id: str, payload: ModifierDroitsPayload, utilisa
             supabase.table("agents_serveurs").insert(
                 [{"agent_id": agent_id, "nom_serveur": n} for n in payload.serveurs]
             ).execute()
+        if payload.actions_locales:
+            supabase.table("agents_actions_locales").insert(
+                [{"agent_id": agent_id, "nom_action": n} for n in payload.actions_locales]
+            ).execute()
+
+        # CORRECTION : agents.tools_enabled est une ancienne colonne qui
+        # n'est plus lue par le moteur MCP (voir mcp_tools.py), mais qui
+        # restait figee a sa valeur de creation des la premiere
+        # modification des droits, ce qui pretait a confusion. On la
+        # resynchronise ici (categories grossieres, a titre d'affichage
+        # seulement) pour qu'elle ne mente plus.
+        tools_enabled_legacy = sorted(
+            ({"generation"} if payload.outils_generation else set())
+            | set(payload.serveurs)
+            | ({"ui"} if payload.actions_locales else set())
+        )
+        supabase.table("agents").update({"tools_enabled": tools_enabled_legacy}).eq("id", agent_id).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (modification droits agent={agent_id}) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de modifier les droits pour le moment.")
@@ -165,7 +202,11 @@ def modifier_droits_agent(agent_id: str, payload: ModifierDroitsPayload, utilisa
         user_id=utilisateur.id,
         cible_type="agent",
         cible_id=agent_id,
-        details={"outils_generation": payload.outils_generation, "serveurs": payload.serveurs},
+        details={
+            "outils_generation": payload.outils_generation,
+            "serveurs": payload.serveurs,
+            "actions_locales": payload.actions_locales,
+        },
     )
 
     return {"ok": True, "a_change": a_change}

@@ -185,6 +185,10 @@ class CreerAgentPayload(BaseModel):
     # categories 2/3 (serveur entier) -- voir migration_droits_agents.sql.
     outils_generation_choisis: List[str] = Field(default_factory=list)
     serveurs_choisis: List[str] = Field(default_factory=list)
+    # Ajouté le 2026-07-29 : categorie 4 (actions locales UI, ex.
+    # localisation/clavier LaTeX/dessin -- pas envoyees au LLM, mais le
+    # createur doit quand meme pouvoir les activer/desactiver par agent).
+    actions_locales_choisies: List[str] = Field(default_factory=list)
 
 
 class AgentCree(BaseModel):
@@ -293,7 +297,20 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         "system_prompt": system_prompt,
         "ui_config": ui_config_dict,
         "knowledge_source": knowledge_source,
-        "tools_enabled": payload.outils_choisis,
+        # CORRECTION (2026-07-29) : payload.outils_choisis est l'ancien
+        # champ, plus jamais rempli par le formulaire Next.js (toujours
+        # []), donc cette colonne se figeait a vide des la creation. Le
+        # moteur MCP ne la lit plus (voir mcp_tools.py), mais on la
+        # resynchronise quand meme, a titre d'affichage/diagnostic, avec
+        # les vraies categories choisies -- meme calcul que
+        # modifier_droits_agent, pour ne jamais raconter autre chose que
+        # les vraies tables agents_outils_generation / agents_serveurs /
+        # agents_actions_locales.
+        "tools_enabled": sorted(
+            ({"generation"} if payload.outils_generation_choisis else set())
+            | set(payload.serveurs_choisis)
+            | ({"ui"} if payload.actions_locales_choisies else set())
+        ),
         "owner_id": utilisateur.id,
         # Colonnes ajoutées par la migration pivot_social_etape_b_tables :
         # vitrine publique de l'agent,
@@ -351,6 +368,10 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         if payload.serveurs_choisis:
             supabase.table("agents_serveurs").insert(
                 [{"agent_id": agent_id, "nom_serveur": n} for n in payload.serveurs_choisis]
+            ).execute()
+        if payload.actions_locales_choisies:
+            supabase.table("agents_actions_locales").insert(
+                [{"agent_id": agent_id, "nom_action": n} for n in payload.actions_locales_choisies]
             ).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (insertion droits initiaux agent={agent_id}) : {e}")
@@ -474,14 +495,32 @@ def obtenir_outils_disponibles(agent_id: str, utilisateur=Depends(utilisateur_op
     si certains outils "par utilisateur" (ex: Notion) resteront filtres
     en l'absence de connexion -- comportement identique a une vraie
     conversation.
+
+    Ajout (session suivante, meme jour) : "actions_locales" -- boutons UI
+    du chat qui ne sont PAS des outils LLM (localisation, clavier LaTeX,
+    forcer une recherche, dessin -- prefixe "ui_"), donc invisibles pour
+    lister_outils_autorises_pour_agent. Le createur les active/desactive
+    quand meme par agent (agents_actions_locales, categorie 4 du
+    registre), cf. DroitsAgentCreation.tsx / DroitsAgent.tsx.
     """
     user_id = utilisateur.id if utilisateur else None
     try:
         outils_pour_llm, _ = lister_outils_autorises_pour_agent(get_secret, user_id, agent_id)
+        registre_res = supabase.table("registre_outils_plateforme").select("nom_outil, disponible").eq(
+            "categorie", 4
+        ).execute()
+        locales_res = supabase.table("agents_actions_locales").select("nom_action").eq("agent_id", agent_id).execute()
     except Exception as e:
         logging.error(f"ERREUR (outils disponibles agent {agent_id}) : {e}")
         raise HTTPException(status_code=500, detail="Impossible de charger les outils disponibles pour le moment.")
-    return {"outils": [o["function"]["name"] for o in outils_pour_llm]}
+
+    locales_disponibles = {l["nom_outil"] for l in (registre_res.data or []) if l["disponible"]}
+    locales_coches = {l["nom_action"] for l in (locales_res.data or [])} & locales_disponibles
+
+    return {
+        "outils": [o["function"]["name"] for o in outils_pour_llm],
+        "actions_locales": sorted(locales_coches),
+    }
 
 
 class MettreAJourVitrinePayload(BaseModel):
