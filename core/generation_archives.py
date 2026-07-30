@@ -17,6 +17,7 @@ import zipfile
 import requests
 
 from api.auth import supabase
+from core.securite_chemins import chemin_relatif_sur
 
 BUCKET = "generations"
 
@@ -46,7 +47,10 @@ def generer_bundle(nom_projet: str, elements: list[dict]) -> str:
     tampon = io.BytesIO()
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
         for element in elements:
-            chemin = element["chemin"]
+            # CORRECTIF 2026-07-30 (audit sécurité) : "chemin" vient du
+            # modèle, jamais vérifié auparavant -- un "../../../etc/x"
+            # s'écrivait tel quel dans le zip (zip-slip à l'extraction).
+            chemin = chemin_relatif_sur(element["chemin"])
             if "url" in element:
                 try:
                     reponse = requests.get(element["url"], timeout=30)

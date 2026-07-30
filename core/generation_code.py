@@ -14,6 +14,7 @@ import uuid
 import zipfile
 
 from api.auth import supabase
+from core.securite_chemins import chemin_relatif_sur
 
 BUCKET = "generations"
 
@@ -57,6 +58,9 @@ def generer_zip_depuis_fichiers(nom_projet: str, fichiers: dict[str, str]) -> st
     """
     if len(fichiers) == 1:
         chemin_fichier, contenu = next(iter(fichiers.items()))
+        # CORRECTIF 2026-07-30 (audit sécurité, voir securite_chemins.py) :
+        # chemin_fichier vient du modèle, jamais vérifié auparavant.
+        chemin_fichier = chemin_relatif_sur(chemin_fichier, repli="fichier.txt")
         chemin_stockage = f"code/{uuid.uuid4()}-{chemin_fichier}"
         try:
             supabase.storage.from_(BUCKET).upload(
@@ -70,7 +74,10 @@ def generer_zip_depuis_fichiers(nom_projet: str, fichiers: dict[str, str]) -> st
     tampon = io.BytesIO()
     with zipfile.ZipFile(tampon, "w", zipfile.ZIP_DEFLATED) as archive:
         for chemin_fichier, contenu in fichiers.items():
-            archive.writestr(chemin_fichier, contenu)
+            # CORRECTIF 2026-07-30 (audit sécurité) : sans ça, un chemin du
+            # type "../../../etc/cron.d/x" s'écrivait tel quel dans le zip
+            # (zip-slip à l'extraction chez la personne qui le télécharge).
+            archive.writestr(chemin_relatif_sur(chemin_fichier), contenu)
     tampon.seek(0)
 
     chemin_stockage = f"code/{uuid.uuid4()}-{nom_projet}.zip"

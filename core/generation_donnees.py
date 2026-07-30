@@ -14,6 +14,7 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom.minidom import parseString
 
 from api.auth import supabase
+from core.securite_chemins import chemin_relatif_sur
 
 BUCKET = "generations"
 
@@ -62,7 +63,11 @@ def exporter_donnees(nom: str, donnees, format: str = "json") -> str:
         contenu = parseString(xml_brut).toprettyxml(indent="  ").encode("utf-8")
         extension, content_type = "xml", "application/xml"
 
-    chemin = f"donnees/{uuid.uuid4()}-{nom}.{extension}"
+    # CORRECTIF 2026-07-30 (audit sécurité) : "nom" vient du modèle, jamais
+    # vérifié auparavant -- un "../../../etc/x" pouvait polluer
+    # l'arborescence du bucket Supabase.
+    nom_sur = chemin_relatif_sur(nom, repli="donnees")
+    chemin = f"donnees/{uuid.uuid4()}-{nom_sur}.{extension}"
     try:
         supabase.storage.from_(BUCKET).upload(chemin, contenu, {"content-type": content_type})
     except Exception as e:
