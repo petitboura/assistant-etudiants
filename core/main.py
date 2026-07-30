@@ -98,7 +98,7 @@ AGENT_ID_PAR_DEFAUT = "tutorat-maths"
 # redemande un resume condense au modele plutot que d'empiler indefiniment
 # l'historique brut dans conversation_summaries.
 SEUIL_RESUME_MESSAGES = 20
-MODELE_RESUME = "llama-3.3-70b-versatile"  # rapide, pas besoin de raisonnement pour resumer
+MODELE_RESUME = "llama-3.1-8b-instant"  # quota TPM separe de la cascade principale (llama-3.3-70b-versatile), evite la contention
 
 # Profil utilisateur dynamique par agent (2026-07-21, voir
 # agents.profil_utilisateur_schema et _mettre_a_jour_profil_utilisateur_si_besoin
@@ -109,7 +109,7 @@ MODELE_RESUME = "llama-3.3-70b-versatile"  # rapide, pas besoin de raisonnement 
 # potentiellement des semaines a se declencher pour un agent utilise
 # occasionnellement.
 SEUIL_PROFIL_MESSAGES = 10
-MODELE_PROFIL = "llama-3.3-70b-versatile"
+MODELE_PROFIL = "llama-3.1-8b-instant"  # meme raison que MODELE_RESUME : quota TPM separe
 
 # Routeur d'outils (2026-07-28, demande Bourama) : premier appel LLM
 # séparé, rapide, qui juge quels outils seraient pertinents pour la
@@ -1125,12 +1125,42 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     instructions = "".join(f"\n{c['contenu']}\n" for c in candidats.get("prompts", []))
     contexte_docs = "".join(f"\n{c['contenu']}\n" for c in candidats.get("documents", []))
 
+    # ORDRE DU PROMPT (2026-07-29, optimisation cache Groq) : du plus stable
+    # au plus volatil, pour maximiser la longueur du prefixe identique
+    # entre appels successifs. Groq met en cache automatiquement le
+    # prefixe commun a une requete recente (jusqu'a 2h) : cette portion
+    # coute moitie prix ET NE COMPTE PLUS dans le quota TPM. Des qu'un
+    # seul caractere differe plus tot dans le texte, tout ce qui suit
+    # perd le benefice du cache -- d'ou l'ordre choisi ici :
+    #   1. Blocs 100% fixes, identiques pour TOUTE la plateforme
+    #      (FORMATS_AFFICHAGE, CONTEXTE_INVISIBLE) -> cache hit sur
+    #      quasi 100% des appels, tous agents/utilisateurs confondus.
+    #   2. Prompt de l'agent (base_notion) -> stable pour TOUS les
+    #      utilisateurs de CET agent, change seulement si le createur
+    #      l'edite.
+    #   3. Memoire + profil utilisateur -> stables pour UN utilisateur
+    #      sur plusieurs messages (ne changent que tous les 10-20
+    #      messages, voir SEUIL_RESUME_MESSAGES/SEUIL_PROFIL_MESSAGES).
+    #   4. Blocs outils (bibliotheque/outils actifs/github) + consigne
+    #      de longueur -> stables tant que la selection de la barre de
+    #      saisie ne change pas d'un message a l'autre (plus volatil que
+    #      3, moins que le RAG).
+    #   5. RAG (instructions/contexte_docs) + recherche forcee -> change
+    #      quasi a chaque message (dependant du texte exact de la
+    #      question).
+    #   6. Date/heure -> LE plus volatil, change chaque minute : doit
+    #      absolument rester en tout dernier pour ne jamais casser le
+    #      prefixe cachable de tout ce qui precede.
+    system_final = INSTRUCTIONS_FORMATS_AFFICHAGE.lstrip("\n") + REGLE_CONTEXTE_INVISIBLE
+
     # get_system_prompt peut renvoyer None (agent sans notion_page_id ni
     # system_prompt renseigné ET aucun prompt jamais mis en cache avec
     # succès) -- repli sur "" pour ne pas planter les += qui suivent,
     # certains inconditionnels (bug repéré le 2026-07-21, jamais déclenché
     # en pratique jusqu'ici mais bien réel pour un agent mal configuré).
-    system_final = system_prompt or ""
+    if system_prompt:
+        system_final += f"\n\n{system_prompt}"
+
     if resume_memoire:
         system_final += (
             "\n\nCONTEXTE DES SESSIONS PRÉCÉDENTES AVEC CETTE PERSONNE (résumé, à utiliser "
@@ -1148,25 +1178,7 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
             "conversations, à utiliser pour personnaliser ta réponse, ne jamais le "
             f"réciter tel quel) :\n{json.dumps(profil_utilisateur, ensure_ascii=False)}"
         )
-    if instructions:
-        system_final += f"\n\n{instructions}"
-    if contexte_docs:
-        system_final += f"\n\n{contexte_docs}"
-    system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
-    if recherche_forcee:
-        # Icône de recherche dans la barre de saisie (djiguigne-frontend) --
-        # forçage manuel pour CE message précis (voir docstring de
-        # chat()). Le modèle peut de toute façon décider seul d'utiliser
-        # Tavily sans ce flag (tool-calling normal) ; ceci garantit que
-        # ça arrive quand l'étudiant veut être sûr.
-        system_final += (
-            "\n\nCONSIGNE DE RECHERCHE : pour ce message précis, utilise "
-            "systématiquement un outil de recherche web (tavily_search) avant de "
-            "répondre, même si tu penses déjà connaître la réponse -- l'étudiant a "
-            "explicitement demandé une recherche fraîche."
-        )
-    system_final += INSTRUCTIONS_FORMATS_AFFICHAGE
-    system_final += REGLE_CONTEXTE_INVISIBLE
+
     # Bouton Outils (2026-07-25, multi-sélection depuis le 26/07 --
     # outil_force est maintenant une LISTE, plus une simple chaîne, voir
     # demande Bourama). Ces deux blocs décrivaient ces capacités de façon
@@ -1232,6 +1244,24 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
             f"passer exactement : {f'"{user_id}"' if user_id else 'une chaîne vide (non connectée)'}. "
             "Dépôts privés accessibles seulement si compte GitHub connecté."
         )
+    system_final += INSTRUCTIONS_LONGUEUR_REPONSE.get(longueur_reponse, "")
+
+    if instructions:
+        system_final += f"\n\n{instructions}"
+    if contexte_docs:
+        system_final += f"\n\n{contexte_docs}"
+    if recherche_forcee:
+        # Icône de recherche dans la barre de saisie (djiguigne-frontend) --
+        # forçage manuel pour CE message précis (voir docstring de
+        # chat()). Le modèle peut de toute façon décider seul d'utiliser
+        # Tavily sans ce flag (tool-calling normal) ; ceci garantit que
+        # ça arrive quand l'étudiant veut être sûr.
+        system_final += (
+            "\n\nCONSIGNE DE RECHERCHE : pour ce message précis, utilise "
+            "systématiquement un outil de recherche web (tavily_search) avant de "
+            "répondre, même si tu penses déjà connaître la réponse -- l'étudiant a "
+            "explicitement demandé une recherche fraîche."
+        )
 
     # Contexte système "date/heure actuelle" (2026-07-20) : sans ça, le
     # modèle ne sait pas qu'on est en 2026 et peut situer les événements
@@ -1244,7 +1274,10 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     # ChatIA.tsx:envoyerMessage), pas d'une valeur choisie côté serveur.
     # Repli sur UTC si absent ou si le navigateur envoie un nom de fuseau
     # invalide (ZoneInfo lève ZoneInfoNotFoundError) -- jamais une supposition
-    # de pays.
+    # de pays. Ce bloc DOIT rester en tout dernier (voir commentaire
+    # d'ordre en tête de fonction) : il change chaque minute, donc tout ce
+    # qui le suivrait perdrait le benefice du cache Groq -- ici rien ne le
+    # suit.
     try:
         fuseau = ZoneInfo(fuseau_horaire) if fuseau_horaire else ZoneInfo("UTC")
     except Exception:
