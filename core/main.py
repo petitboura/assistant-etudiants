@@ -1660,7 +1660,42 @@ def _traiter_appels(appels, messages_agent, table_routage):
             }
             for future in concurrent.futures.as_completed(futures):
                 appel = futures[future]
-                resultat = future.result()
+                try:
+                    resultat = future.result()
+                except Exception as e:
+                    # CORRECTIF 2026-07-30 (audit UX) : avant, une exception
+                    # levee par un outil (ex: generation_video.py/generation_3d.py
+                    # si fal.ai change son format de reponse, envoyer_pour_signature
+                    # si un signataire est mal forme, etc.) remontait telle
+                    # quelle jusqu'a la cascade de secours dans chat(), qui la
+                    # traitait comme une panne du modele Groq lui-meme -> bascule
+                    # sur un modele de secours SANS AUCUN outil, sans jamais dire
+                    # a la personne que sa generation avait echoue. En plus,
+                    # messages_agent se retrouvait avec un tool_call sans reponse
+                    # correspondante (puisqu'on n'atteignait jamais l'append plus
+                    # bas), ce qui faisait aussi echouer les modeles de secours
+                    # suivants (API tool-calling stricte sur ce point).
+                    #
+                    # Desormais : un outil qui echoue est un RESULTAT normal (visible
+                    # dans le fil, explique au modele dans le meme tour), jamais une
+                    # exception qui remonte. Le modele peut donc reagir dans sa
+                    # propre reponse ("la generation a echoue, veux-tu reessayer ?")
+                    # au lieu de changer de personnalite en silence.
+                    logging.error(f"ERREUR OUTIL ({appel['name']}) : {e}")
+                    resultat = f"Erreur : {_nom_lisible(appel['name'])} a échoué ({e})."
+                    yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} a échoué"}
+                    yield {
+                        "type": "outil_resultat",
+                        "nom_outil": appel["name"],
+                        "nom_lisible": _nom_lisible(appel["name"]),
+                        "resultat": resultat,
+                    }
+                    messages_agent.append({
+                        "role": "tool",
+                        "tool_call_id": appel["id"],
+                        "content": resultat,
+                    })
+                    continue
                 yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
                 # Généralisé (26/07, demande Bourama) : pour N'IMPORTE QUEL
                 # outil, présent ou futur -- pas de liste à maintenir, voir
@@ -2226,23 +2261,50 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 arguments = json.loads(appel["arguments"] or "{}")
             except Exception:
                 arguments = {}
-            resultat = appeler_outil(appel["name"], arguments, table_routage)
-            yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
-            yield {
-                "type": "outil_resultat",
-                "nom_outil": appel["name"],
-                "nom_lisible": _nom_lisible(appel["name"]),
-                "resultat": _resultat_pour_affichage(resultat),
-            }
+            # CORRECTIF 2026-07-30 (audit UX, même principe que
+            # _traiter_appels ci-dessus) : cet appel n'était protégé par
+            # AUCUN try/except -- une exception ici (ex: token GitHub
+            # invalide/expiré, panne réseau) faisait planter tout le flux
+            # sans passer ni par la cascade de secours, ni par MESSAGE_ERREUR :
+            # rien n'était renvoyé à la personne, pas même une erreur générique.
+            deja_ajoute_a_messages_agent = False
+            try:
+                resultat = appeler_outil(appel["name"], arguments, table_routage)
+            except Exception as e:
+                logging.error(f"ERREUR OUTIL APPROUVÉ ({appel['name']}) : {e}")
+                resultat = f"Erreur : {_nom_lisible(appel['name'])} a échoué ({e})."
+                yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} a échoué"}
+                yield {
+                    "type": "outil_resultat",
+                    "nom_outil": appel["name"],
+                    "nom_lisible": _nom_lisible(appel["name"]),
+                    "resultat": resultat,
+                }
+                messages_agent.append({
+                    "role": "tool",
+                    "tool_call_id": appel["id"],
+                    "content": resultat,
+                })
+                deja_ajoute_a_messages_agent = True
+            if not deja_ajoute_a_messages_agent:
+                yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} effectuée"}
+                yield {
+                    "type": "outil_resultat",
+                    "nom_outil": appel["name"],
+                    "nom_lisible": _nom_lisible(appel["name"]),
+                    "resultat": _resultat_pour_affichage(resultat),
+                }
         else:
             resultat = "Action annulée par l'utilisateur : cet outil n'a pas été exécuté."
             yield {"type": "statut_termine", "texte": f"{_nom_lisible(appel['name'])} annulée"}
+            deja_ajoute_a_messages_agent = False
 
-        messages_agent.append({
-            "role": "tool",
-            "tool_call_id": appel["id"],
-            "content": resultat,
-        })
+        if not deja_ajoute_a_messages_agent:
+            messages_agent.append({
+                "role": "tool",
+                "tool_call_id": appel["id"],
+                "content": resultat,
+            })
 
         try:
             yield from _agent_groq(
