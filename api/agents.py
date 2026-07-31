@@ -88,8 +88,63 @@ def _valider_et_verifier_disponibilite_matiere(
         raise HTTPException(status_code=422, detail="Cette matière est déjà prise par une autre IA.")
 
 
-class LigneComportement(BaseModel):
-    type_requete: str = ""
+def _valider_et_verifier_disponibilite_langue_africaine(
+    langue_africaine: Optional[str],
+    agent_id_a_exclure: Optional[str] = None,
+) -> None:
+    """
+    5ème bouton de la page Produit du vitrine, "Langues africaines"
+    (Bourama, 2026-07-31). Contrairement à `matiere`, texte libre : pas
+    de liste fixe, le créateur tape la langue lui-même (ex: "Bambara",
+    "Wolof"...). Même règle "une seule IA par [valeur]" que le système
+    matière -- même structure de vérification (message clair avant
+    l'erreur SQL brute), contrainte UNIQUE en base
+    (agents_langue_africaine_unique) comme garde-fou final.
+    """
+    _valider_et_verifier_disponibilite_categorie_libre(
+        "langue_africaine", "Cette langue africaine", langue_africaine, agent_id_a_exclure
+    )
+
+
+# Ajouté le 2026-07-31 (Bourama : 4 champs texte libre à règle identique
+# -- langue_africaine ci-dessus, puis metier/filiere/domaine juste après
+# -- pour compléter les boutons de la page Produit du vitrine). Un seul
+# helper générique plutôt que 4 copier-coller, chaque colonne ayant sa
+# contrainte UNIQUE en base (agents_<colonne>_unique) comme garde-fou
+# final.
+def _valider_et_verifier_disponibilite_categorie_libre(
+    colonne: str,
+    libelle: str,
+    valeur: Optional[str],
+    agent_id_a_exclure: Optional[str] = None,
+) -> None:
+    if valeur is None:
+        return
+    valeur = valeur.strip()
+    if not valeur:
+        raise HTTPException(status_code=422, detail=f"Précise la valeur pour {libelle.lower()}.")
+    try:
+        requete = supabase.table("agents").select("id").eq(colonne, valeur)
+        if agent_id_a_exclure:
+            requete = requete.neq("id", agent_id_a_exclure)
+        deja_prise = requete.execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (vérification disponibilité {colonne}={valeur}) : {e}")
+        deja_prise = None
+    if deja_prise and deja_prise.data:
+        raise HTTPException(status_code=422, detail=f"{libelle} est déjà prise par une autre IA.")
+
+
+def _valider_et_verifier_disponibilite_metier(metier: Optional[str], agent_id_a_exclure: Optional[str] = None) -> None:
+    _valider_et_verifier_disponibilite_categorie_libre("metier", "Ce métier", metier, agent_id_a_exclure)
+
+
+def _valider_et_verifier_disponibilite_filiere(filiere: Optional[str], agent_id_a_exclure: Optional[str] = None) -> None:
+    _valider_et_verifier_disponibilite_categorie_libre("filiere", "Cette filière", filiere, agent_id_a_exclure)
+
+
+def _valider_et_verifier_disponibilite_domaine(domaine: Optional[str], agent_id_a_exclure: Optional[str] = None) -> None:
+    _valider_et_verifier_disponibilite_categorie_libre("domaine", "Ce domaine", domaine, agent_id_a_exclure)
     comportement: str = ""
 
 
@@ -155,6 +210,16 @@ class CreerAgentPayload(BaseModel):
     # libre associé, utilisé seulement quand matiere = "Autre".
     matiere: Optional[str] = None
     matiere_detail: Optional[str] = None
+    # Système "langues africaines" (2026-07-31), indépendant du système
+    # matière ci-dessus -- voir _valider_et_verifier_disponibilite_langue_africaine.
+    # Texte libre, pas de liste fixe.
+    langue_africaine: Optional[str] = None
+    # Métier / Filière / Domaine (2026-07-31, mêmes 4ème/3ème/2ème boutons
+    # de la page Produit) -- même principe : texte libre, une IA par
+    # valeur. Voir _valider_et_verifier_disponibilite_categorie_libre.
+    metier: Optional[str] = None
+    filiere: Optional[str] = None
+    domaine: Optional[str] = None
     # Nouveau flow de création (pivot social) : image de vitrine et
     # description publique de la page agent, distinctes de
     # description_connaissance qui reste un usage interne au RAG.
@@ -224,6 +289,10 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
             raise HTTPException(status_code=422, detail="Catégorie inconnue.")
 
     _valider_et_verifier_disponibilite_matiere(payload.matiere, payload.matiere_detail)
+    _valider_et_verifier_disponibilite_langue_africaine(payload.langue_africaine)
+    _valider_et_verifier_disponibilite_metier(payload.metier)
+    _valider_et_verifier_disponibilite_filiere(payload.filiere)
+    _valider_et_verifier_disponibilite_domaine(payload.domaine)
 
     agent_id = generer_id_depuis_nom(payload.nom)
 
@@ -320,6 +389,10 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         "categorie_id": payload.categorie_id,
         "matiere": payload.matiere,
         "matiere_detail": (payload.matiere_detail or "").strip() or None if payload.matiere == "Autre" else None,
+        "langue_africaine": (payload.langue_africaine or "").strip() or None,
+        "metier": (payload.metier or "").strip() or None,
+        "filiere": (payload.filiere or "").strip() or None,
+        "domaine": (payload.domaine or "").strip() or None,
         "profil_utilisateur_schema": [c.model_dump() for c in payload.profil_utilisateur_schema],
         # Colonne ajoutée le 2026-07-12 (Bourama : le formulaire de
         # modification doit contenir tous les champs de la création).
@@ -663,6 +736,10 @@ class AgentEditable(BaseModel):
     categorie_id: Optional[str] = None
     matiere: Optional[str] = None
     matiere_detail: Optional[str] = None
+    langue_africaine: Optional[str] = None
+    metier: Optional[str] = None
+    filiere: Optional[str] = None
+    domaine: Optional[str] = None
     profil_utilisateur_schema: List[ChampProfilUtilisateur] = Field(default_factory=list)
     # Proactivité (25/07) : le créateur décide QUAND (délai d'inactivité),
     # à quelle fréquence max, et POURQUOI/COMMENT (instructions libres,
@@ -689,7 +766,9 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id, categorie_id, matiere, matiere_detail, profil_utilisateur_schema, "
+                "actif, owner_id, categorie_id, matiere, matiere_detail, langue_africaine, "
+                "metier, filiere, domaine, "
+                "profil_utilisateur_schema, "
                 "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
                 "proactivite_instructions"
             )
@@ -729,6 +808,10 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         categorie_id=ligne.get("categorie_id"),
         matiere=ligne.get("matiere"),
         matiere_detail=ligne.get("matiere_detail"),
+        langue_africaine=ligne.get("langue_africaine"),
+        metier=ligne.get("metier"),
+        filiere=ligne.get("filiere"),
+        domaine=ligne.get("domaine"),
         profil_utilisateur_schema=[
             ChampProfilUtilisateur(**c) for c in (ligne.get("profil_utilisateur_schema") or [])
         ],
@@ -771,6 +854,10 @@ class ModifierAgentPayload(BaseModel):
     categorie_id: Optional[str] = None
     matiere: Optional[str] = None
     matiere_detail: Optional[str] = None
+    langue_africaine: Optional[str] = None
+    metier: Optional[str] = None
+    filiere: Optional[str] = None
+    domaine: Optional[str] = None
     profil_utilisateur_schema: Optional[List[ChampProfilUtilisateur]] = None
     # Proactivité (25/07) : voir AgentEditable ci-dessus.
     proactivite_active: Optional[bool] = None
@@ -802,7 +889,9 @@ def modifier_agent(
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
-                "actif, owner_id, categorie_id, matiere, matiere_detail, profil_utilisateur_schema, "
+                "actif, owner_id, categorie_id, matiere, matiere_detail, langue_africaine, "
+                "metier, filiere, domaine, "
+                "profil_utilisateur_schema, "
                 "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
                 "proactivite_instructions"
             )
@@ -999,6 +1088,26 @@ def modifier_agent(
             (payload.matiere_detail or "").strip() or None if payload.matiere == "Autre" else None
         )
 
+    if payload.langue_africaine is not None:
+        langue_normalisee = payload.langue_africaine.strip() or None
+        _valider_et_verifier_disponibilite_langue_africaine(langue_normalisee, agent_id_a_exclure=agent_id)
+        mise_a_jour["langue_africaine"] = langue_normalisee
+
+    if payload.metier is not None:
+        metier_normalise = payload.metier.strip() or None
+        _valider_et_verifier_disponibilite_metier(metier_normalise, agent_id_a_exclure=agent_id)
+        mise_a_jour["metier"] = metier_normalise
+
+    if payload.filiere is not None:
+        filiere_normalisee = payload.filiere.strip() or None
+        _valider_et_verifier_disponibilite_filiere(filiere_normalisee, agent_id_a_exclure=agent_id)
+        mise_a_jour["filiere"] = filiere_normalisee
+
+    if payload.domaine is not None:
+        domaine_normalise = payload.domaine.strip() or None
+        _valider_et_verifier_disponibilite_domaine(domaine_normalise, agent_id_a_exclure=agent_id)
+        mise_a_jour["domaine"] = domaine_normalise
+
     if not mise_a_jour:
         raise HTTPException(status_code=422, detail="Rien à modifier.")
 
@@ -1058,6 +1167,10 @@ def modifier_agent(
         categorie_id=mise_a_jour.get("categorie_id", ligne.get("categorie_id")),
         matiere=mise_a_jour.get("matiere", ligne.get("matiere")),
         matiere_detail=mise_a_jour.get("matiere_detail", ligne.get("matiere_detail")),
+        langue_africaine=mise_a_jour.get("langue_africaine", ligne.get("langue_africaine")),
+        metier=mise_a_jour.get("metier", ligne.get("metier")),
+        filiere=mise_a_jour.get("filiere", ligne.get("filiere")),
+        domaine=mise_a_jour.get("domaine", ligne.get("domaine")),
         proactivite_active=mise_a_jour.get("proactivite_active", ligne.get("proactivite_active", False)),
         proactivite_delai_jours=mise_a_jour.get("proactivite_delai_jours", ligne.get("proactivite_delai_jours", 4)),
         proactivite_cooldown_jours=mise_a_jour.get(

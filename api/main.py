@@ -188,6 +188,14 @@ class AgentFeedItem(BaseModel):
     # None : les agents créés avant le système matière n'ont pas cette
     # colonne renseignée.
     matiere: Optional[str] = None
+    # Ajouté le 2026-07-31 (5ème bouton "Langues africaines" de la page
+    # Produit du vitrine) -- voir langue_africaine dans api/agents.py.
+    langue_africaine: Optional[str] = None
+    # Ajouté le 2026-07-31 (compléter les boutons Métier/Filière/Domaine
+    # de la page Produit du vitrine, mêmes principes qu'au-dessus).
+    metier: Optional[str] = None
+    filiere: Optional[str] = None
+    domaine: Optional[str] = None
 
 
 class FeedReponse(BaseModel):
@@ -203,6 +211,10 @@ def feed(
     limite: int = Query(20, ge=1, le=50),
     categorie: Optional[str] = Query(None),
     avec_matiere: Optional[bool] = Query(None),
+    avec_langue_africaine: Optional[bool] = Query(None),
+    avec_metier: Optional[bool] = Query(None),
+    avec_filiere: Optional[bool] = Query(None),
+    avec_domaine: Optional[bool] = Query(None),
 ):
     """
     Liste paginée des agents publiés, pour le feed de découverte de la
@@ -216,10 +228,14 @@ def feed(
     `categorie` (ajouté 2026-07-15, système de catégories) : filtre par
     `categorie_id` si fourni, sinon comportement inchangé (tout le feed).
 
-    `avec_matiere` (ajouté 2026-07-31, section "Matières" de la page
-    Produit du vitrine) : si True, ne renvoie que les agents ayant une
-    `matiere` renseignée (système indépendant de `categorie`, voir
-    MATIERES dans api/agents.py). Sinon comportement inchangé.
+    `avec_matiere` / `avec_langue_africaine` / `avec_metier` /
+    `avec_filiere` / `avec_domaine` (ajoutés 2026-07-31, les 5 boutons de
+    la page Produit du vitrine) : si True, ne renvoie que les agents
+    ayant la colonne correspondante renseignée (voir api/agents.py --
+    `matiere` a une liste fixe, les 4 autres sont en texte libre). Tous
+    indépendants les uns des autres et de `categorie` ; combinables si
+    besoin même si la page Produit n'active qu'un bouton à la fois
+    aujourd'hui.
     """
     debut = (page - 1) * limite
     fin = debut + limite - 1
@@ -227,13 +243,25 @@ def feed(
     try:
         requete = (
             supabase.table("agents")
-            .select("id, nom, ui_config, image_vitrine_url, description, categorie_id, matiere", count="exact")
+            .select(
+                "id, nom, ui_config, image_vitrine_url, description, categorie_id, "
+                "matiere, langue_africaine, metier, filiere, domaine",
+                count="exact",
+            )
             .or_("actif.is.null,actif.eq.true")
         )
         if categorie:
             requete = requete.eq("categorie_id", categorie)
         if avec_matiere:
             requete = requete.not_.is_("matiere", "null")
+        if avec_langue_africaine:
+            requete = requete.not_.is_("langue_africaine", "null")
+        if avec_metier:
+            requete = requete.not_.is_("metier", "null")
+        if avec_filiere:
+            requete = requete.not_.is_("filiere", "null")
+        if avec_domaine:
+            requete = requete.not_.is_("domaine", "null")
         res = requete.order("id").range(debut, fin).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture feed, page={page}) : {e}")
@@ -248,6 +276,10 @@ def feed(
             description=ligne.get("description") or "",
             categorie_id=ligne.get("categorie_id"),
             matiere=ligne.get("matiere"),
+            langue_africaine=ligne.get("langue_africaine"),
+            metier=ligne.get("metier"),
+            filiere=ligne.get("filiere"),
+            domaine=ligne.get("domaine"),
         )
         for ligne in (res.data or [])
     ]
