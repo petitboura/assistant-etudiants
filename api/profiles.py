@@ -40,6 +40,13 @@ class ProfilPublic(BaseModel):
     # qui regarde le profil de quelqu'un d'autre (rien de personnel à
     # exposer publiquement ici).
     notifications_proactives_actives: bool = False
+    # Choix d'accueil (31/07) : premier agent choisi par l'utilisateur
+    # depuis les 5 boutons de la page d'accueil du frontend (voir
+    # SectionsProduit-like côté frontend). Une fois choisi, `/` redirige
+    # directement vers son chat au lieu de réafficher les 5 boutons.
+    # Même convention "privée" que notifications_proactives_actives
+    # ci-dessus -- ne vaut la vraie valeur que pour le propriétaire.
+    premier_agent_id: Optional[str] = None
 
 
 class AgentDuCreateur(BaseModel):
@@ -91,7 +98,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
     try:
         profil = (
             supabase.table("profiles")
-            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives")
+            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives, premier_agent_id")
             .eq("user_id", user_id)
             .maybe_single()
             .execute()
@@ -141,6 +148,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
         notifications_proactives_actives=(
             bool(ligne.get("notifications_proactives_actives")) if est_le_proprietaire else False
         ),
+        premier_agent_id=(ligne.get("premier_agent_id") if est_le_proprietaire else None),
     )
 
 
@@ -152,6 +160,11 @@ class MettreAJourProfilPayload(BaseModel):
     # agents.proactivite_active, côté créateur) à le relancer en cas
     # d'inactivité. Double opt-in, voir core/proactivite.py.
     notifications_proactives_actives: Optional[bool] = None
+    # Choix d'accueil (31/07) : voir docstring de ProfilPublic.
+    # Transmettre explicitement "" (chaîne vide) permet de RÉINITIALISER
+    # le choix (redevenir None) -- None seul veut dire "champ omis, ne
+    # rien changer", donc il fallait un moyen distinct de forcer le vide.
+    premier_agent_id: Optional[str] = None
 
 
 @router.patch("/me", response_model=ProfilPublic)
@@ -203,6 +216,8 @@ def mettre_a_jour_mon_profil(
         ligne["avatar_url"] = payload.avatar_url
     if payload.notifications_proactives_actives is not None:
         ligne["notifications_proactives_actives"] = payload.notifications_proactives_actives
+    if payload.premier_agent_id is not None:
+        ligne["premier_agent_id"] = payload.premier_agent_id.strip() or None
 
     try:
         deja_existant = (
@@ -267,7 +282,7 @@ def mettre_a_jour_mon_profil(
     try:
         res = (
             supabase.table("profiles")
-            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives")
+            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives, premier_agent_id")
             .eq("user_id", utilisateur.id)
             .maybe_single()
             .execute()
@@ -281,7 +296,11 @@ def mettre_a_jour_mon_profil(
         user_id=utilisateur.id,
         cible_type="profile",
         cible_id=utilisateur.id,
-        details={"champs_modifies": [c for c in ("nom_affiche", "bio", "avatar_url") if c in ligne]},
+        details={
+            "champs_modifies": [
+                c for c in ("nom_affiche", "bio", "avatar_url", "premier_agent_id") if c in ligne
+            ]
+        },
         request=request,
     )
 
@@ -292,6 +311,7 @@ def mettre_a_jour_mon_profil(
         bio=resultat.get("bio") or "",
         avatar_url=resultat.get("avatar_url"),
         notifications_proactives_actives=bool(resultat.get("notifications_proactives_actives")),
+        premier_agent_id=resultat.get("premier_agent_id"),
     )
 
 
