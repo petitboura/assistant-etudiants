@@ -1172,7 +1172,7 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
 )
 
 
-def _router_outils(message_utilisateur, outils_disponibles):
+def _router_outils(message_utilisateur, outils_disponibles, historique=None):
     """
     Bouton Outils, couche de suggestion automatique (2026-07-28, demande
     Bourama). Coexiste avec la sélection manuelle (BarreDeSaisie.tsx) sans
@@ -1189,6 +1189,14 @@ def _router_outils(message_utilisateur, outils_disponibles):
     frontend (voir chat(), événement SSE "outils_suggeres"), que
     l'utilisateur clique ou ignore.
 
+    historique (2026-07-31, demande Bourama, correction "routeur suggère
+    mal") : quelques derniers échanges de la conversation, même format que
+    messages_base (liste de {"role", "content"}), pour que le routeur juge
+    avec le contexte de la discussion et pas seulement la dernière phrase
+    isolée (ex: "et pour le fichier PDF ?" ne veut rien dire sans savoir de
+    quel fichier on parlait). Optionnel et borné aux 4 derniers messages
+    pour ne pas alourdir cet appel censé rester rapide et bon marché.
+
     Renvoie une liste de noms d'outils (sous-ensemble de
     outils_disponibles, éventuellement vide). Fail-safe strict : toute
     erreur ou réponse mal formée renvoie une liste vide plutôt que de
@@ -1203,6 +1211,15 @@ def _router_outils(message_utilisateur, outils_disponibles):
         f"- {o['function']['name']} : {o['function']['description']}"
         for o in outils_disponibles
     )
+
+    contexte = ""
+    if historique:
+        derniers = historique[-4:]
+        lignes = "\n".join(
+            f"{m.get('role', '?')} : {m.get('content', '')}" for m in derniers
+        )
+        contexte = f"Derniers échanges de la conversation (contexte) :\n{lignes}\n\n"
+
     prompt_routeur = (
         "Tu es un routeur d'outils : tu ne réponds JAMAIS à la question "
         "toi-même, tu décides seulement quels outils (parmi la liste "
@@ -1211,6 +1228,7 @@ def _router_outils(message_utilisateur, outils_disponibles):
         "salutation...), renvoie une liste vide -- ne force jamais un "
         "outil par défaut ni \"au cas où\".\n\n"
         f"Outils disponibles :\n{catalogue}\n\n"
+        f"{contexte}"
         f"Question de l'utilisateur : {message_utilisateur}\n\n"
         "Réponds UNIQUEMENT avec un objet JSON de la forme "
         '{"outils": ["nom_outil_1", "nom_outil_2"]} (noms EXACTEMENT '
@@ -2441,7 +2459,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     # de reprise (déjà retournée avant ce point).
     if not outil_force and message_utilisateur and not image_url and not images_base64:
         outils_disponibles_agent, _ = lister_outils_autorises_pour_agent(get_secret, user_id, agent_id)
-        outils_suggeres = _router_outils(message_utilisateur, outils_disponibles_agent)
+        outils_suggeres = _router_outils(message_utilisateur, outils_disponibles_agent, historique)
         if outils_suggeres:
             yield {"type": "outils_suggeres", "outils": outils_suggeres}
             return
