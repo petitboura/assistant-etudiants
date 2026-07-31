@@ -183,6 +183,11 @@ class AgentFeedItem(BaseModel):
     image_vitrine_url: Optional[str] = None
     description: str = ""
     categorie_id: Optional[str] = None
+    # Ajouté le 2026-07-31 (Bourama : section "Matières" de la page
+    # Produit du vitrine) -- voir MATIERES dans api/agents.py. Repli sur
+    # None : les agents créés avant le système matière n'ont pas cette
+    # colonne renseignée.
+    matiere: Optional[str] = None
 
 
 class FeedReponse(BaseModel):
@@ -197,6 +202,7 @@ def feed(
     page: int = Query(1, ge=1),
     limite: int = Query(20, ge=1, le=50),
     categorie: Optional[str] = Query(None),
+    avec_matiere: Optional[bool] = Query(None),
 ):
     """
     Liste paginée des agents publiés, pour le feed de découverte de la
@@ -209,6 +215,11 @@ def feed(
 
     `categorie` (ajouté 2026-07-15, système de catégories) : filtre par
     `categorie_id` si fourni, sinon comportement inchangé (tout le feed).
+
+    `avec_matiere` (ajouté 2026-07-31, section "Matières" de la page
+    Produit du vitrine) : si True, ne renvoie que les agents ayant une
+    `matiere` renseignée (système indépendant de `categorie`, voir
+    MATIERES dans api/agents.py). Sinon comportement inchangé.
     """
     debut = (page - 1) * limite
     fin = debut + limite - 1
@@ -216,11 +227,13 @@ def feed(
     try:
         requete = (
             supabase.table("agents")
-            .select("id, nom, ui_config, image_vitrine_url, description, categorie_id", count="exact")
+            .select("id, nom, ui_config, image_vitrine_url, description, categorie_id, matiere", count="exact")
             .or_("actif.is.null,actif.eq.true")
         )
         if categorie:
             requete = requete.eq("categorie_id", categorie)
+        if avec_matiere:
+            requete = requete.not_.is_("matiere", "null")
         res = requete.order("id").range(debut, fin).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture feed, page={page}) : {e}")
@@ -234,6 +247,7 @@ def feed(
             image_vitrine_url=ligne.get("image_vitrine_url"),
             description=ligne.get("description") or "",
             categorie_id=ligne.get("categorie_id"),
+            matiere=ligne.get("matiere"),
         )
         for ligne in (res.data or [])
     ]
