@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, supabase
+from core.erreurs import erreur_api
 
 router = APIRouter(prefix="/api/historique", tags=["historique"])
 
@@ -53,7 +54,7 @@ def lister_conversations(utilisateur=Depends(utilisateur_courant)):
         ).data or []
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lister_conversations, user_id={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger l'historique.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_L_HISTORIQUE")
 
     # Un seul aller-retour supabase pour tous les messages (déjà trié du
     # plus récent au plus ancien), puis on garde juste la PREMIÈRE ligne
@@ -139,7 +140,7 @@ def obtenir_historique_agent(agent_id: str, utilisateur=Depends(utilisateur_cour
             f"ERREUR SUPABASE (obtenir_historique_agent, user_id={utilisateur.id}, "
             f"agent_id={agent_id}) : {e}"
         )
-        raise HTTPException(status_code=500, detail="Impossible de charger l'historique.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_L_HISTORIQUE")
 
     return [MessageHistorique(**ligne) for ligne in lignes]
 
@@ -186,7 +187,7 @@ def lister_fils_conversation(agent_id: str, utilisateur=Depends(utilisateur_cour
             f"ERREUR SUPABASE (lister_fils_conversation, user_id={utilisateur.id}, "
             f"agent_id={agent_id}) : {e}"
         )
-        raise HTTPException(status_code=500, detail="Impossible de charger l'historique.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_L_HISTORIQUE")
 
     fils: dict = {}
     for ligne in lignes:
@@ -246,6 +247,6 @@ def obtenir_fil_conversation(agent_id: str, conversation_id: str, utilisateur=De
             f"ERREUR SUPABASE (obtenir_fil_conversation, user_id={utilisateur.id}, "
             f"agent_id={agent_id}, conversation_id={conversation_id}) : {e}"
         )
-        raise HTTPException(status_code=500, detail="Impossible de charger cette conversation.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_CETTE_CONVERSATION")
 
     return [MessageHistorique(**ligne) for ligne in lignes]

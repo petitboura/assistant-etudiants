@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, supabase
 from api.journal import journaliser
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -74,37 +75,34 @@ def _resoudre_profils(user_ids: List[str]) -> dict:
 @router.post("", response_model=Post, status_code=201)
 def creer_post(payload: PostCree, request: Request, utilisateur=Depends(utilisateur_courant)):
     if payload.type not in TYPES_VALIDES:
-        raise HTTPException(status_code=422, detail="Type de publication invalide.")
+        raise erreur_api(422, "TYPE_DE_PUBLICATION_INVALIDE")
 
     contenu = payload.contenu.strip()
     if not contenu:
-        raise HTTPException(status_code=422, detail="Le contenu ne peut pas être vide.")
+        raise erreur_api(422, "LE_CONTENU_NE_PEUT_PAS_ETRE")
 
     titre = (payload.titre or "").strip() or None
 
     if payload.type == "article":
         if not titre:
-            raise HTTPException(status_code=422, detail="Un article doit avoir un titre.")
+            raise erreur_api(422, "ARTICLE_SANS_TITRE")
         if payload.photos_supplementaires:
-            raise HTTPException(status_code=422, detail="Un article n'a pas de photos supplémentaires.")
+            raise erreur_api(422, "ARTICLE_SANS_PHOTOS_SUPP")
         image_couverture_url = payload.image_couverture_url or None
 
     elif payload.type == "reflexion":
         titre = None
         image_couverture_url = None
         if payload.photos_supplementaires:
-            raise HTTPException(status_code=422, detail="Une réflexion ne contient pas de photo.")
+            raise erreur_api(422, "REFLEXION_SANS_PHOTO")
 
     else:  # histoire
         if not titre:
-            raise HTTPException(status_code=422, detail="Une histoire doit avoir un titre.")
+            raise erreur_api(422, "HISTOIRE_SANS_TITRE")
         if not payload.image_couverture_url:
-            raise HTTPException(status_code=422, detail="Une histoire doit avoir une photo de couverture.")
+            raise erreur_api(422, "HISTOIRE_SANS_COUVERTURE")
         if len(payload.photos_supplementaires) > MAX_PHOTOS_SUPPLEMENTAIRES:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Maximum {MAX_PHOTOS_SUPPLEMENTAIRES} photos supplémentaires en plus de la couverture.",
-            )
+            raise erreur_api(422, "PHOTOS_SUPP_MAXIMUM", maximum=MAX_PHOTOS_SUPPLEMENTAIRES)
         image_couverture_url = payload.image_couverture_url
 
     try:
@@ -124,10 +122,10 @@ def creer_post(payload: PostCree, request: Request, utilisateur=Depends(utilisat
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (création post type={payload.type}, user={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de publier pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_PUBLIER_POUR_LE_MOMENT")
 
     if not res.data:
-        raise HTTPException(status_code=500, detail="La publication n'a pas pu être créée (erreur technique).")
+        raise erreur_api(500, "LA_PUBLICATION_N_A_PAS_PU")
 
     ligne = res.data[0]
 
@@ -171,7 +169,7 @@ def lister_posts(
     pour filtrer sur un seul créateur (profil `/u/[id]`).
     """
     if type not in TYPES_VALIDES:
-        raise HTTPException(status_code=422, detail="Type de publication invalide.")
+        raise erreur_api(422, "TYPE_DE_PUBLICATION_INVALIDE")
 
     debut = (page - 1) * limite
     fin = debut + limite - 1
@@ -186,7 +184,7 @@ def lister_posts(
         res = requete.order("created_at", desc=True).range(debut, fin).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (liste posts type={type}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les publications pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_PUBLICATIONS_POUR")
 
     lignes = res.data or []
     profils = _resoudre_profils([l["user_id"] for l in lignes])
@@ -219,18 +217,18 @@ def supprimer_post(post_id: int, request: Request, utilisateur=Depends(utilisate
         res = supabase.table("posts").select("user_id, type").eq("id", post_id).maybe_single().execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture post {post_id} avant suppression) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de supprimer cette publication pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_SUPPRIMER_CETTE_PUBLICATION_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Publication introuvable.")
+        raise erreur_api(404, "PUBLICATION_INTROUVABLE")
     if res.data["user_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cette publication ne t'appartient pas.")
+        raise erreur_api(403, "CETTE_PUBLICATION_NE_T_APPARTIENT_PAS")
 
     try:
         supabase.table("posts").delete().eq("id", post_id).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (suppression post {post_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de supprimer cette publication pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_SUPPRIMER_CETTE_PUBLICATION_POUR")
 
     journaliser(
         action="post.supprime",

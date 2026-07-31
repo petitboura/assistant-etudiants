@@ -15,6 +15,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from api.auth import supabase
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -60,6 +61,9 @@ def rechercher(q: str = Query(..., min_length=1)):
     """
     terme = f"%{q.strip()}%"
 
+    echec_agents = False
+    echec_createurs = False
+
     try:
         agents_res = (
             supabase.table("agents")
@@ -73,6 +77,7 @@ def rechercher(q: str = Query(..., min_length=1)):
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (recherche agents, q={q}) : {e}")
         lignes_agents = []
+        echec_agents = True
 
     try:
         createurs_res = (
@@ -86,6 +91,16 @@ def rechercher(q: str = Query(..., min_length=1)):
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (recherche créateurs, q={q}) : {e}")
         lignes_createurs = []
+        echec_createurs = True
+
+    # Avant : les deux échecs étaient avalés en silence (l'utilisateur
+    # voyait juste "aucun résultat", impossible à distinguer d'une
+    # recherche qui n'a vraiment rien trouvé). Une seule branche en échec
+    # reste tolérée (best-effort), mais si LES DEUX échouent, la recherche
+    # est réellement indisponible : on le dit plutôt que de mentir sur le
+    # nombre de résultats.
+    if echec_agents and echec_createurs:
+        raise erreur_api(500, "RECHERCHE_INDISPONIBLE")
 
     # Même pattern de comptage groupé que GET /api/creators
     # (lister_createurs) : une requête, pas une par créateur.

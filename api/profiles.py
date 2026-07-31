@@ -22,6 +22,7 @@ from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
 from api.agents import supprimer_agent_completement
 from api.journal import journaliser
 from creation_agent import generer_id_depuis_nom
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -97,10 +98,10 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture profil {user_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger ce profil pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_CE_PROFIL_POUR")
 
     if not profil or not profil.data:
-        raise HTTPException(status_code=404, detail="Profil introuvable.")
+        raise erreur_api(404, "PROFIL_INTROUVABLE")
 
     est_le_proprietaire = bool(utilisateur and utilisateur.id == user_id)
 
@@ -232,7 +233,7 @@ def mettre_a_jour_mon_profil(
             supabase.table("profiles").update(ligne).eq("user_id", utilisateur.id).execute()
         except Exception as e:
             logging.error(f"ERREUR SUPABASE (update profil {utilisateur.id}) : {e}")
-            raise HTTPException(status_code=500, detail="Impossible de mettre à jour le profil pour le moment.")
+            raise erreur_api(500, "IMPOSSIBLE_DE_METTRE_A_JOUR_LE")
     else:
         base = generer_id_depuis_nom(payload.nom_affiche or "") or utilisateur.id[:8]
         slug = base
@@ -261,9 +262,7 @@ def mettre_a_jour_mon_profil(
                 supabase.table("profiles").update(ligne).eq("user_id", utilisateur.id).execute()
             except Exception as e_update:
                 logging.error(f"ERREUR SUPABASE (update de repli profil {utilisateur.id}) : {e_update}")
-                raise HTTPException(
-                    status_code=500, detail="Impossible de mettre à jour le profil pour le moment."
-                )
+                raise erreur_api(500, "IMPOSSIBLE_DE_METTRE_A_JOUR_LE")
 
     try:
         res = (
@@ -275,9 +274,7 @@ def mettre_a_jour_mon_profil(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (relecture profil {utilisateur.id}) : {e}")
-        raise HTTPException(
-            status_code=500, detail="Profil mis à jour mais impossible de le relire pour confirmation."
-        )
+        raise erreur_api(500, "PROFIL_RELECTURE_ECHEC")
 
     journaliser(
         action="profil.modifie",
@@ -377,7 +374,4 @@ def supprimer_mon_compte(request: Request, utilisateur=Depends(utilisateur_coura
         supabase.auth.admin.delete_user(user_id)
     except Exception as e:
         logging.error(f"ERREUR SUPABASE AUTH (suppression compte {user_id}) : {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Le contenu a été supprimé mais le compte lui-même n'a pas pu être fermé, réessaie.",
-        )
+        raise erreur_api(500, "PROFIL_FERMETURE_PARTIELLE")

@@ -35,6 +35,7 @@ from core.serveur_mcp_generation import mcp_generation
 from core.notifications_push import traiter_rappels_echus, notifications_push_disponible
 from core.proactivite import verifier_relances_proactives
 from core.serveur_mcp_github import mcp_github
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -265,7 +266,7 @@ def feed(
         res = requete.order("id").range(debut, fin).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture feed, page={page}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger le feed pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LE_FEED_POUR")
 
     agents = [
         AgentFeedItem(
@@ -315,7 +316,7 @@ def lister_categories(seulement_utilisees: bool = Query(False)):
         res = supabase.table("categories").select("id, nom, mots_cles, parent_id").execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture categories) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les catégories pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_CATEGORIES_POUR")
 
     categories = res.data or []
 
@@ -330,7 +331,7 @@ def lister_categories(seulement_utilisees: bool = Query(False)):
             )
         except Exception as e:
             logging.error(f"ERREUR SUPABASE (lecture categorie_id des agents) : {e}")
-            raise HTTPException(status_code=500, detail="Impossible de charger les catégories pour le moment.")
+            raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_CATEGORIES_POUR")
         ids_utilisees = {l["categorie_id"] for l in (res_agents.data or [])}
         categories = [c for c in categories if c["id"] in ids_utilisees]
 
@@ -358,7 +359,7 @@ def lister_matieres():
         res = supabase.table("agents").select("matiere").not_.is_("matiere", "null").execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture matières prises) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les matières pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_MATIERES_POUR")
 
     prises = {ligne["matiere"] for ligne in (res.data or [])}
     toutes = list(MATIERES) + ["Autre"]

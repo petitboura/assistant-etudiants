@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, supabase
 from api.journal import journaliser
+from core.erreurs import erreur_api
 
 router = APIRouter(prefix="/api/memoire", tags=["memoire"])
 
@@ -43,7 +44,7 @@ def obtenir_ma_memoire(utilisateur=Depends(utilisateur_courant)):
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture conversation_summaries user={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger la mémoire pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LA_MEMOIRE_POUR")
 
     return Memoire(resume=(res.data or {}).get("summary") or "" if res else "")
 
@@ -63,7 +64,7 @@ def modifier_ma_memoire(payload: ModifierMemoirePayload, request: Request, utili
         }).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (upsert conversation_summaries user={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'enregistrer la mémoire pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENREGISTRER_LA_MEMOIRE_POUR")
 
     journaliser(action="memoire.modifiee_par_user", user_id=utilisateur.id, cible_type="profile", cible_id=utilisateur.id, request=request)
 
@@ -79,6 +80,6 @@ def effacer_ma_memoire(request: Request, utilisateur=Depends(utilisateur_courant
         supabase.table("conversation_summaries").delete().eq("user_id", utilisateur.id).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (delete conversation_summaries user={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'effacer la mémoire pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_EFFACER_LA_MEMOIRE_POUR")
 
     journaliser(action="memoire.effacee_par_user", user_id=utilisateur.id, cible_type="profile", cible_id=utilisateur.id, request=request)

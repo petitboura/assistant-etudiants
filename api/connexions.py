@@ -19,10 +19,11 @@ Flux, vu du frontend :
 
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant
+from core.erreurs import erreur_api
 from connexions.oauth_generique import demarrer_connexion, est_connecte, etat_en_attente, finaliser_connexion, get_secret
 
 router = APIRouter(prefix="/api/connexions", tags=["connexions"])
@@ -49,7 +50,7 @@ def diagnostic_config(service: str):
 
     config = SERVICES.get(service)
     if not config:
-        return {"erreur": f"Service '{service}' inconnu dans SERVICES."}
+        raise erreur_api(404, "SERVICE_INCONNU", service=service)
 
     return {
         "client_id_present": bool(get_secret(config["client_id_env"])),
@@ -73,7 +74,7 @@ def demarrer(service: str, agent_id: str = "", utilisateur=Depends(utilisateur_c
 
     config = SERVICES.get(service)
     if not config:
-        return {"url": None, "erreur": f"Service '{service}' inconnu côté serveur."}
+        raise erreur_api(404, "SERVICE_INCONNU", service=service)
 
     client_id = get_secret(config["client_id_env"])
     manques = []
@@ -82,19 +83,24 @@ def demarrer(service: str, agent_id: str = "", utilisateur=Depends(utilisateur_c
     if not URL_RETOUR:
         manques.append("URL_RETOUR_APP")
     if manques:
-        return {
-            "url": None,
-            "erreur": (
+        # Message de diagnostic volontairement technique (à l'attention du
+        # créateur/développeur, pas d'un utilisateur final classique) :
+        # surcharge le message par défaut du code plutôt que d'ajouter une
+        # clé i18n pour un cas purement opérationnel.
+        raise erreur_api(
+            503,
+            "CONNEXION_INDISPONIBLE",
+            message=(
                 f"Connexion {service} indisponible : {', '.join(manques)} absent(e) du "
                 "PROCESS backend actuellement déployé (vérifie que ces variables sont bien "
                 "sur le même service Railway que celui-ci, et qu'un redéploiement a eu lieu "
                 "après leur ajout)."
             ),
-        }
+        )
 
     url = demarrer_connexion(service, utilisateur.id, agent_id or None)
     if not url:
-        return {"url": None, "erreur": f"Connexion {service} indisponible (erreur interne, voir logs Railway)."}
+        raise erreur_api(500, "CONNEXION_INDISPONIBLE", service=service)
     return {"url": url}
 
 
@@ -131,7 +137,7 @@ def depots_github(utilisateur=Depends(utilisateur_courant)):
 
     token = obtenir_token_valide("github", utilisateur.id)
     if not token:
-        return {"depots": [], "erreur": "Compte GitHub non connecté."}
+        raise erreur_api(400, "GITHUB_NON_CONNECTE")
 
     try:
         reponse = requests.get(
@@ -142,7 +148,7 @@ def depots_github(utilisateur=Depends(utilisateur_courant)):
         )
         if reponse.status_code != 200:
             logging.error(f"ERREUR LISTE DEPOTS GITHUB (statut {reponse.status_code}) : {reponse.text[:200]}")
-            return {"depots": [], "erreur": "Impossible de récupérer la liste des dépôts."}
+            raise erreur_api(502, "GITHUB_DEPOTS_INDISPONIBLE")
 
         depots = [
             {
@@ -154,6 +160,8 @@ def depots_github(utilisateur=Depends(utilisateur_courant)):
             for d in reponse.json()
         ]
         return {"depots": depots}
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"ERREUR LISTE DEPOTS GITHUB : {e}")
-        return {"depots": [], "erreur": "Impossible de récupérer la liste des dépôts."}
+        raise erreur_api(502, "GITHUB_DEPOTS_INDISPONIBLE")

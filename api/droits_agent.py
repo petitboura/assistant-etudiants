@@ -19,6 +19,7 @@ from typing import List
 
 from api.auth import utilisateur_courant, supabase
 from api.journal import journaliser
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -37,7 +38,7 @@ def lire_registre_outils(utilisateur=Depends(utilisateur_courant)):
         res = supabase.table("registre_outils_plateforme").select("*").execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture registre_outils_plateforme) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger le registre pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LE_REGISTRE_POUR")
     generation = [l for l in (res.data or []) if l["categorie"] == 1]
     serveurs = [l for l in (res.data or []) if l["categorie"] in (2, 3)]
     actions_locales = [l for l in (res.data or []) if l["categorie"] == 4]
@@ -49,11 +50,11 @@ def _verifier_proprietaire(agent_id: str, user_id: str):
         res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} pour droits) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de vérifier cet agent pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_VERIFIER_CET_AGENT_POUR")
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if res.data["owner_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
 
 class OutilPlateforme(BaseModel):
@@ -87,7 +88,7 @@ def lire_droits_agent(agent_id: str, utilisateur=Depends(utilisateur_courant)):
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture droits agent={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les droits pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_DROITS_POUR")
 
     noms_generation_coches = {l["nom_outil"] for l in (coches_generation_res.data or [])}
     noms_serveurs_coches = {l["nom_serveur"] for l in (coches_serveurs_res.data or [])}
@@ -173,7 +174,7 @@ def modifier_droits_agent(agent_id: str, payload: ModifierDroitsPayload, utilisa
         supabase.table("agents").update({"tools_enabled": tools_enabled_legacy}).eq("id", agent_id).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (modification droits agent={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de modifier les droits pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_MODIFIER_LES_DROITS_POUR")
 
     a_change = avant != apres
     if a_change and payload.informer_utilisateurs:

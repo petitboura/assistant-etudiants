@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, supabase
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -89,7 +90,7 @@ def lister_notifications(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture notifications user={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les notifications pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_NOTIFICATIONS_POUR")
 
     lignes = res.data or []
     total = res.count or 0
@@ -236,7 +237,7 @@ def tout_marquer_lu(utilisateur=Depends(utilisateur_courant)):
         ).eq("lu", False).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (tout marquer lu, user={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de marquer les notifications comme lues.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_MARQUER_LES_NOTIFICATIONS_COMME")
 
 
 @router.patch("/{notification_id}", status_code=204)
@@ -253,4 +254,4 @@ def marquer_lu(notification_id: int, utilisateur=Depends(utilisateur_courant)):
         ).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (marquer lu notif={notification_id}, user={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de marquer cette notification comme lue.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_MARQUER_CETTE_NOTIFICATION_COMME")

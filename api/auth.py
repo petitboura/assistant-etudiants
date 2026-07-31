@@ -9,6 +9,7 @@ import os
 import logging
 from fastapi import Header, HTTPException
 from supabase import create_client
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -44,20 +45,20 @@ def utilisateur_courant(authorization: str = Header(default=None)):
     owner_id).
     """
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Token d'authentification manquant")
+        raise erreur_api(401, "TOKEN_MANQUANT")
 
     token = authorization.removeprefix("Bearer ").strip()
     if not token:
-        raise HTTPException(status_code=401, detail="Token d'authentification manquant")
+        raise erreur_api(401, "TOKEN_MANQUANT")
 
     try:
         reponse = supabase.auth.get_user(token)
     except Exception as e:
         logging.error(f"ERREUR verification token Supabase : {e}")
-        raise HTTPException(status_code=401, detail="Token invalide ou expiré")
+        raise erreur_api(401, "TOKEN_INVALIDE")
 
     if not reponse or not reponse.user:
-        raise HTTPException(status_code=401, detail="Token invalide ou expiré")
+        raise erreur_api(401, "TOKEN_INVALIDE")
 
     return reponse.user
 

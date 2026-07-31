@@ -29,6 +29,7 @@ from api.auth import supabase, utilisateur_courant, get_secret
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
 from bibliotheque_fichiers import enregistrer_fichier, indexer_fichier_existant  # noqa: E402
 from conversion_pdf import conversion_disponible, convertir_en_pdf  # noqa: E402
+from core.erreurs import erreur_api
 
 router = APIRouter(prefix="/api/uploads", tags=["uploads"])
 
@@ -56,16 +57,13 @@ async def uploader_image(
     directement utilisable comme `image_vitrine_url` ou `avatar_url`.
     """
     if fichier.content_type not in TYPES_AUTORISES:
-        raise HTTPException(
-            status_code=400,
-            detail="Format non supporté (jpeg, png ou webp uniquement).",
-        )
+        raise erreur_api(400, "FORMAT_NON_SUPPORTE_JPEG_PNG_OU")
 
     contenu = await fichier.read()
     if len(contenu) > TAILLE_MAX_OCTETS:
-        raise HTTPException(status_code=400, detail="Image trop lourde (5 Mo max).")
+        raise erreur_api(400, "IMAGE_TROP_LOURDE_5_MO_MAX")
     if len(contenu) == 0:
-        raise HTTPException(status_code=400, detail="Fichier vide.")
+        raise erreur_api(400, "FICHIER_VIDE")
 
     extension = TYPES_AUTORISES[fichier.content_type]
     chemin = f"{utilisateur.id}/{uuid.uuid4()}.{extension}"
@@ -78,7 +76,7 @@ async def uploader_image(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE STORAGE (upload {chemin}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de l'upload, réessaie.")
+        raise erreur_api(500, "ECHEC_DE_L_UPLOAD_REESSAIE")
 
     url = supabase.storage.from_(BUCKET).get_public_url(chemin)
     return {"url": url}
@@ -108,16 +106,13 @@ async def uploader_image_chat(
     n'accepte de toute façon que ces formats courants pour la vision.
     """
     if fichier.content_type not in TYPES_AUTORISES:
-        raise HTTPException(
-            status_code=400,
-            detail="Format non supporté (jpeg, png ou webp uniquement).",
-        )
+        raise erreur_api(400, "FORMAT_NON_SUPPORTE_JPEG_PNG_OU")
 
     contenu = await fichier.read()
     if len(contenu) > TAILLE_MAX_OCTETS:
-        raise HTTPException(status_code=400, detail="Image trop lourde (5 Mo max).")
+        raise erreur_api(400, "IMAGE_TROP_LOURDE_5_MO_MAX")
     if len(contenu) == 0:
-        raise HTTPException(status_code=400, detail="Fichier vide.")
+        raise erreur_api(400, "FICHIER_VIDE")
 
     extension = TYPES_AUTORISES[fichier.content_type]
     chemin = f"chat/{utilisateur.id}/{uuid.uuid4()}.{extension}"
@@ -130,7 +125,7 @@ async def uploader_image_chat(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE STORAGE (upload chat {chemin}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de l'upload, réessaie.")
+        raise erreur_api(500, "ECHEC_DE_L_UPLOAD_REESSAIE")
 
     url = supabase.storage.from_(BUCKET).get_public_url(chemin)
 
@@ -191,16 +186,13 @@ async def extraire_formule(
     façon que jpeg/png/webp pour la vision.
     """
     if fichier.content_type not in TYPES_AUTORISES:
-        raise HTTPException(
-            status_code=400,
-            detail="Format non supporté (jpeg, png ou webp uniquement).",
-        )
+        raise erreur_api(400, "FORMAT_NON_SUPPORTE_JPEG_PNG_OU")
 
     contenu = await fichier.read()
     if len(contenu) > TAILLE_MAX_OCTETS:
-        raise HTTPException(status_code=400, detail="Image trop lourde (5 Mo max).")
+        raise erreur_api(400, "IMAGE_TROP_LOURDE_5_MO_MAX")
     if len(contenu) == 0:
-        raise HTTPException(status_code=400, detail="Fichier vide.")
+        raise erreur_api(400, "FICHIER_VIDE")
 
     try:
         client_google = genai.Client(api_key=get_secret("GOOGLE_API_KEY"))
@@ -216,11 +208,11 @@ async def extraire_formule(
         )
     except Exception as e:
         logging.error(f"ERREUR GEMINI (extraire-formule) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de l'extraction, réessaie.")
+        raise erreur_api(500, "ECHEC_DE_L_EXTRACTION_REESSAIE")
 
     latex = (reponse.text or "").strip().strip("`").strip()
     if not latex or latex == "AUCUNE_FORMULE_DETECTEE":
-        raise HTTPException(status_code=422, detail="Aucune formule détectée dans cette image.")
+        raise erreur_api(422, "AUCUNE_FORMULE_DETECTEE_DANS_CETTE_IMAGE")
 
     return {"latex": latex}
 
@@ -299,16 +291,13 @@ async def uploader_document_chat(
     de conversion, il est déjà son propre aperçu.
     """
     if fichier.content_type not in TYPES_DOCUMENTS_AUTORISES:
-        raise HTTPException(
-            status_code=400,
-            detail="Format non supporté (PDF, Word .docx ou Excel .xlsx uniquement).",
-        )
+        raise erreur_api(400, "FORMAT_NON_SUPPORTE_PDF_WORD_DOCX")
 
     contenu = await fichier.read()
     if len(contenu) > TAILLE_MAX_DOCUMENT_OCTETS:
-        raise HTTPException(status_code=400, detail="Document trop lourd (15 Mo max).")
+        raise erreur_api(400, "DOCUMENT_TROP_LOURD_15_MO_MAX")
     if len(contenu) == 0:
-        raise HTTPException(status_code=400, detail="Fichier vide.")
+        raise erreur_api(400, "FICHIER_VIDE")
 
     extension = TYPES_DOCUMENTS_AUTORISES[fichier.content_type]
     try:
@@ -320,14 +309,11 @@ async def uploader_document_chat(
             texte = _extraire_texte_xlsx(contenu)
     except Exception as e:
         logging.error(f"ERREUR EXTRACTION DOCUMENT ({fichier.filename}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de la lecture du document.")
+        raise erreur_api(500, "ECHEC_DE_LA_LECTURE_DU_DOCUMENT")
 
     texte = texte.strip()
     if not texte:
-        raise HTTPException(
-            status_code=400,
-            detail="Aucun texte trouvé (document scanné/image sans OCR ?).",
-        )
+        raise erreur_api(400, "AUCUN_TEXTE_TROUVE_DOCUMENT_SCANNE_IMAGE")
 
     tronque = len(texte) > LONGUEUR_MAX_TEXTE_EXTRAIT
     if tronque:
@@ -438,9 +424,9 @@ async def uploader_audio_chat(
 
     contenu = await fichier.read()
     if len(contenu) > TAILLE_MAX_AUDIO_OCTETS:
-        raise HTTPException(status_code=400, detail="Audio trop long (20 Mo max).")
+        raise erreur_api(400, "AUDIO_TROP_LONG_20_MO_MAX")
     if len(contenu) == 0:
-        raise HTTPException(status_code=400, detail="Fichier audio vide.")
+        raise erreur_api(400, "FICHIER_AUDIO_VIDE")
 
     try:
         client_groq = Groq(api_key=get_secret("GROQ_API_KEY"))
@@ -451,11 +437,11 @@ async def uploader_audio_chat(
         )
     except Exception as e:
         logging.error(f"ERREUR TRANSCRIPTION AUDIO (Groq Whisper) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de la transcription, réessaie.")
+        raise erreur_api(500, "ECHEC_DE_LA_TRANSCRIPTION_REESSAIE")
 
     texte = (transcription.text or "").strip()
     if not texte or not _transcription_vraisemblable(texte):
-        raise HTTPException(status_code=400, detail="Rien n'a été compris, réessaie plus près du micro.")
+        raise erreur_api(400, "RIEN_N_A_ETE_COMPRIS_REESSAIE")
 
     # Persistance bibliothèque (2026-07-22) : même logique que
     # image/document/vidéo. S'applique aussi bien à la dictée micro qu'à
@@ -572,16 +558,13 @@ async def uploader_video_chat(
     à /api/chat.
     """
     if fichier.content_type not in TYPES_VIDEO_AUTORISES:
-        raise HTTPException(
-            status_code=400,
-            detail="Format non supporté (mp4, webm ou mov uniquement).",
-        )
+        raise erreur_api(400, "FORMAT_NON_SUPPORTE_MP4_WEBM_OU")
 
     contenu = await fichier.read()
     if len(contenu) > TAILLE_MAX_VIDEO_OCTETS:
-        raise HTTPException(status_code=400, detail="Vidéo trop lourde (40 Mo max).")
+        raise erreur_api(400, "VIDEO_TROP_LOURDE_40_MO_MAX")
     if len(contenu) == 0:
-        raise HTTPException(status_code=400, detail="Fichier vide.")
+        raise erreur_api(400, "FICHIER_VIDE")
 
     extension = TYPES_VIDEO_AUTORISES[fichier.content_type]
     with tempfile.NamedTemporaryFile(suffix=f".{extension}", delete=False) as f_video:
@@ -594,13 +577,10 @@ async def uploader_video_chat(
             duree = _duree_video(chemin_video)
         except Exception as e:
             logging.error(f"ERREUR FFPROBE (durée vidéo) : {e}")
-            raise HTTPException(status_code=500, detail="Vidéo illisible, réessaie avec un autre fichier.")
+            raise erreur_api(500, "VIDEO_ILLISIBLE_REESSAIE_AVEC_UN_AUTRE")
 
         if duree > DUREE_MAX_VIDEO_SECONDES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Vidéo trop longue ({int(duree)}s, {DUREE_MAX_VIDEO_SECONDES}s max).",
-            )
+            raise erreur_api(400, "VIDEO_TROP_LONGUE", duree=int(duree), maximum=DUREE_MAX_VIDEO_SECONDES)
 
         transcript = ""
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f_audio:
@@ -635,7 +615,7 @@ async def uploader_video_chat(
             frames = []
 
         if not transcript and not frames:
-            raise HTTPException(status_code=500, detail="Impossible d'analyser cette vidéo, réessaie.")
+            raise erreur_api(500, "IMPOSSIBLE_D_ANALYSER_CETTE_VIDEO_REESSAIE")
 
         frames_base64 = [base64.b64encode(f).decode("utf-8") for f in frames]
 

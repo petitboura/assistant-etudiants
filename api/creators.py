@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
 from api.journal import journaliser
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -66,7 +67,7 @@ def lister_createurs(page: int = Query(1, ge=1), limite: int = Query(20, ge=1, l
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture liste créateurs, page={page}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les créateurs pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_CREATEURS_POUR")
 
     lignes = res.data or []
 
@@ -132,7 +133,7 @@ def obtenir_etat_follow(creator_id: str, utilisateur=Depends(utilisateur_optionn
         total = total_res.count or 0
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (comptage follows creator={creator_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les abonnés pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_ABONNES_POUR")
 
     suivi_par_moi = False
     if utilisateur is not None:
@@ -164,7 +165,7 @@ def suivre_createur(creator_id: str, request: Request, utilisateur=Depends(utili
     rien changer de plus.
     """
     if creator_id == utilisateur.id:
-        raise HTTPException(status_code=422, detail="Impossible de se suivre soi-même.")
+        raise erreur_api(422, "IMPOSSIBLE_DE_SE_SUIVRE_SOI_MEME")
 
     try:
         supabase.table("follows").upsert(
@@ -175,7 +176,7 @@ def suivre_createur(creator_id: str, request: Request, utilisateur=Depends(utili
         logging.error(
             f"ERREUR SUPABASE (upsert follow follower={utilisateur.id}, creator={creator_id}) : {e}"
         )
-        raise HTTPException(status_code=500, detail="Impossible de suivre ce créateur pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_SUIVRE_CE_CREATEUR_POUR")
 
     journaliser(
         action="follow",
@@ -205,7 +206,7 @@ def ne_plus_suivre_createur(creator_id: str, request: Request, utilisateur=Depen
         logging.error(
             f"ERREUR SUPABASE (delete follow follower={utilisateur.id}, creator={creator_id}) : {e}"
         )
-        raise HTTPException(status_code=500, detail="Impossible de retirer ce follow pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_RETIRER_CE_FOLLOW_POUR")
 
     journaliser(
         action="unfollow",

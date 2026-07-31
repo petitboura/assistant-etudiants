@@ -9,6 +9,7 @@ avec Bourama le 2026-07-20.
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from core.erreurs import erreur_api
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant
@@ -92,7 +93,7 @@ def generer_document_route(demande: DemandeDocument, utilisateur=Depends(utilisa
         url = generer_pdf_depuis_markdown(demande.titre, demande.contenu_markdown)
     except Exception as e:
         logging.error(f"ERREUR génération document (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de la génération du document, réessaie.")
+        raise erreur_api(500, "ECHEC_DE_LA_GENERATION_DU_DOCUMENT")
     return ReponseGeneration(url=url)
 
 
@@ -102,7 +103,7 @@ def generer_code_route(demande: DemandeCode, utilisateur=Depends(utilisateur_cou
         url = generer_zip_depuis_fichiers(demande.nom_projet, demande.fichiers)
     except Exception as e:
         logging.error(f"ERREUR génération code (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de la génération de l'archive, réessaie.")
+        raise erreur_api(500, "ECHEC_GENERATION_ARCHIVE")
     return ReponseGeneration(url=url)
 
 
@@ -111,20 +112,17 @@ def exporter_donnees_route(demande: DemandeDonnees, utilisateur=Depends(utilisat
     try:
         url = exporter_donnees(demande.nom, demande.donnees, demande.format)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise erreur_api(400, "REQUETE_INVALIDE", message=str(e))
     except Exception as e:
         logging.error(f"ERREUR export données (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de l'export, réessaie.")
+        raise erreur_api(500, "ECHEC_DE_L_EXPORT_REESSAIE")
     return ReponseGeneration(url=url)
 
 
 @router.post("/signature")
 def envoyer_pour_signature_route(demande: DemandeSignature, utilisateur=Depends(utilisateur_courant)):
     if not signature_disponible():
-        raise HTTPException(
-            status_code=503,
-            detail="La signature électronique n'est pas encore activée sur cette plateforme.",
-        )
+        raise erreur_api(503, "SIGNATURE_INDISPONIBLE")
     try:
         return envoyer_pour_signature(
             demande.titre,
@@ -134,82 +132,73 @@ def envoyer_pour_signature_route(demande: DemandeSignature, utilisateur=Depends(
         )
     except Exception as e:
         logging.error(f"ERREUR envoi signature (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de l'envoi pour signature, réessaie.")
+        raise erreur_api(500, "ECHEC_DE_L_ENVOI_POUR_SIGNATURE")
 
 
 @router.get("/signature/{signature_request_id}")
 def statut_signature_route(signature_request_id: str, utilisateur=Depends(utilisateur_courant)):
     if not signature_disponible():
-        raise HTTPException(status_code=503, detail="La signature électronique n'est pas encore activée.")
+        raise erreur_api(503, "SIGNATURE_INDISPONIBLE")
     try:
         return statut_signature(signature_request_id)
     except Exception as e:
         logging.error(f"ERREUR statut signature (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de récupérer le statut.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_RECUPERER_LE_STATUT")
 
 
 @router.post("/3d")
 def lancer_3d_route(demande: Demande3D, utilisateur=Depends(utilisateur_courant)):
     if not modele_3d_disponible():
-        raise HTTPException(
-            status_code=503,
-            detail="La génération 3D n'est pas encore activée sur cette plateforme.",
-        )
+        raise erreur_api(503, "GENERATION_3D_INDISPONIBLE")
     try:
         return lancer_generation_3d(demande.prompt)
     except Exception as e:
         logging.error(f"ERREUR lancement 3D (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec du lancement de la génération 3D.")
+        raise erreur_api(500, "ECHEC_LANCEMENT_GENERATION_3D")
 
 
 @router.get("/3d/{request_id}")
 def statut_3d_route(request_id: str, utilisateur=Depends(utilisateur_courant)):
     if not modele_3d_disponible():
-        raise HTTPException(status_code=503, detail="La génération 3D n'est pas encore activée.")
+        raise erreur_api(503, "GENERATION_3D_INDISPONIBLE")
     try:
         return statut_modele_3d(request_id)
     except Exception as e:
         logging.error(f"ERREUR statut 3D (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de récupérer le statut.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_RECUPERER_LE_STATUT")
 
 
 @router.post("/video")
 def lancer_video_route(demande: DemandeVideo, utilisateur=Depends(utilisateur_courant)):
     if not video_disponible():
-        raise HTTPException(
-            status_code=503,
-            detail="La génération vidéo n'est pas encore activée sur cette plateforme.",
-        )
+        raise erreur_api(503, "GENERATION_VIDEO_INDISPONIBLE")
     try:
         return lancer_generation_video(demande.prompt, demande.duree_secondes)
     except Exception as e:
         logging.error(f"ERREUR lancement vidéo (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec du lancement de la génération vidéo.")
+        raise erreur_api(500, "ECHEC_LANCEMENT_GENERATION_VIDEO")
 
 
 @router.get("/video/{request_id}")
 def statut_video_route(request_id: str, utilisateur=Depends(utilisateur_courant)):
     if not video_disponible():
-        raise HTTPException(status_code=503, detail="La génération vidéo n'est pas encore activée.")
+        raise erreur_api(503, "GENERATION_VIDEO_INDISPONIBLE")
     try:
         return statut_video(request_id)
     except Exception as e:
         logging.error(f"ERREUR statut vidéo (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de récupérer le statut.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_RECUPERER_LE_STATUT")
 
 
 @router.post("/audio", response_model=ReponseGeneration)
 def generer_audio_route(demande: DemandeAudio, utilisateur=Depends(utilisateur_courant)):
     if not audio_disponible():
-        raise HTTPException(
-            status_code=503,
-            detail="La génération audio n'est pas encore activée sur cette plateforme.",
-        )
+        raise erreur_api(503, "GENERATION_AUDIO_INDISPONIBLE")
     try:
         url = generer_audio(demande.texte, demande.voix)
     except Exception as e:
         logging.error(f"ERREUR génération audio (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de la génération audio, réessaie.")
+        raise erreur_api(500, "ECHEC_DE_LA_GENERATION_AUDIO_REESSAIE")
     return ReponseGeneration(url=url)
 
 
@@ -222,5 +211,5 @@ def generer_image_route(demande: DemandeImage, utilisateur=Depends(utilisateur_c
         url = generer_image(demande.prompt)
     except Exception as e:
         logging.error(f"ERREUR génération image (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de la génération de l'image, réessaie.")
+        raise erreur_api(500, "ECHEC_GENERATION_IMAGE")
     return ReponseGeneration(url=url)

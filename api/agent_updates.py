@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, utilisateur_optionnel, supabase
 from api.journal import journaliser
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -38,12 +39,12 @@ def _verifier_proprietaire(agent_id: str, user_id: str):
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} pour mise à jour) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de vérifier cet agent pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_VERIFIER_CET_AGENT_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if res.data["owner_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
 
 class MiseAJourCreee(BaseModel):
@@ -76,9 +77,9 @@ def publier_mise_a_jour(
     titre = payload.titre.strip()
     contenu = payload.contenu.strip()
     if not titre:
-        raise HTTPException(status_code=422, detail="Le titre ne peut pas être vide.")
+        raise erreur_api(422, "LE_TITRE_NE_PEUT_PAS_ETRE")
     if not contenu:
-        raise HTTPException(status_code=422, detail="Le contenu ne peut pas être vide.")
+        raise erreur_api(422, "LE_CONTENU_NE_PEUT_PAS_ETRE")
 
     try:
         res = (
@@ -88,10 +89,10 @@ def publier_mise_a_jour(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (insertion mise à jour agent={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de publier la mise à jour pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_PUBLIER_LA_MISE_A")
 
     if not res.data:
-        raise HTTPException(status_code=500, detail="La mise à jour n'a pas pu être créée (erreur technique).")
+        raise erreur_api(500, "LA_MISE_A_JOUR_N_A")
 
     ligne = res.data[0]
 
@@ -141,7 +142,7 @@ def lister_mises_a_jour(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (liste mises à jour agent={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les mises à jour pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_MISES_A")
 
     lignes = res.data or []
     if not lignes:
@@ -222,7 +223,7 @@ def basculer_like(agent_id: str, update_id: int, utilisateur=Depends(utilisateur
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (vérification like update={update_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le like pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENREGISTRER_LE_LIKE_POUR")
 
     try:
         if existe and existe.data:
@@ -237,7 +238,7 @@ def basculer_like(agent_id: str, update_id: int, utilisateur=Depends(utilisateur
             jaime = True
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (toggle like update={update_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le like pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENREGISTRER_LE_LIKE_POUR")
 
     try:
         total_res = (
@@ -284,7 +285,7 @@ def lister_commentaires_maj(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (commentaires update={update_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les commentaires pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_COMMENTAIRES_POUR")
 
     lignes = res.data or []
     noms_par_user_id: dict = {}
@@ -319,7 +320,7 @@ def creer_commentaire_maj(
 ):
     contenu = payload.contenu.strip()
     if not contenu:
-        raise HTTPException(status_code=422, detail="Le commentaire ne peut pas être vide.")
+        raise erreur_api(422, "LE_COMMENTAIRE_NE_PEUT_PAS_ETRE")
 
     try:
         res = (
@@ -329,10 +330,10 @@ def creer_commentaire_maj(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (insertion commentaire update={update_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le commentaire pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENREGISTRER_LE_COMMENTAIRE_POUR")
 
     if not res.data:
-        raise HTTPException(status_code=500, detail="Le commentaire n'a pas pu être créé (erreur technique).")
+        raise erreur_api(500, "LE_COMMENTAIRE_N_A_PAS_PU")
 
     ligne = res.data[0]
     nom_affiche = None

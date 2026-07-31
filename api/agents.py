@@ -31,6 +31,7 @@ from index_documents import indexer_texte, indexer_document, supprimer_chunks_ex
 from storage import upload_document, list_documents, delete_document, get_document_url  # noqa: E402
 from bibliotheque_fichiers import enregistrer_fichier, lister_fichiers, supprimer_fichier  # noqa: E402
 from mcp_tools import lister_outils_autorises_pour_agent  # noqa: E402
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -73,9 +74,9 @@ def _valider_et_verifier_disponibilite_matiere(
     if matiere is None:
         return
     if matiere != "Autre" and matiere not in MATIERES:
-        raise HTTPException(status_code=422, detail="Matière inconnue.")
+        raise erreur_api(422, "MATIERE_INCONNUE")
     if matiere == "Autre" and not (matiere_detail or "").strip():
-        raise HTTPException(status_code=422, detail='Précise la matière dans "Autre".')
+        raise erreur_api(422, "PRECISE_MATIERE_AUTRE")
     try:
         requete = supabase.table("agents").select("id").eq("matiere", matiere)
         if agent_id_a_exclure:
@@ -85,7 +86,7 @@ def _valider_et_verifier_disponibilite_matiere(
         logging.error(f"ERREUR SUPABASE (vérification disponibilité matière={matiere}) : {e}")
         deja_prise = None
     if deja_prise and deja_prise.data:
-        raise HTTPException(status_code=422, detail="Cette matière est déjà prise par une autre IA.")
+        raise erreur_api(422, "CETTE_MATIERE_EST_DEJA_PRISE_PAR")
 
 
 def _valider_et_verifier_disponibilite_langue_africaine(
@@ -122,7 +123,7 @@ def _valider_et_verifier_disponibilite_categorie_libre(
         return
     valeur = valeur.strip()
     if not valeur:
-        raise HTTPException(status_code=422, detail=f"Précise la valeur pour {libelle.lower()}.")
+        raise erreur_api(422, "PRECISE_LA_VALEUR_POUR", libelle=libelle.lower())
     try:
         requete = supabase.table("agents").select("id").eq(colonne, valeur)
         if agent_id_a_exclure:
@@ -132,7 +133,7 @@ def _valider_et_verifier_disponibilite_categorie_libre(
         logging.error(f"ERREUR SUPABASE (vérification disponibilité {colonne}={valeur}) : {e}")
         deja_prise = None
     if deja_prise and deja_prise.data:
-        raise HTTPException(status_code=422, detail=f"{libelle} est déjà prise par une autre IA.")
+        raise erreur_api(422, "EST_DEJA_PRISE_PAR_UNE", libelle=libelle)
 
 
 def _valider_et_verifier_disponibilite_metier(metier: Optional[str], agent_id_a_exclure: Optional[str] = None) -> None:
@@ -269,12 +270,9 @@ class AgentCree(BaseModel):
 @router.post("", response_model=AgentCree, status_code=201)
 def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depends(utilisateur_courant)):
     if not payload.nom.strip():
-        raise HTTPException(status_code=422, detail="Le nom de l'agent est obligatoire.")
+        raise erreur_api(422, "LE_NOM_DE_L_AGENT_EST")
     if not payload.posture_generale.strip() and not payload.limites_globales.strip():
-        raise HTTPException(
-            status_code=422,
-            detail="Remplis au moins la posture générale ou les limites globales.",
-        )
+        raise erreur_api(422, "AGENT_CREATION_CHAMPS_MANQUANTS")
     # categorie_id n'est plus obligatoire (voir CreerAgentPayload) : validé
     # contre la table `categories` uniquement s'il est fourni.
     if payload.categorie_id is not None and payload.categorie_id.strip():
@@ -290,7 +288,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
             logging.error(f"ERREUR SUPABASE (vérification catégorie={payload.categorie_id}) : {e}")
             categorie_existe = None
         if not categorie_existe or not categorie_existe.data:
-            raise HTTPException(status_code=422, detail="Catégorie inconnue.")
+            raise erreur_api(422, "CATEGORIE_INCONNUE")
 
     _valider_et_verifier_disponibilite_matiere(payload.matiere, payload.matiere_detail)
     _valider_et_verifier_disponibilite_langue_africaine(payload.langue_africaine)
@@ -309,13 +307,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         existe_deja = None
 
     if existe_deja and existe_deja.data:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Un agent existe déjà avec un nom trop proche (id généré: {agent_id}). "
-                "Choisis un nom légèrement différent."
-            ),
-        )
+        raise erreur_api(409, "AGENT_NOM_DEJA_PROCHE", agent_id=agent_id)
 
     lignes_comportement = [(l.type_requete, l.comportement) for l in payload.comportements]
     system_prompt = composer_system_prompt(
@@ -427,10 +419,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         supabase.table("agents").insert(nouvelle_ligne).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (insertion agent {agent_id}) : {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Impossible de créer l'agent (erreur technique). Réessaie dans un instant.",
-        )
+        raise erreur_api(500, "IMPOSSIBLE_DE_CREER_L_AGENT_ERREUR")
 
     # Droits de l'agent (categorie 1 par outil, categories 2/3 par
     # serveur), choisis dans le meme formulaire de creation. Best-effort :
@@ -524,14 +513,14 @@ def obtenir_agent_public(agent_id: str):
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent public {agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger cet agent pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_CET_AGENT_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
 
     ligne = res.data
     if ligne.get("actif") is False:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
 
     _ui_config = ligne.get("ui_config") or {}
     return AgentDetailPublic(
@@ -589,7 +578,7 @@ def obtenir_outils_disponibles(agent_id: str, utilisateur=Depends(utilisateur_op
         locales_res = supabase.table("agents_actions_locales").select("nom_action").eq("agent_id", agent_id).execute()
     except Exception as e:
         logging.error(f"ERREUR (outils disponibles agent {agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les outils disponibles pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_OUTILS_DISPONIBLES")
 
     locales_disponibles = {l["nom_outil"] for l in (registre_res.data or []) if l["disponible"]}
     locales_coches = {l["nom_action"] for l in (locales_res.data or [])} & locales_disponibles
@@ -635,14 +624,14 @@ def mettre_a_jour_vitrine(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant mise à jour vitrine) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de mettre à jour la vitrine pour le moment.")
+        raise erreur_api(500, "VITRINE_INDISPONIBLE")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
 
     ligne = res.data
     if ligne["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     mise_a_jour = {}
     if payload.image_vitrine_url is not None:
@@ -651,19 +640,13 @@ def mettre_a_jour_vitrine(
         mise_a_jour["description"] = payload.description.strip()
 
     if not mise_a_jour:
-        raise HTTPException(
-            status_code=422,
-            detail="Rien à mettre à jour (image_vitrine_url et description sont absents).",
-        )
+        raise erreur_api(422, "VITRINE_RIEN_A_METTRE_A_JOUR")
 
     try:
         supabase.table("agents").update(mise_a_jour).eq("id", agent_id).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (mise à jour vitrine agent {agent_id}) : {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Impossible de mettre à jour la vitrine (erreur technique). Réessaie dans un instant.",
-        )
+        raise erreur_api(500, "VITRINE_ERREUR_TECHNIQUE")
 
     ligne.update(mise_a_jour)
 
@@ -782,14 +765,14 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} pour édition) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger l'agent pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_L_AGENT_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
 
     ligne = res.data
     if ligne["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     config_brut = ligne.get("config_creation")
 
@@ -905,14 +888,14 @@ def modifier_agent(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant modification) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de modifier l'agent pour le moment.")
+        raise erreur_api(500, "AGENT_MODIFICATION_INDISPONIBLE")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
 
     ligne = res.data
     if ligne["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     mise_a_jour = {}
 
@@ -1058,11 +1041,11 @@ def modifier_agent(
         mise_a_jour["proactivite_active"] = payload.proactivite_active
     if payload.proactivite_delai_jours is not None:
         if payload.proactivite_delai_jours < 1:
-            raise HTTPException(status_code=422, detail="Le délai d'inactivité doit être d'au moins 1 jour.")
+            raise erreur_api(422, "LE_DELAI_D_INACTIVITE_DOIT_ETRE")
         mise_a_jour["proactivite_delai_jours"] = payload.proactivite_delai_jours
     if payload.proactivite_cooldown_jours is not None:
         if payload.proactivite_cooldown_jours < 1:
-            raise HTTPException(status_code=422, detail="Le délai minimum entre deux relances doit être d'au moins 1 jour.")
+            raise erreur_api(422, "LE_DELAI_MINIMUM_ENTRE_DEUX_RELANCES")
         mise_a_jour["proactivite_cooldown_jours"] = payload.proactivite_cooldown_jours
     if payload.proactivite_instructions is not None:
         mise_a_jour["proactivite_instructions"] = payload.proactivite_instructions.strip()
@@ -1080,7 +1063,7 @@ def modifier_agent(
             logging.error(f"ERREUR SUPABASE (vérification catégorie={payload.categorie_id}) : {e}")
             categorie_existe = None
         if not categorie_existe or not categorie_existe.data:
-            raise HTTPException(status_code=422, detail="Catégorie inconnue.")
+            raise erreur_api(422, "CATEGORIE_INCONNUE")
         mise_a_jour["categorie_id"] = payload.categorie_id
 
     if payload.matiere is not None:
@@ -1113,7 +1096,7 @@ def modifier_agent(
         mise_a_jour["domaine"] = domaine_normalise
 
     if not mise_a_jour:
-        raise HTTPException(status_code=422, detail="Rien à modifier.")
+        raise erreur_api(422, "RIEN_A_MODIFIER")
 
     try:
         # .eq("owner_id", ...) en plus de .eq("id", ...) : sécurité
@@ -1125,10 +1108,7 @@ def modifier_agent(
         ).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (modification agent {agent_id}) : {e}")
-        raise HTTPException(
-            status_code=500,
-            detail="Impossible de modifier l'agent (erreur technique). Réessaie dans un instant.",
-        )
+        raise erreur_api(500, "AGENT_MODIFICATION_ERREUR_TECHNIQUE")
 
     # Journalisé avec la LISTE des champs modifiés, pas leur contenu (le
     # system_prompt notamment peut être long/sensible) : suffisant pour
@@ -1228,11 +1208,11 @@ def tester_proactivite(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} pour test proactivité) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger l'agent pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_L_AGENT_POUR")
     if not agent or not agent.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if agent.data["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     cible_user_id = payload.user_id or utilisateur.id
     # Instructions "brouillon" envoyées par le frontend (pas encore
@@ -1301,7 +1281,7 @@ async def uploader_document(
     `mettre_a_jour_vitrine`).
     """
     if fichier.content_type != "application/pdf":
-        raise HTTPException(status_code=400, detail="Seuls les fichiers PDF sont acceptés.")
+        raise erreur_api(400, "SEULS_LES_FICHIERS_PDF_SONT_ACCEPTES")
 
     try:
         res = (
@@ -1313,16 +1293,16 @@ async def uploader_document(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant upload document) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'ajouter ce document pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_AJOUTER_CE_DOCUMENT_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if res.data["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     contenu = await fichier.read()
     if len(contenu) == 0:
-        raise HTTPException(status_code=400, detail="Fichier vide.")
+        raise erreur_api(400, "FICHIER_VIDE")
 
     nom_original = fichier.filename or "document.pdf"
     nom_stockage = f"{agent_id}__{nom_original}"
@@ -1336,10 +1316,7 @@ async def uploader_document(
         indexer_document(chemin_temp, nom_stockage, agent_id)
     except Exception as e:
         logging.error(f"ERREUR indexation PDF (agent_id={agent_id}, fichier={nom_original}) : {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"L'agent est créé, mais « {nom_original} » n'a pas pu être indexé. Réessaie depuis « Mes agents ».",
-        )
+        raise erreur_api(500, "AGENT_CREE_MAIS_INDEXATION_ECHEC", nom=nom_original)
     finally:
         try:
             os.remove(chemin_temp)
@@ -1378,18 +1355,18 @@ def lister_documents(agent_id: str, utilisateur=Depends(utilisateur_courant)):
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant liste documents) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de lister les documents pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_LISTER_LES_DOCUMENTS_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if res.data["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     try:
         tous_les_fichiers = list_documents()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE STORAGE (liste documents, agent_id={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de lister les documents pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_LISTER_LES_DOCUMENTS_POUR")
 
     prefixe = f"{agent_id}__"
     fichiers_agent = [f for f in tous_les_fichiers if f.startswith(prefixe)]
@@ -1426,22 +1403,22 @@ def supprimer_document(agent_id: str, nom_stockage: str, request: Request, utili
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant suppression document) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de supprimer ce document pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_SUPPRIMER_CE_DOCUMENT_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if res.data["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     if not nom_stockage.startswith(f"{agent_id}__"):
-        raise HTTPException(status_code=403, detail="Ce document n'appartient pas à cet agent.")
+        raise erreur_api(403, "CE_DOCUMENT_N_APPARTIENT_PAS_A")
 
     try:
         delete_document(nom_stockage)
         supprimer_chunks_existants(agent_id, nom_stockage)
     except Exception as e:
         logging.error(f"ERREUR suppression document {nom_stockage} (agent_id={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de supprimer ce document.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_SUPPRIMER_CE_DOCUMENT")
 
     journaliser(
         action="document.supprime",
@@ -1488,10 +1465,10 @@ async def uploader_fichier_bibliotheque(
     généralise le même geste à tous les types de fichiers.
     """
     if not (titre or "").strip() and not (description or "").strip():
-        raise HTTPException(status_code=400, detail="Donne au moins une description ou un titre.")
+        raise erreur_api(400, "DONNE_AU_MOINS_UNE_DESCRIPTION_OU")
 
     if fichier.content_type not in TYPES_BIBLIOTHEQUE_AUTORISES:
-        raise HTTPException(status_code=400, detail="Type de fichier non supporté.")
+        raise erreur_api(400, "TYPE_DE_FICHIER_NON_SUPPORTE")
 
     try:
         res = (
@@ -1503,18 +1480,18 @@ async def uploader_fichier_bibliotheque(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant upload bibliothèque) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'ajouter ce fichier pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_AJOUTER_CE_FICHIER_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if res.data["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     contenu = await fichier.read()
     if len(contenu) == 0:
-        raise HTTPException(status_code=400, detail="Fichier vide.")
+        raise erreur_api(400, "FICHIER_VIDE")
     if len(contenu) > TAILLE_MAX_BIBLIOTHEQUE_OCTETS:
-        raise HTTPException(status_code=400, detail="Fichier trop lourd (50 Mo max).")
+        raise erreur_api(400, "FICHIER_TROP_LOURD_50_MO_MAX")
 
     nom_original = fichier.filename or "fichier"
 
@@ -1528,7 +1505,7 @@ async def uploader_fichier_bibliotheque(
             indexer_document(chemin_temp, nom_stockage_rag, agent_id)
         except Exception as e:
             logging.error(f"ERREUR vectorisation PDF bibliothèque (agent_id={agent_id}, fichier={nom_original}) : {e}")
-            raise HTTPException(status_code=500, detail=f"« {nom_original} » n'a pas pu être vectorisé.")
+            raise erreur_api(500, "FICHIER_VECTORISATION_ECHEC", nom=nom_original)
         finally:
             try:
                 os.remove(chemin_temp)
@@ -1551,7 +1528,7 @@ async def uploader_fichier_bibliotheque(
             description=description_finale,
         )
     except Exception:
-        raise HTTPException(status_code=500, detail="Fichier vectorisé mais échec du stockage en bibliothèque.")
+        raise erreur_api(500, "FICHIER_VECTORISE_MAIS_ECHEC_DU_STOCKAGE")
 
     journaliser(
         action="bibliotheque.ajoute",
@@ -1571,12 +1548,12 @@ def lister_bibliotheque(agent_id: str, utilisateur=Depends(utilisateur_courant))
         res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant liste bibliothèque) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de lister la bibliothèque pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_LISTER_LA_BIBLIOTHEQUE_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if res.data["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     return lister_fichiers("agent", agent_id=agent_id)
 
@@ -1587,12 +1564,12 @@ def supprimer_fichier_bibliotheque(agent_id: str, fichier_id: str, request: Requ
         res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant suppression bibliothèque) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de supprimer ce fichier pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_SUPPRIMER_CE_FICHIER_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if res.data["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     supprimer_fichier(fichier_id)
 
@@ -1630,7 +1607,7 @@ def noter_agent(agent_id: str, payload: NoterAgentPayload, request: Request, uti
     pas, pas besoin de dupliquer cette vérification ici.
     """
     if not 1 <= payload.note <= 5:
-        raise HTTPException(status_code=422, detail="La note doit être comprise entre 1 et 5.")
+        raise erreur_api(422, "LA_NOTE_DOIT_ETRE_COMPRISE_ENTRE")
 
     try:
         supabase.table("agent_ratings").upsert(
@@ -1639,7 +1616,7 @@ def noter_agent(agent_id: str, payload: NoterAgentPayload, request: Request, uti
         ).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (upsert note agent={agent_id}, user={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'enregistrer la note pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENREGISTRER_LA_NOTE_POUR")
 
     journaliser(
         action="agent.note",
@@ -1669,7 +1646,7 @@ def obtenir_note_agent(agent_id: str):
         res = supabase.table("agent_ratings").select("note").eq("agent_id", agent_id).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture notes agent={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger la note pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LA_NOTE_POUR")
 
     notes = [ligne["note"] for ligne in (res.data or [])]
     if not notes:
@@ -1704,7 +1681,7 @@ def creer_commentaire(agent_id: str, payload: CommentaireCree, utilisateur=Depen
     """
     contenu = payload.contenu.strip()
     if not contenu:
-        raise HTTPException(status_code=422, detail="Le commentaire ne peut pas être vide.")
+        raise erreur_api(422, "LE_COMMENTAIRE_NE_PEUT_PAS_ETRE")
 
     try:
         res = (
@@ -1714,10 +1691,10 @@ def creer_commentaire(agent_id: str, payload: CommentaireCree, utilisateur=Depen
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (insertion commentaire agent={agent_id}, user={utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le commentaire pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENREGISTRER_LE_COMMENTAIRE_POUR")
 
     if not res.data:
-        raise HTTPException(status_code=500, detail="Le commentaire n'a pas pu être créé (erreur technique).")
+        raise erreur_api(500, "LE_COMMENTAIRE_N_A_PAS_PU")
 
     ligne = res.data[0]
 
@@ -1771,7 +1748,7 @@ def lister_commentaires(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture commentaires agent={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger les commentaires pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_COMMENTAIRES_POUR")
 
     lignes = res.data or []
 
@@ -1860,18 +1837,18 @@ def supprimer_agent(agent_id: str, request: Request, utilisateur=Depends(utilisa
         res = supabase.table("agents").select("owner_id, nom").eq("id", agent_id).maybe_single().execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant suppression complète) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de supprimer cet agent pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_SUPPRIMER_CET_AGENT_POUR")
 
     if not res or not res.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
     if res.data["owner_id"] != utilisateur.id:
-        raise HTTPException(status_code=403, detail="Cet agent ne t'appartient pas.")
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
 
     try:
         supprimer_agent_completement(agent_id)
     except Exception as e:
         logging.error(f"ERREUR suppression complète agent={agent_id} : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de supprimer cet agent pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_SUPPRIMER_CET_AGENT_POUR")
 
     # Journalisé après coup (pas avant) : on ne veut pas d'entrée
     # "agent.supprime" dans le journal si la suppression a en fait échoué.
@@ -1920,10 +1897,10 @@ def obtenir_mon_profil(agent_id: str, utilisateur=Depends(utilisateur_courant)):
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture schéma profil agent={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible de charger le profil pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LE_PROFIL_POUR")
 
     if not res_agent or not res_agent.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
 
     champs = res_agent.data.get("profil_utilisateur_schema") or []
 
@@ -1940,7 +1917,7 @@ def obtenir_mon_profil(agent_id: str, utilisateur=Depends(utilisateur_courant)):
         logging.error(
             f"ERREUR SUPABASE (lecture agent_user_profiles agent={agent_id}, user={utilisateur.id}) : {e}"
         )
-        raise HTTPException(status_code=500, detail="Impossible de charger le profil pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LE_PROFIL_POUR")
 
     donnees = (res_profil.data or {}).get("donnees") or {} if res_profil else {}
 
@@ -1972,10 +1949,10 @@ def modifier_mon_profil(
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture schéma profil agent={agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le profil pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENREGISTRER_LE_PROFIL_POUR")
 
     if not res_agent or not res_agent.data:
-        raise HTTPException(status_code=404, detail="Agent introuvable.")
+        raise erreur_api(404, "AGENT_INTROUVABLE")
 
     noms_valides = {c["nom"] for c in (res_agent.data.get("profil_utilisateur_schema") or [])}
     donnees_filtrees = {k: v for k, v in payload.donnees.items() if k in noms_valides}
@@ -1994,7 +1971,7 @@ def modifier_mon_profil(
         logging.error(
             f"ERREUR SUPABASE (upsert agent_user_profiles agent={agent_id}, user={utilisateur.id}) : {e}"
         )
-        raise HTTPException(status_code=500, detail="Impossible d'enregistrer le profil pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENREGISTRER_LE_PROFIL_POUR")
 
     journaliser(
         action="profil_utilisateur.modifie_par_user",
@@ -2019,7 +1996,7 @@ def effacer_mon_profil(agent_id: str, request: Request, utilisateur=Depends(util
         logging.error(
             f"ERREUR SUPABASE (delete agent_user_profiles agent={agent_id}, user={utilisateur.id}) : {e}"
         )
-        raise HTTPException(status_code=500, detail="Impossible d'effacer le profil pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_EFFACER_LE_PROFIL_POUR")
 
     journaliser(
         action="profil_utilisateur.efface_par_user",

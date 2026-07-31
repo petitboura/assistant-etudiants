@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant
+from core.erreurs import erreur_api
 from core.notifications_push import (
     enregistrer_abonnement,
     supprimer_abonnement,
@@ -45,7 +46,7 @@ def obtenir_cle_publique():
     Push).
     """
     if not notifications_push_disponible():
-        raise HTTPException(status_code=503, detail="Les notifications push ne sont pas encore activées.")
+        raise erreur_api(503, "NOTIFICATIONS_PUSH_INDISPONIBLE")
     return {"cle_publique": cle_publique_vapid()}
 
 
@@ -60,7 +61,7 @@ def s_abonner(abonnement: Abonnement, utilisateur=Depends(utilisateur_courant)):
         enregistrer_abonnement(utilisateur.id, abonnement.model_dump())
     except Exception as e:
         logging.error(f"ERREUR abonnement push (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec de l'enregistrement de l'abonnement.")
+        raise erreur_api(500, "ECHEC_DE_L_ENREGISTREMENT_DE_L")
 
 
 @router.post("/desabonnement", status_code=204)
@@ -69,4 +70,4 @@ def se_desabonner(desabonnement: Desabonnement, utilisateur=Depends(utilisateur_
         supprimer_abonnement(utilisateur.id, desabonnement.endpoint)
     except Exception as e:
         logging.error(f"ERREUR desabonnement push (utilisateur {utilisateur.id}) : {e}")
-        raise HTTPException(status_code=500, detail="Échec du désabonnement.")
+        raise erreur_api(500, "ECHEC_DU_DESABONNEMENT")

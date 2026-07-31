@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, supabase
+from core.erreurs import erreur_api
 
 logging.basicConfig(level=logging.INFO)
 
@@ -71,11 +72,11 @@ def envoyer_feedback(payload: EnvoyerFeedbackPayload, utilisateur=Depends(utilis
         )
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (insertion feedback, agent_id={payload.agent_id}) : {e}")
-        raise HTTPException(status_code=500, detail="Impossible d'envoyer ce retour pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENVOYER_CE_RETOUR_POUR")
 
     lignes = res.data or []
     if not lignes:
-        raise HTTPException(status_code=500, detail="Impossible d'envoyer ce retour pour le moment.")
+        raise erreur_api(500, "IMPOSSIBLE_D_ENVOYER_CE_RETOUR_POUR")
 
     return FeedbackCree(id=lignes[0]["id"])
 
