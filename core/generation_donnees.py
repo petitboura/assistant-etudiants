@@ -9,6 +9,7 @@ Réutilise le bucket Supabase "generations" (dossier "donnees/").
 
 import json
 import logging
+import re
 import uuid
 from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom.minidom import parseString
@@ -19,6 +20,28 @@ from core.securite_chemins import chemin_relatif_sur
 BUCKET = "generations"
 
 
+def _nom_balise_xml(cle) -> str:
+    """
+    CORRECTIF 2026-07-31 (audit sécurité/UX, même famille que le fix
+    Excel/PDF) : une clé de dict tout à fait normale -- une année ("2024"),
+    un libellé avec un espace ("prix unitaire"), ou contenant ":" --
+    faisait planter exporter_donnees(..., format="xml"). `Element(cle)`
+    ne lève rien lui-même (ElementTree ne valide pas le nom à la
+    création), mais parseString() plus bas, lui, lève bien une
+    xml.parsers.expat.ExpatError ("not well-formed") sur ces noms de
+    balise pourtant produits par du code tout à fait normal.
+
+    Une balise XML doit commencer par une lettre ou "_" (jamais un
+    chiffre) et ne peut contenir que lettres/chiffres/"_"/"-"/".".
+    """
+    nom = re.sub(r"[^\w.-]", "_", str(cle), flags=re.UNICODE)
+    if not nom:
+        return "champ"
+    if not (nom[0].isalpha() or nom[0] == "_"):
+        nom = f"_{nom}"
+    return nom
+
+
 def _dict_vers_xml(nom_racine: str, donnees) -> Element:
     """
     Convertit récursivement un dict/list/valeur simple en arbre XML.
@@ -26,7 +49,7 @@ def _dict_vers_xml(nom_racine: str, donnees) -> Element:
     dicttoxml) : suffisant pour des exports de données simples, pas pour
     des schémas XML avec espaces de noms ou attributs complexes.
     """
-    element = Element(nom_racine)
+    element = Element(_nom_balise_xml(nom_racine))
     if isinstance(donnees, dict):
         for cle, valeur in donnees.items():
             enfant = _dict_vers_xml(str(cle), valeur)
