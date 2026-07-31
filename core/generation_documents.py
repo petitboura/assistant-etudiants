@@ -92,6 +92,21 @@ MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 MIME_PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
+def _nom_feuille_excel(titre: str) -> str:
+    """
+    CORRECTIF 2026-07-31 (audit sécurité/UX) : `titre` vient du modèle et
+    était utilisé tel quel (juste tronqué à 31 caractères) comme nom de
+    feuille -- Excel interdit pourtant les caractères : \\ / ? * [ ] dans
+    un nom de feuille, ainsi qu'un nom vide ou commençant/finissant par
+    une apostrophe. Un titre parfaitement normal ("Budget : prévisions
+    2026", une date "01/08"...) suffisait à faire planter generer_xlsx.
+    """
+    interdits = ':\\/?*[]'
+    nettoye = "".join(c for c in (titre or "") if c not in interdits).strip("'").strip()
+    nettoye = nettoye[:31]
+    return nettoye or "Feuille1"
+
+
 def _uploader_avec_apercu(contenu_bytes: bytes, extension: str, content_type: str, nom_fichier: str) -> dict:
     """
     Upload le fichier original dans Supabase Storage, puis tente une
@@ -162,7 +177,7 @@ def generer_xlsx(titre: str, en_tetes: list, lignes: list) -> dict:
 
     classeur = Workbook()
     feuille = classeur.active
-    feuille.title = titre[:31]  # limite Excel : 31 caractères max pour un nom de feuille
+    feuille.title = _nom_feuille_excel(titre)  # voir _nom_feuille_excel : Excel interdit : \ / ? * [ ]
 
     feuille.append(en_tetes)
     for cellule in feuille[1]:
