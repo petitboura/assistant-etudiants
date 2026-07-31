@@ -37,6 +37,38 @@ from api.auth import supabase
 BUCKET = "generations"
 MODELE_TOGETHER = "black-forest-labs/FLUX.1-schnell"
 
+# CORRECTIF 2026-07-31 (audit sécurité/UX) : avant, tout ce qui revenait
+# d'un fournisseur avec un statut HTTP 200 était uploadé et servi tel
+# quel en forçant "image/png", sans jamais vérifier que c'était
+# réellement une image. Si Pollinations/Together renvoie, avec un
+# statut 200, une page d'erreur ou un message ("trop de requêtes",
+# quota dépassé...) au lieu d'une vraie image, la personne se retrouvait
+# avec une image cassée qui ne s'affiche pas, sans aucune explication --
+# impossible pour elle de savoir si c'est sa consigne, un bug de l'app,
+# ou le service externe qui a un souci.
+#
+# Vérification par signature binaire (magic bytes) plutôt que par
+# l'en-tête Content-Type de la réponse HTTP : une page d'erreur HTML/
+# JSON ne matchera jamais ces signatures, alors qu'un en-tête peut être
+# absent ou trompeur (mal configuré côté fournisseur).
+_SIGNATURES_IMAGE = (
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"\xff\xd8\xff",  # JPEG
+    b"GIF87a",
+    b"GIF89a",
+)
+
+
+def _est_image_valide(donnees: bytes) -> bool:
+    if not donnees or len(donnees) < 12:
+        return False
+    if donnees.startswith(_SIGNATURES_IMAGE):
+        return True
+    # WEBP : conteneur RIFF avec la sous-marque "WEBP" à l'offset 8
+    if donnees[:4] == b"RIFF" and donnees[8:12] == b"WEBP":
+        return True
+    return False
+
 
 def _get_secret(cle):
     return os.environ.get(cle)
@@ -86,6 +118,17 @@ def generer_image(prompt: str) -> str:
         image_bytes = _generer_via_together(prompt, cle_together)
     else:
         image_bytes = _generer_via_pollinations(prompt)
+
+    if not _est_image_valide(image_bytes):
+        # Le fournisseur a répondu avec un statut "succès" mais le contenu
+        # n'est pas une image reconnue (page d'erreur, message de quota
+        # dépassé...) -- on le signale clairement plutôt que d'uploader
+        # une image cassée que la personne ne pourra jamais afficher.
+        apercu = image_bytes[:200].decode("utf-8", errors="replace") if image_bytes else "(vide)"
+        logging.error(f"ERREUR GENERATION IMAGE : réponse reçue n'est pas une image valide. Aperçu : {apercu!r}")
+        raise RuntimeError(
+            "Le service de génération d'image a renvoyé un contenu invalide (pas une image) -- réessaie dans un instant."
+        )
 
     chemin = f"images/{uuid.uuid4()}.png"
     try:
