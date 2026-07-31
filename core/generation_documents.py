@@ -13,6 +13,8 @@ utilisation (voir README_GENERATION.md) : un bucket public nommé
 "generations", pas encore créé automatiquement par ce code.
 """
 
+import html
+import html
 import logging
 import uuid
 
@@ -50,10 +52,17 @@ def generer_pdf_depuis_markdown(titre: str, contenu_markdown: str) -> str:
     clair, pas de logique de message d'erreur ici.
     """
     html_corps = md_lib.markdown(contenu_markdown, extensions=["tables", "fenced_code"])
+    # CORRECTIF 2026-07-31 (audit sécurité/UX, même famille que le
+    # correctif Excel : un titre parfaitement normal comme "Analyse < 100
+    # unités & recommandations" suffisait à casser la mise en page du PDF
+    # (titre tronqué/disparu), puisqu'il était inséré brut dans le HTML.
+    # contenu_markdown n'est volontairement PAS touché ici : il passe déjà
+    # par md_lib.markdown() qui produit du HTML propre à partir du
+    # markdown écrit par le modèle.
     html_complet = f"""
     <html>
       <head><meta charset="utf-8"><style>{CSS_DE_BASE}</style></head>
-      <body><h1>{titre}</h1>{html_corps}</body>
+      <body><h1>{html.escape(titre)}</h1>{html_corps}</body>
     </html>
     """
 
