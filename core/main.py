@@ -2674,16 +2674,49 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     logging.error(f"ERREUR GROQ {model}: {e}")
                 continue
 
-        # 3. Gemini 2.5 Flash — tout dernier recours, sans outils MCP.
-        # Utile seulement si TOUS les modeles Groq (principal + fallbacks)
-        # sont indisponibles en meme temps ; dans ce cas l'utilisateur a au
-        # moins une reponse texte, mais sans acces a Notion/Wolfram.
+        # 3. Gemini 2.5 Flash — tout dernier recours, sans outils MCP a lui,
+        # mais REND COMPTE de ce qu'un outil Groq a deja execute avant lui
+        # dans cette meme cascade (2026-07-31, corrige suite a un cas reel
+        # observe par Bourama en logs : tavily_search execute avec succes,
+        # 7000+ caracteres de resultat obtenus, mais tous les modeles Groq
+        # tombent en rate limit sur l'appel de REDACTION finale -- Gemini
+        # prend le relais et repond quand meme "je ne peux pas verifier en
+        # direct", car il partait de messages_base (jamais mute), qui ne
+        # contient jamais les resultats d'outils -- le resultat deja obtenu
+        # etait donc silencieusement jete. Utilise messages_agent (comme la
+        # cascade Groq juste au-dessus, meme logique/meme commentaire) : SI
+        # un outil a deja tourne, son resultat y est present et Gemini doit
+        # s'en servir ; SINON (aucun outil execute avant d'arriver ici),
+        # Gemini doit dire que l'outil n'est pas disponible MAINTENANT
+        # (indisponibilite technique temporaire) plutot que de se presenter
+        # comme une IA incapable de faire des recherches par nature.
         try:
             client_google = genai.Client(api_key=get_secret("GOOGLE_API_KEY"))
-            gemini_messages = [
-                {"role": "user" if m["role"] != "assistant" else "model", "parts": [{"text": m["content"]}]}
-                for m in messages_base if m["role"] != "system"
-            ]
+            outil_deja_execute = any(m.get("role") == "tool" for m in messages_agent)
+            gemini_messages = []
+            for m in messages_agent:
+                if m["role"] == "system":
+                    continue
+                if m["role"] == "tool":
+                    # Pas de role "tool" natif dans ce format simplifie de
+                    # contenus Gemini (contents/parts) -- integre comme
+                    # contexte texte explicite, marque clairement pour que
+                    # l'instruction ci-dessous puisse s'y referer sans
+                    # ambiguite.
+                    gemini_messages.append(
+                        {"role": "user", "parts": [{"text": f"[Résultat de l'outil déjà exécuté] {m['content']}"}]}
+                    )
+                elif m["role"] == "assistant" and not m.get("content"):
+                    # Message "assistant" qui ne fait QUE declarer un appel
+                    # d'outil (content=None, voir messages_agent.append
+                    # plus haut dans _agent_groq) -- rien a montrer a
+                    # Gemini, le resultat juste apres (role "tool"
+                    # ci-dessus) suffit.
+                    continue
+                else:
+                    gemini_messages.append(
+                        {"role": "user" if m["role"] != "assistant" else "model", "parts": [{"text": m["content"]}]}
+                    )
             # Instruction ciblee (2026-07-24, trouve par Bourama en test
             # reel, PERDUE le 25/07 par le commit de57439 -- modification
             # concurrente partie d'une base sans ce fix, qui a ecrase la
@@ -2701,17 +2734,32 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
             # l'instruction est directe et sans ambiguite plutot que de
             # compter sur la regle generale noyee dans un long prompt
             # systeme.
-            system_gemini_sans_outils = (
-                system_final
-                + "\n\nIMPORTANT : tu n'as accès à AUCUN outil réel dans cette réponse précise "
-                "(pas de recherche web, pas d'API externe, pas de Notion, rien) -- réponds "
-                "uniquement avec tes connaissances générales. Si la question porte sur une "
-                "information qui change (prix, taux de change, actualité, données en temps "
-                "réel...), dis clairement que tu ne peux pas la vérifier en direct plutôt que "
-                "de deviner. N'écris JAMAIS de code, de pseudo-code, ou de texte qui ressemble "
-                "à un appel d'outil/API (même dans un bloc de code) -- tu n'as aucun outil à "
-                "appeler, l'écrire ne fait qu'inventer un résultat qui n'existe pas."
-            )
+            if outil_deja_execute:
+                system_gemini_sans_outils = (
+                    system_final
+                    + "\n\nIMPORTANT : un outil a DÉJÀ été exécuté plus tôt dans cet échange et son "
+                    "résultat est présent ci-dessus, marqué \"[Résultat de l'outil déjà exécuté]\" -- "
+                    "base ta réponse DESSUS. Ne dis JAMAIS que tu ne peux pas faire de recherche ou "
+                    "vérifier l'information : le résultat est déjà là, utilise-le. Tu n'as par "
+                    "contre AUCUN outil à appeler toi-même dans cette réponse précise (pas de "
+                    "nouvel appel) -- n'écris jamais de code, de pseudo-code, ou de texte qui "
+                    "ressemble à un appel d'outil/API."
+                )
+            else:
+                system_gemini_sans_outils = (
+                    system_final
+                    + "\n\nIMPORTANT : tu n'as accès à AUCUN outil réel dans cette réponse précise "
+                    "(pas de recherche web, pas d'API externe, pas de Notion, rien). Si la question "
+                    "porte sur une information qui change (prix, taux de change, actualité, données "
+                    "en temps réel...) et nécessiterait normalement un outil, dis clairement que cet "
+                    "outil n'est PAS DISPONIBLE POUR L'INSTANT (indisponibilité technique "
+                    "temporaire) plutôt que de deviner OU de te présenter comme une IA qui ne peut "
+                    "pas faire de recherches par nature -- ce n'est pas une limite permanente, "
+                    "juste indisponible sur ce message précis. N'écris JAMAIS de code, de "
+                    "pseudo-code, ou de texte qui ressemble à un appel d'outil/API (même dans un "
+                    "bloc de code) -- tu n'as aucun outil à appeler, l'écrire ne fait qu'inventer "
+                    "un résultat qui n'existe pas."
+                )
             response = client_google.models.generate_content_stream(
                 model=GOOGLE_MODEL,
                 contents=gemini_messages,
