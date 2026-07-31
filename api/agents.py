@@ -148,6 +148,14 @@ def _valider_et_verifier_disponibilite_domaine(domaine: Optional[str], agent_id_
     _valider_et_verifier_disponibilite_categorie_libre("domaine", "Ce domaine", domaine, agent_id_a_exclure)
 
 
+# Ajouté le 2026-07-31 (6ème bouton "Exécution" de la page Produit du
+# vitrine, Bourama) -- même principe que metier/filiere/domaine
+# ci-dessus : texte libre, une IA par valeur, contrainte UNIQUE en base
+# (agents_execution_unique) comme garde-fou final.
+def _valider_et_verifier_disponibilite_execution(execution: Optional[str], agent_id_a_exclure: Optional[str] = None) -> None:
+    _valider_et_verifier_disponibilite_categorie_libre("execution", "Cette exécution", execution, agent_id_a_exclure)
+
+
 class LigneComportement(BaseModel):
     type_requete: str = ""
     comportement: str = ""
@@ -225,6 +233,9 @@ class CreerAgentPayload(BaseModel):
     metier: Optional[str] = None
     filiere: Optional[str] = None
     domaine: Optional[str] = None
+    # Exécution (2026-07-31, 6ème bouton de la page Produit) -- même
+    # principe que les 3 champs ci-dessus.
+    execution: Optional[str] = None
     # Nouveau flow de création (pivot social) : image de vitrine et
     # description publique de la page agent, distinctes de
     # description_connaissance qui reste un usage interne au RAG.
@@ -295,6 +306,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
     _valider_et_verifier_disponibilite_metier(payload.metier)
     _valider_et_verifier_disponibilite_filiere(payload.filiere)
     _valider_et_verifier_disponibilite_domaine(payload.domaine)
+    _valider_et_verifier_disponibilite_execution(payload.execution)
 
     agent_id = generer_id_depuis_nom(payload.nom)
 
@@ -389,6 +401,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
         "metier": (payload.metier or "").strip() or None,
         "filiere": (payload.filiere or "").strip() or None,
         "domaine": (payload.domaine or "").strip() or None,
+        "execution": (payload.execution or "").strip() or None,
         "profil_utilisateur_schema": [c.model_dump() for c in payload.profil_utilisateur_schema],
         # Colonne ajoutée le 2026-07-12 (Bourama : le formulaire de
         # modification doit contenir tous les champs de la création).
@@ -727,6 +740,7 @@ class AgentEditable(BaseModel):
     metier: Optional[str] = None
     filiere: Optional[str] = None
     domaine: Optional[str] = None
+    execution: Optional[str] = None
     profil_utilisateur_schema: List[ChampProfilUtilisateur] = Field(default_factory=list)
     # Proactivité (25/07) : le créateur décide QUAND (délai d'inactivité),
     # à quelle fréquence max, et POURQUOI/COMMENT (instructions libres,
@@ -754,7 +768,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
                 "actif, owner_id, categorie_id, matiere, matiere_detail, langue_africaine, "
-                "metier, filiere, domaine, "
+                "metier, filiere, domaine, execution, "
                 "profil_utilisateur_schema, "
                 "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
                 "proactivite_instructions"
@@ -799,6 +813,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         metier=ligne.get("metier"),
         filiere=ligne.get("filiere"),
         domaine=ligne.get("domaine"),
+        execution=ligne.get("execution"),
         profil_utilisateur_schema=[
             ChampProfilUtilisateur(**c) for c in (ligne.get("profil_utilisateur_schema") or [])
         ],
@@ -845,6 +860,7 @@ class ModifierAgentPayload(BaseModel):
     metier: Optional[str] = None
     filiere: Optional[str] = None
     domaine: Optional[str] = None
+    execution: Optional[str] = None
     profil_utilisateur_schema: Optional[List[ChampProfilUtilisateur]] = None
     # Proactivité (25/07) : voir AgentEditable ci-dessus.
     proactivite_active: Optional[bool] = None
@@ -877,7 +893,7 @@ def modifier_agent(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
                 "actif, owner_id, categorie_id, matiere, matiere_detail, langue_africaine, "
-                "metier, filiere, domaine, "
+                "metier, filiere, domaine, execution, "
                 "profil_utilisateur_schema, "
                 "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
                 "proactivite_instructions"
@@ -1095,6 +1111,11 @@ def modifier_agent(
         _valider_et_verifier_disponibilite_domaine(domaine_normalise, agent_id_a_exclure=agent_id)
         mise_a_jour["domaine"] = domaine_normalise
 
+    if payload.execution is not None:
+        execution_normalisee = payload.execution.strip() or None
+        _valider_et_verifier_disponibilite_execution(execution_normalisee, agent_id_a_exclure=agent_id)
+        mise_a_jour["execution"] = execution_normalisee
+
     if not mise_a_jour:
         raise erreur_api(422, "RIEN_A_MODIFIER")
 
@@ -1155,6 +1176,7 @@ def modifier_agent(
         metier=mise_a_jour.get("metier", ligne.get("metier")),
         filiere=mise_a_jour.get("filiere", ligne.get("filiere")),
         domaine=mise_a_jour.get("domaine", ligne.get("domaine")),
+        execution=mise_a_jour.get("execution", ligne.get("execution")),
         proactivite_active=mise_a_jour.get("proactivite_active", ligne.get("proactivite_active", False)),
         proactivite_delai_jours=mise_a_jour.get("proactivite_delai_jours", ligne.get("proactivite_delai_jours", 4)),
         proactivite_cooldown_jours=mise_a_jour.get(

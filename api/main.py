@@ -197,6 +197,9 @@ class AgentFeedItem(BaseModel):
     metier: Optional[str] = None
     filiere: Optional[str] = None
     domaine: Optional[str] = None
+    # 6ème bouton "Exécution" de la page Produit du vitrine (2026-07-31),
+    # mêmes principes que metier/filiere/domaine ci-dessus.
+    execution: Optional[str] = None
 
 
 class FeedReponse(BaseModel):
@@ -216,6 +219,7 @@ def feed(
     avec_metier: Optional[bool] = Query(None),
     avec_filiere: Optional[bool] = Query(None),
     avec_domaine: Optional[bool] = Query(None),
+    avec_execution: Optional[bool] = Query(None),
 ):
     """
     Liste paginée des agents publiés, pour le feed de découverte de la
@@ -230,13 +234,13 @@ def feed(
     `categorie_id` si fourni, sinon comportement inchangé (tout le feed).
 
     `avec_matiere` / `avec_langue_africaine` / `avec_metier` /
-    `avec_filiere` / `avec_domaine` (ajoutés 2026-07-31, les 5 boutons de
-    la page Produit du vitrine) : si True, ne renvoie que les agents
-    ayant la colonne correspondante renseignée (voir api/agents.py --
-    `matiere` a une liste fixe, les 4 autres sont en texte libre). Tous
-    indépendants les uns des autres et de `categorie` ; combinables si
-    besoin même si la page Produit n'active qu'un bouton à la fois
-    aujourd'hui.
+    `avec_filiere` / `avec_domaine` / `avec_execution` (ajoutés 2026-07-31,
+    les 6 boutons de la page Produit du vitrine) : si True, ne renvoie que
+    les agents ayant la colonne correspondante renseignée (voir
+    api/agents.py -- `matiere` a une liste fixe, les 5 autres sont en
+    texte libre). Tous indépendants les uns des autres et de `categorie` ;
+    combinables si besoin même si la page Produit n'active qu'un bouton à
+    la fois aujourd'hui.
     """
     debut = (page - 1) * limite
     fin = debut + limite - 1
@@ -246,7 +250,7 @@ def feed(
             supabase.table("agents")
             .select(
                 "id, nom, ui_config, image_vitrine_url, description, categorie_id, "
-                "matiere, langue_africaine, metier, filiere, domaine",
+                "matiere, langue_africaine, metier, filiere, domaine, execution",
                 count="exact",
             )
             .or_("actif.is.null,actif.eq.true")
@@ -263,6 +267,8 @@ def feed(
             requete = requete.not_.is_("filiere", "null")
         if avec_domaine:
             requete = requete.not_.is_("domaine", "null")
+        if avec_execution:
+            requete = requete.not_.is_("execution", "null")
         res = requete.order("id").range(debut, fin).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (lecture feed, page={page}) : {e}")
@@ -281,6 +287,7 @@ def feed(
             metier=ligne.get("metier"),
             filiere=ligne.get("filiere"),
             domaine=ligne.get("domaine"),
+            execution=ligne.get("execution"),
         )
         for ligne in (res.data or [])
     ]
