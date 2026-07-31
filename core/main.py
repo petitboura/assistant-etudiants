@@ -2232,7 +2232,7 @@ def _capturer_reponse(generateur, accumulateur):
         yield event
 
 
-def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None, recherche_forcee=False, outil_force=None):
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None, recherche_forcee=False, outil_force=None, ignorer_suggestion_outils=False):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
@@ -2457,7 +2457,17 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     # sinon on tournerait en boucle. Pas de chemin image/vidéo (Gemini,
     # aucun outil MCP dans cette branche de toute façon, voir plus bas) ni
     # de reprise (déjà retournée avant ce point).
-    if not outil_force and message_utilisateur and not image_url and not images_base64:
+    #
+    # ignorer_suggestion_outils (31/07, demande Bourama) : bouton "Aucun"
+    # à côté des suggestions -- le routeur se trompe souvent (suggère un
+    # outil sans rapport avec la question), l'utilisateur doit pouvoir
+    # relancer sa question SANS repasser par le routeur (sinon, comme
+    # outil_force serait vide/falsy, la condition ci-dessous re-déclencherait
+    # le routeur et redonnerait potentiellement la même suggestion à côté --
+    # boucle silencieuse pour l'utilisateur). Distinct de outil_force=None
+    # normal : ici on VEUT explicitement zéro outil, pas "laisse le routeur
+    # décider".
+    if not outil_force and not ignorer_suggestion_outils and message_utilisateur and not image_url and not images_base64:
         outils_disponibles_agent, _ = lister_outils_autorises_pour_agent(get_secret, user_id, agent_id)
         outils_suggeres = _router_outils(message_utilisateur, outils_disponibles_agent, historique)
         if outils_suggeres:

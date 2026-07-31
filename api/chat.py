@@ -87,6 +87,12 @@ class EnvoyerMessagePayload(BaseModel):
     # sélectionnés manuellement côté frontend (BarreDeSaisie.tsx), zéro,
     # un ou plusieurs à la fois.
     outil_force: Optional[List[str]] = None
+    # Bouton "Aucun" à côté des suggestions du routeur (2026-07-31, demande
+    # Bourama : le routeur se trompe souvent) -- distinct de outil_force
+    # vide/absent : signale explicitement "réponds normalement, ne relance
+    # pas le routeur", voir core/main.py:chat() pour le pourquoi (sinon
+    # boucle silencieuse de suggestion).
+    ignorer_suggestion_outils: Optional[bool] = False
     # Ajouté (2026-07-20) pour exposer le chemin de reprise de chat() --
     # jusqu'ici accessible seulement en appel Python interne (chat.py
     # Streamlit), jamais via cette route HTTP. Voir StatutOutil.tsx /
@@ -125,6 +131,7 @@ def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
                 images_base64=payload.images_base64,
                 recherche_forcee=payload.recherche_forcee,
                 outil_force=payload.outil_force,
+                ignorer_suggestion_outils=payload.ignorer_suggestion_outils or False,
             )
         for evenement in generateur:
             yield f"data: {json.dumps(evenement)}\n\n"
