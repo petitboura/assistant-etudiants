@@ -145,6 +145,10 @@ def _valider_et_verifier_disponibilite_filiere(filiere: Optional[str], agent_id_
 
 def _valider_et_verifier_disponibilite_domaine(domaine: Optional[str], agent_id_a_exclure: Optional[str] = None) -> None:
     _valider_et_verifier_disponibilite_categorie_libre("domaine", "Ce domaine", domaine, agent_id_a_exclure)
+
+
+class LigneComportement(BaseModel):
+    type_requete: str = ""
     comportement: str = ""
 
 
