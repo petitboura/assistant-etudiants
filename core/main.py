@@ -1236,6 +1236,26 @@ def _router_outils(message_utilisateur, outils_disponibles, historique=None):
         "\"trace un graphique de...\") ne justifie donc JAMAIS de "
         "suggestion, même si un outil de la liste semble vaguement "
         "proche -- réponds liste vide dans ce cas.\n\n"
+        # CORRECTIF 2026-07-31 (signalé par Bourama, test réel : le
+        # routeur suggérait une recherche web pour "1+1") : un petit
+        # modèle rapide (voir MODELE_ROUTEUR_OUTILS) a besoin d'exemples
+        # concrets, pas seulement d'une règle abstraite -- "évite les
+        # outils inutiles" ne suffit pas à empêcher un réflexe "au cas
+        # où" sur une question triviale. Les exemples ci-dessous couvrent
+        # explicitement calcul simple, connaissance générale stable et
+        # salutation/conversation normale.
+        "IMPORTANT : ne suggère JAMAIS un outil pour une question à "
+        "laquelle le modèle principal peut répondre seul, avec certitude, "
+        "par simple raisonnement ou connaissance générale stable -- même "
+        "si un outil de la liste pourrait techniquement s'en servir. "
+        "Exemples qui DOIVENT renvoyer une liste vide : \"1+1\", "
+        "\"combien font 12 fois 15 ?\", \"quelle est la capitale de la "
+        "France ?\", \"explique-moi la photosynthèse\", \"salut, ça va ?\". "
+        "Réserve les outils aux cas où une information réelle et "
+        "vérifiable est nécessaire : donnée qui change dans le temps "
+        "(actualité, prix, météo...), contenu spécifique à récupérer "
+        "(fichier, page web, dépôt...), ou calcul non trivial qu'un humain "
+        "ne ferait pas de tête.\n\n"
         f"Outils disponibles :\n{catalogue}\n\n"
         f"{contexte}"
         f"Question de l'utilisateur : {message_utilisateur}\n\n"
