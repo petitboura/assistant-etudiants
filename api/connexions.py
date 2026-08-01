@@ -30,6 +30,10 @@ en tête et délègue à connexions/notion.py -- le frontend continue
 d'appeler les mêmes /api/connexions/{service}/* pour les deux.
 """
 
+import os
+import sys
+import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -39,6 +43,12 @@ from api.auth import utilisateur_courant
 from core.erreurs import erreur_api
 from connexions.oauth_generique import demarrer_connexion, est_connecte, etat_en_attente, finaliser_connexion, get_secret
 import connexions.notion as notion
+
+# mcp_tools.py fait un `from registre_outils import ...` interne (flat, pas
+# `core.registre_outils`) -- ne se resout que si core/ est sur sys.path,
+# meme contournement que api/agents.py (ligne 27 de ce fichier).
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
+from mcp_tools import _appeler_outil_async  # noqa: E402
 
 router = APIRouter(prefix="/api/connexions", tags=["connexions"])
 
@@ -209,63 +219,62 @@ def depots_github(utilisateur=Depends(utilisateur_courant)):
 
 
 @router.get("/notion/pages")
-def pages_notion(utilisateur=Depends(utilisateur_courant)):
+def pages_notion(q: str = "", utilisateur=Depends(utilisateur_courant)):
     """
-    Liste les pages ET bases de données Notion visibles par la personne
-    connectée (mêmes limites que l'app Notion elle-même : seul ce qui a
-    été explicitement partagé avec l'intégration lors du flow OAuth est
-    retourné par /v1/search -- comportement normal de l'API Notion, pas
-    un bug). Voir BarreDeSaisie.tsx, sélecteur ouvert au clic sur "Notion"
+    Cherche des pages ET bases de données Notion visibles par la personne
+    connectée. Voir BarreDeSaisie.tsx, sélecteur ouvert au clic sur "Notion"
     dans le menu Appli une fois connecté -- même pattern que
-    depots_github ci-dessus.
+    depots_github ci-dessus, avec UNE différence de taille (voir plus bas).
+
+    CORRECTION (01/08) : l'ancienne version appelait api.notion.com/v1/search
+    en REST direct avec le token OAuth obtenu via le flow MCP (Dynamic Client
+    Registration contre mcp.notion.com, voir connexions/notion.py). Ce token
+    est valide pour le protocole MCP (audience mcp.notion.com) mais PAS pour
+    l'API REST classique -- Notion renvoyait 401 "API token is invalid."
+    systématiquement (confirmé en logs Railway le 01/08 : l'appel MCP juste
+    avant réussissait, l'appel REST juste après échouait avec le même token).
+    Corrigé en passant par le même mécanisme MCP déjà fonctionnel
+    (core/mcp_tools.py:_appeler_outil_async), en appelant l'outil
+    notion-search du serveur MCP au lieu de l'API REST.
+
+    DIFFÉRENCE AVEC GITHUB : notion-search est une recherche sémantique, pas
+    un listing -- son paramètre `query` est OBLIGATOIRE côté outil (pas de
+    "toutes mes pages" comme /user/repos pour GitHub). Sans texte tapé par
+    la personne, on renvoie donc une liste vide plutôt que d'inventer une
+    requête -- le sélecteur Notion a besoin d'une vraie zone de recherche
+    côté frontend (contrairement au sélecteur GitHub qui liste tout
+    directement), voir BarreDeSaisie.tsx.
     """
-    import requests
+    if not q.strip():
+        return {"pages": []}
 
     token = notion.obtenir_token_valide(utilisateur.id)
     if not token:
         raise erreur_api(400, "NOTION_NON_CONNECTE")
 
     try:
-        reponse = requests.post(
-            "https://api.notion.com/v1/search",
-            timeout=10,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Notion-Version": "2022-06-28",
-                "Content-Type": "application/json",
-            },
-            json={"page_size": 50, "sort": {"direction": "descending", "timestamp": "last_edited_time"}},
+        resultat_brut = asyncio.run(
+            _appeler_outil_async(
+                "https://mcp.notion.com/mcp",
+                "notion-search",
+                {"query": q, "page_size": 20},
+                headers={"Authorization": f"Bearer {token}"},
+            )
         )
-        if reponse.status_code != 200:
-            logging.error(f"ERREUR RECHERCHE NOTION (statut {reponse.status_code}) : {reponse.text[:200]}")
-            raise erreur_api(502, "NOTION_PAGES_INDISPONIBLE")
-
-        def _titre(resultat):
-            proprietes = resultat.get("properties") or {}
-            for prop in proprietes.values():
-                if prop.get("type") == "title":
-                    morceaux = prop.get("title") or []
-                    texte = "".join(m.get("plain_text", "") for m in morceaux)
-                    if texte:
-                        return texte
-            # Base de données sans "properties" au sens page (le titre est
-            # sur `title` directement) ou page racine sans titre trouvé.
-            morceaux = resultat.get("title") or []
-            texte = "".join(m.get("plain_text", "") for m in morceaux)
-            return texte or "(sans titre)"
-
-        pages = [
-            {
-                "titre": _titre(r),
-                "type": "database" if r.get("object") == "database" else "page",
-                "url": r.get("url"),
-            }
-            for r in reponse.json().get("results", [])
-            if r.get("url")
-        ]
-        return {"pages": pages}
+        donnees = json.loads(resultat_brut)
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"ERREUR LISTE PAGES NOTION : {e}")
+        logging.error(f"ERREUR RECHERCHE NOTION (MCP) : {e}")
         raise erreur_api(502, "NOTION_PAGES_INDISPONIBLE")
+
+    pages = [
+        {
+            "titre": r.get("title") or "(sans titre)",
+            "type": "database" if r.get("type") == "database" else "page",
+            "url": r.get("url"),
+        }
+        for r in (donnees.get("results") or [])
+        if r.get("url")
+    ]
+    return {"pages": pages}
