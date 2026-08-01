@@ -65,31 +65,19 @@ def _url_tavily(get_secret, user_id, agent_id):
 
 
 def _url_wolfram(get_secret, user_id, agent_id):
-    return "https://services.wolfram.com/api/mcp"
-
-
-def _headers_wolfram(get_secret, user_id, agent_id):
-    # CORRECTIF 2026-08-01 (Bourama : "j'ai pas mis de clé wolfram hein" --
-    # test en conditions reelles suspecte d'avoir echoue). Verifie ce jour-la
-    # sur support.wolfram.com/73463 : "Authentication is currently supported
-    # via HTTP headers only. The following header is required for every
-    # request..." -- CONTREDIT le commentaire precedent (4 juillet, "plus
-    # besoin de cle"), qui etait soit vrai a l'epoque et a change depuis,
-    # soit deja errone. Sans ce headers_builder, une requete sans
-    # Authorization recoit un 401, capture par le except generique de
-    # lister_outils_autorises_pour_agent (mcp_tools.py) -- juste logue en
-    # erreur, jamais remonte a l'utilisateur : Wolfram "actif" pour un agent
-    # mais invisible en pratique, sans aucun signal.
-    #
-    # A VERIFIER SEPAREMENT (pas fait ici, une seule source trouvee) : il
-    # existe possiblement une offre distincte et gratuite, sur une URL
-    # differente (agenttools.wolfram.com/mcp, "oauth": false d'apres une
-    # source secondaire) -- si confirme, ce serait une meilleure option que
-    # payer un abonnement Wolfram MCP Service pour la cle ci-dessous.
-    cle = get_secret("WOLFRAM_API_KEY")
-    if not cle:
-        return None
-    return {"Authorization": f"Bearer {cle}"}
+    # CORRECTIF 2026-08-01 bis (Bourama : "j'ai pas mis de clé wolfram
+    # hein" -> creuse). L'URL precedente (services.wolfram.com/api/mcp,
+    # "Wolfram MCP Service") est une offre PAYANTE necessitant un
+    # abonnement + une cle API (voir support.wolfram.com/73463) -- pas la
+    # bonne offre pour ce cas d'usage. La veritable offre gratuite est un
+    # produit DIFFERENT, "Wolfram Cloud MCP", confirme sans authentification
+    # par DEUX pages officielles distinctes (support.wolfram.com/75237 et
+    # wolfram.com/artificial-intelligence/mcp/cloud) : "free to use and
+    # does not require any authentication". Limite connue et acceptee pour
+    # cet usage (question -> reponse, pas de session multi-etapes) : usage
+    # personnel limite, une seule requete a la fois, pas d'upload/download
+    # de fichier, pas d'interaction locale.
+    return "https://agenttools.wolfram.com/mcp"
 
 
 def _url_notion(get_secret, user_id, agent_id):
@@ -107,7 +95,7 @@ def _headers_notion(get_secret, user_id, agent_id):
 
 
 SERVEURS_MCP = [
-    {"nom": "wolfram", "url_builder": _url_wolfram, "headers_builder": _headers_wolfram},
+    {"nom": "wolfram", "url_builder": _url_wolfram},
     {
         "nom": "tavily",
         "url_builder": _url_tavily,
