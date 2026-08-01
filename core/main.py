@@ -1172,6 +1172,32 @@ INSTRUCTIONS_FORMATS_AFFICHAGE = (
 )
 
 
+# Ajouté 2026-08-01 (demande Bourama, suite a l'ajout de calculer_symbolique) :
+# les deux outils se chevauchent en pratique -- WolframLanguageEvaluator (un
+# des 3 outils fixes exposes par le serveur MCP Wolfram, voir
+# registre_outils.py) sait aussi resoudre/deriver/integrer/simplifier, sa
+# description (fixee par Wolfram, pas modifiable ici) ne l'exclut nulle part.
+# La description de calculer_symbolique (voir serveur_mcp_generation.py) dit
+# deja "utilise wolfram pour le factuel", mais rien cote Wolfram ne dit
+# l'inverse -- cette regle vit donc dans le prompt systeme general (au-dessus
+# des descriptions d'outils individuelles) pour trancher des que les DEUX
+# sont disponibles pour un agent. Suit le meme principe que le correctif du
+# 31/07 sur _router_outils : un exemple concret par cas vaut mieux qu'un
+# principe abstrait pour un petit modele.
+INSTRUCTIONS_ARBITRAGE_CALCUL = (
+    "\n\nARBITRAGE calculer_symbolique / wolfram (si les deux sont disponibles) : "
+    "calcul formel EXACT (simplifier, developper, factoriser, deriver, integrer, "
+    "resoudre une equation, limite) -> TOUJOURS calculer_symbolique, jamais "
+    "wolfram, meme via WolframLanguageEvaluator qui sait techniquement le faire "
+    "aussi. wolfram reste reserve aux questions de connaissance factuelle du "
+    "monde reel non calculables par un moteur symbolique seul (constante "
+    "physique, donnee chimique, donnee geographique/demographique...). "
+    "Exemples : \"derive x^2*sin(x)\" -> calculer_symbolique. \"masse du "
+    "proton\" -> wolfram. \"resous 2x+3=7\" -> calculer_symbolique, pas "
+    "wolfram meme si ca semble plus rapide."
+)
+
+
 def _router_outils(message_utilisateur, outils_disponibles, historique=None):
     """
     Bouton Outils, couche de suggestion automatique (2026-07-28, demande
@@ -1318,7 +1344,11 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     #   6. Date/heure -> LE plus volatil, change chaque minute : doit
     #      absolument rester en tout dernier pour ne jamais casser le
     #      prefixe cachable de tout ce qui precede.
-    system_final = INSTRUCTIONS_FORMATS_AFFICHAGE.lstrip("\n") + REGLE_CONTEXTE_INVISIBLE
+    system_final = (
+        INSTRUCTIONS_FORMATS_AFFICHAGE.lstrip("\n")
+        + INSTRUCTIONS_ARBITRAGE_CALCUL
+        + REGLE_CONTEXTE_INVISIBLE
+    )
 
     # get_system_prompt peut renvoyer None (agent sans notion_page_id ni
     # system_prompt renseigné ET aucun prompt jamais mis en cache avec
