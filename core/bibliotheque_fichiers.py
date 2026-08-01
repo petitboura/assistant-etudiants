@@ -35,6 +35,40 @@ def _get_secret(cle):
 supabase = create_client(_get_secret("SUPABASE_URL"), _get_secret("SUPABASE_SECRET"))
 
 
+def enregistrer_lien(
+    url: str,
+    nom_fichier: str,
+    niveau: str,
+    uploade_par: str,
+    agent_id: str = None,
+    user_id: str = None,
+    description: str = None,
+) -> dict:
+    """
+    Variante de enregistrer_fichier pour une entrée "lien" (juste une URL,
+    aucun fichier uploadé -- Bourama 01/08 : l'onglet "Lien" existait déjà
+    côté filtre mais rien ne permettait vraiment d'en ajouter un). Pas
+    d'upload Supabase Storage ici : url_publique EST l'URL donnée.
+    chemin_stockage est NOT NULL en base mais inutilisé pour un lien --
+    on y met l'URL aussi, pour rester traçable sans complexifier le schéma.
+    type_mime="text/uri-list" sert de marqueur "ceci est un lien" pour
+    categorieFichierBiblio côté frontend.
+    """
+    insertion = supabase.table("fichiers_uploades").insert({
+        "niveau": niveau,
+        "agent_id": agent_id,
+        "user_id": user_id,
+        "uploade_par": uploade_par,
+        "chemin_stockage": url,
+        "url_publique": url,
+        "nom_fichier": nom_fichier,
+        "type_mime": "text/uri-list",
+        "description": description,
+        "taille_octets": None,
+    }).execute()
+    return insertion.data[0]
+
+
 def enregistrer_fichier(
     contenu: bytes,
     nom_fichier: str,

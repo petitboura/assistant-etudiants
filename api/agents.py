@@ -29,7 +29,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..", "indexers"))
 from creation_agent import generer_id_depuis_nom, extraire_id_notion, composer_system_prompt  # noqa: E402
 from index_documents import indexer_texte, indexer_document, supprimer_chunks_existants  # noqa: E402
 from storage import upload_document, list_documents, delete_document, get_document_url  # noqa: E402
-from bibliotheque_fichiers import enregistrer_fichier, lister_fichiers, supprimer_fichier  # noqa: E402
+from bibliotheque_fichiers import enregistrer_fichier, enregistrer_lien, lister_fichiers, supprimer_fichier  # noqa: E402
 from mcp_tools import lister_outils_autorises_pour_agent  # noqa: E402
 from core.erreurs import erreur_api
 
@@ -1558,6 +1558,77 @@ async def uploader_fichier_bibliotheque(
         cible_type="agent",
         cible_id=agent_id,
         details={"description": description_finale, "type_mime": fichier.content_type},
+        request=request,
+    )
+
+    return ligne
+
+
+class AjouterLienBibliothequePayload(BaseModel):
+    url: str
+    titre: str = None
+    description: str = None
+
+
+@router.post("/{agent_id}/bibliotheque/lien", status_code=201)
+def ajouter_lien_bibliotheque(
+    agent_id: str,
+    payload: AjouterLienBibliothequePayload,
+    request: Request,
+    utilisateur=Depends(utilisateur_courant),
+):
+    """
+    Pendant de uploader_fichier_bibliotheque ci-dessus, pour une entrée
+    "lien" (Bourama 01/08 : le filtre "Lien" existait déjà sans aucun
+    moyen réel d'en ajouter un). Pas de fichier : juste une URL +
+    description, voir enregistrer_lien (core/bibliotheque_fichiers.py).
+    """
+    if not (payload.titre or "").strip() and not (payload.description or "").strip():
+        raise erreur_api(400, "DONNE_AU_MOINS_UNE_DESCRIPTION_OU")
+    if not (payload.url or "").strip():
+        raise erreur_api(400, "URL_MANQUANTE")
+
+    try:
+        res = (
+            supabase.table("agents")
+            .select("id, owner_id")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agent {agent_id} avant ajout lien bibliothèque) : {e}")
+        raise erreur_api(500, "IMPOSSIBLE_D_AJOUTER_CE_LIEN_POUR")
+
+    if not res or not res.data:
+        raise erreur_api(404, "AGENT_INTROUVABLE")
+    if res.data["owner_id"] != utilisateur.id:
+        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+
+    description_finale = (
+        f"{payload.titre.strip()} — {payload.description.strip()}"
+        if (payload.titre or "").strip() and (payload.description or "").strip()
+        else (payload.description or payload.titre or "").strip()
+    )
+
+    try:
+        ligne = enregistrer_lien(
+            url=payload.url.strip(),
+            nom_fichier=(payload.titre or payload.url).strip(),
+            niveau="agent",
+            uploade_par=utilisateur.id,
+            agent_id=agent_id,
+            description=description_finale,
+        )
+    except Exception:
+        raise erreur_api(500, "ECHEC_DE_L_ENREGISTREMENT_DU_LIEN")
+
+    journaliser(
+        action="bibliotheque.ajoute",
+        user_id=utilisateur.id,
+        cible_type="agent",
+        cible_id=agent_id,
+        details={"description": description_finale, "type_mime": "text/uri-list"},
         request=request,
     )
 
