@@ -16,3 +16,4 @@ httpx
 weasyprint
 markdown
 pywebpush
+sympy

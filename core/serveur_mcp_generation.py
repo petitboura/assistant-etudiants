@@ -47,6 +47,7 @@ from core.generation_3d import (
     modele_3d_disponible,
 )
 from core.generation_images import generer_image as _generer_image, image_generation_disponible
+from core.calcul_symbolique import calculer_symbolique as _calculer_symbolique, ErreurCalculSymbolique
 from core.notifications_push import (
     planifier_rappel as _planifier_rappel,
     notifications_push_disponible,
@@ -169,6 +170,65 @@ def generer_document_latex(titre: str, contenu_latex: str) -> str:
     except Exception as e:
         logging.error(f"ERREUR outil generation : {e}")
         return "Erreur : la génération du fichier LaTeX a échoué, réessaie."
+
+
+# Toujours actif, comme generer_image : SymPy est une dependance Python
+# locale (voir requirements.txt), aucune cle API, aucun service tiers.
+# Complementaire de wolfram (registre_outils.py, categorie 2) : celui-ci
+# fait le calcul formel EXACT (simplifier/resoudre/deriver/integrer/
+# developper/factoriser/limite), jamais de connaissance factuelle du
+# monde reel -- ca reste le role de wolfram. Les descriptions des deux
+# outils doivent rester precises pour eviter que le modele hesite entre
+# les deux sur une meme question.
+@mcp_generation.tool()
+def calculer_symbolique(
+    operation: str,
+    expression: str,
+    variable: str = "x",
+    ordre: int = 1,
+    borne_inf: str = None,
+    borne_sup: str = None,
+    point: str = None,
+) -> str:
+    """
+    Calcul symbolique EXACT (pas une approximation) : simplifier,
+    developper, factoriser, deriver, integrer, resoudre une equation,
+    ou calculer une limite. Jamais pour une connaissance factuelle du
+    monde reel (constantes physiques, chimie...) -- utilise wolfram pour
+    ca. A utiliser des qu'un calcul a plusieurs etapes ou des nombres
+    peu communs, PAS pour un calcul mental trivial que tu peux faire
+    seul avec certitude (ex: derivee de x^2).
+
+    `operation` : une des valeurs suivantes.
+    - "simplifier" : simplifie une expression.
+    - "developper" : developpe une expression (distributivite).
+    - "factoriser" : factorise une expression.
+    - "deriver" : derive `expression` par rapport a `variable`, a
+      l'ordre `ordre` (1 par defaut).
+    - "integrer" : primitive de `expression` (ajoute "+ C"), ou
+      integrale definie si `borne_inf` ET `borne_sup` sont fournies.
+    - "resoudre" : resout une equation. `expression` peut contenir un
+      "=" (ex: "2x + 3 = 7") ou etre une expression seule supposee
+      egale a zero (ex: "x^2 - 4").
+    - "limite" : limite de `expression` en `variable` -> `point`.
+      `point` accepte "oo" ou "-oo" pour l'infini.
+
+    `expression` : notation naturelle acceptee (ex: "2x^2 + 3x - 5",
+    "sin(x)*cos(x)"), pas besoin de syntaxe Python stricte.
+
+    Renvoie le resultat en LaTeX (rendu automatiquement dans le chat,
+    entoure de $$...$$) suivi de sa forme texte brute.
+    """
+    try:
+        resultat = _calculer_symbolique(
+            operation, expression, variable, ordre, borne_inf, borne_sup, point
+        )
+        return f"$${resultat['latex']}$$\n(texte : {resultat['texte']})"
+    except ErreurCalculSymbolique as e:
+        return f"Erreur : {e}"
+    except Exception as e:
+        logging.error(f"ERREUR outil calcul_symbolique : {e}")
+        return "Erreur : le calcul a échoué, vérifie l'expression."
 
 
 @mcp_generation.tool()
