@@ -130,15 +130,20 @@ SERVEURS_MCP = [
         "url_builder": _url_notion,
         "headers_builder": _headers_notion,
         "necessite_utilisateur": True,
-        # Notion expose 20 outils (creation/edition de pages, bases de
-        # donnees, commentaires, equipes...) dont la description JSON
-        # complete depasse a elle seule la limite de tokens/minute du
-        # tier Groq gratuit (8000 TPM) une fois cumulee avec Tavily ->
-        # 413 Payload Too Large systematique, qui faisait basculer sur
-        # le fallback Gemini SANS AUCUN outil (ni Notion ni Tavily).
-        # Un utilisateur n'a besoin que de consulter son Notion, pas de le
-        # modifier -> on ne garde que les outils de lecture pour l'instant.
-        "outils_autorises": ["notion-search"],
+        # Notion active a 100% (01/08, demande Bourama) -- plus de
+        # restriction "outils_autorises" : les 20 outils Notion
+        # (recherche + creation/edition de pages, bases de donnees,
+        # commentaires, equipes...) sont desormais tous disponibles.
+        # L'ancienne restriction a notion-search seul datait d'une
+        # inquietude sur le budget 8000 TPM du tier Groq gratuit
+        # (Notion + Tavily cumules -> 413 Payload Too Large) ; elle est
+        # bien moins critique depuis le systeme "bouton Outils"
+        # (25-26/07) qui n'envoie de toute facon plus qu'UN OU PLUSIEURS
+        # outils selectionnes explicitement au LLM, jamais le catalogue
+        # entier. Les outils d'ecriture (notion-create-pages,
+        # notion-update-page, notion-move-pages, etc.) restent proteges :
+        # ils sont tous dans OUTILS_SENSIBLES plus bas, donc TOUJOURS
+        # interrompus pour confirmation utilisateur avant execution.
     },
 ]
 
