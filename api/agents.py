@@ -495,6 +495,18 @@ class AgentDetailPublic(BaseModel):
     image_vitrine_url: Optional[str] = None
     description: str = ""
     owner_id: str
+    # Ajoutés le 2026-08-01 (chantier SEO/AEO) : nécessaires au frontend
+    # pour construire le JSON-LD SoftwareApplication de la page publique
+    # (agent/[id]/page.tsx) — c'est ce qui dit explicitement à Google/aux
+    # IA "cette IA est spécialisée dans TEL domaine précis". Mêmes champs
+    # texte libre que /api/feed, voir _valider_et_verifier_disponibilite_*
+    # plus haut dans ce fichier pour leur origine.
+    matiere: Optional[str] = None
+    matiere_detail: Optional[str] = None
+    langue_africaine: Optional[str] = None
+    metier: Optional[str] = None
+    filiere: Optional[str] = None
+    domaine: Optional[str] = None
 
 
 @router.get("/{agent_id}", response_model=AgentDetailPublic)
@@ -519,7 +531,10 @@ def obtenir_agent_public(agent_id: str):
     try:
         res = (
             supabase.table("agents")
-            .select("id, nom, ui_config, image_vitrine_url, description, owner_id, actif")
+            .select(
+                "id, nom, ui_config, image_vitrine_url, description, owner_id, actif, "
+                "matiere, matiere_detail, langue_africaine, metier, filiere, domaine"
+            )
             .eq("id", agent_id)
             .maybe_single()
             .execute()
@@ -545,6 +560,12 @@ def obtenir_agent_public(agent_id: str):
         image_vitrine_url=ligne.get("image_vitrine_url"),
         description=ligne.get("description") or "",
         owner_id=ligne["owner_id"],
+        matiere=ligne.get("matiere"),
+        matiere_detail=ligne.get("matiere_detail"),
+        langue_africaine=ligne.get("langue_africaine"),
+        metier=ligne.get("metier"),
+        filiere=ligne.get("filiere"),
+        domaine=ligne.get("domaine"),
     )
 
 
