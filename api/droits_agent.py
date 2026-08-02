@@ -176,27 +176,14 @@ def modifier_droits_agent(agent_id: str, payload: ModifierDroitsPayload, utilisa
         logging.error(f"ERREUR SUPABASE (modification droits agent={agent_id}) : {e}")
         raise erreur_api(500, "IMPOSSIBLE_DE_MODIFIER_LES_DROITS_POUR")
 
+    # CORRECTION (Bourama, 02/08) : on n'insère plus automatiquement de
+    # ligne dans agent_updates ici. La section "Mises à jour" de la page
+    # publique de l'agent doit uniquement contenir ce que le créateur
+    # écrit lui-même via "Modifier agent" (voir api/agent_updates.py,
+    # publier_mise_a_jour) -- pas de texte généré à partir des noms
+    # d'outils/serveurs activés. On garde a_change pour la réponse de
+    # l'endpoint (utilisé par le frontend).
     a_change = avant != apres
-    if a_change and payload.informer_utilisateurs:
-        ajouts = apres - avant
-        retraits = avant - apres
-        morceaux = []
-        if ajouts:
-            morceaux.append(f"Nouvelles capacités activées : {', '.join(sorted(ajouts))}")
-        if retraits:
-            morceaux.append(f"Capacités retirées : {', '.join(sorted(retraits))}")
-        try:
-            supabase.table("agent_updates").insert({
-                "agent_id": agent_id,
-                "user_id": utilisateur.id,
-                "titre": "Mise à jour des capacités",
-                "contenu": "\n".join(morceaux),
-            }).execute()
-        except Exception as e:
-            # Ne bloque jamais la sauvegarde des droits pour un souci de
-            # notification -- l'important est que les droits soient bien
-            # enregistrés, l'info aux utilisateurs est secondaire.
-            logging.error(f"ERREUR SUPABASE (agent_update auto droits agent={agent_id}) : {e}")
 
     journaliser(
         action="droits_agent.modifie",
