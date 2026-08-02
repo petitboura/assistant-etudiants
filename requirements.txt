@@ -11,6 +11,8 @@ trafilatura
 youtube-transcript-api
 google-genai
 groq
+anthropic
+openai
 mcp==2.0.0
 httpx
 weasyprint

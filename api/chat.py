@@ -25,8 +25,9 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Literal
 
-from api.auth import utilisateur_optionnel
+from api.auth import utilisateur_optionnel, supabase
 from main import chat as chat_generateur  # core/main.py:chat()
+from fournisseurs_llm import modele_id_est_autorise
 
 logging.basicConfig(level=logging.INFO)
 
@@ -98,6 +99,49 @@ class EnvoyerMessagePayload(BaseModel):
     # Streamlit), jamais via cette route HTTP. Voir StatutOutil.tsx /
     # ChatIA.tsx côté djiguigne-frontend pour le flux de confirmation d'outil.
     reprise: Optional[RepriseConfirmation] = None
+    # Selecteur de modele premium (02/08/2026, voir core/fournisseurs_llm.py
+    # et djiguigne-frontend) : modele_id choisi par l'etudiant/le createur
+    # pour CE message (ex: "claude-sonnet-5"). None = comportement
+    # historique inchange (cascade Groq/Gemini par defaut). REVALIDE ici
+    # contre les modeles reellement debloques de l'agent avant d'etre
+    # transmis a chat() -- jamais fait confiance a la valeur brute envoyee
+    # par le frontend (voir _resoudre_modele_force plus bas).
+    modele: Optional[str] = None
+
+
+def _resoudre_modele_force(agent_id, modele_demande):
+    """
+    Revalide `modele_demande` (envoye par le frontend) contre ce que
+    l'agent `agent_id` a REELLEMENT debloque en base (distributeur_debloque/
+    palier_debloque, voir api/agents.py et core/fournisseurs_llm.py) --
+    jamais de confiance aveugle dans un modele_id venu du client, sinon
+    n'importe qui pourrait forcer Claude/GPT sur un agent qui n'a rien
+    debloque. Retourne None (repli silencieux sur la cascade Groq
+    habituelle) si `modele_demande` est absent, si l'agent est introuvable,
+    ou si le modele n'est pas dans la liste autorisee pour CET agent.
+    """
+    if not modele_demande or not agent_id:
+        return None
+    try:
+        res = (
+            supabase.table("agents")
+            .select("distributeur_debloque, palier_debloque")
+            .eq("id", agent_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (verification modele premium, agent {agent_id}) : {e}")
+        return None
+    if not res or not res.data:
+        return None
+    ligne = res.data
+    if modele_id_est_autorise(modele_demande, ligne.get("distributeur_debloque"), ligne.get("palier_debloque")):
+        return modele_demande
+    logging.error(
+        f"Modele '{modele_demande}' demande mais non debloque pour l'agent {agent_id} -- ignore, repli sur Groq."
+    )
+    return None
 
 
 def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
@@ -132,6 +176,7 @@ def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
                 recherche_forcee=payload.recherche_forcee,
                 outil_force=payload.outil_force,
                 ignorer_suggestion_outils=payload.ignorer_suggestion_outils or False,
+                modele_force=_resoudre_modele_force(payload.agent_id, payload.modele),
             )
         for evenement in generateur:
             yield f"data: {json.dumps(evenement)}\n\n"

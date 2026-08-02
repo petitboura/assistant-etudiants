@@ -32,6 +32,7 @@ from storage import upload_document, list_documents, delete_document, get_docume
 from bibliotheque_fichiers import enregistrer_fichier, enregistrer_lien, lister_fichiers, supprimer_fichier  # noqa: E402
 from mcp_tools import lister_outils_autorises_pour_agent  # noqa: E402
 from core.erreurs import erreur_api
+from core.fournisseurs_llm import modeles_disponibles_pour_agent, modele_id_est_autorise
 
 logging.basicConfig(level=logging.INFO)
 
@@ -507,6 +508,13 @@ class AgentDetailPublic(BaseModel):
     metier: Optional[str] = None
     filiere: Optional[str] = None
     domaine: Optional[str] = None
+    # Ajoutés le 02/08/2026 (modèles premium Claude/GPT/Gemini/DeepSeek) :
+    # publics volontairement, contrairement à distributeur_debloque/
+    # palier_debloque (bruts) qui restent réservés au créateur dans
+    # AgentEditable -- un visiteur/étudiant a juste besoin de savoir QUELS
+    # modèles il peut choisir, pas la mécanique d'abonnement derrière.
+    modeles_disponibles: List[dict] = Field(default_factory=list)
+    modele_choisi: Optional[str] = None
 
 
 @router.get("/{agent_id}", response_model=AgentDetailPublic)
@@ -533,7 +541,8 @@ def obtenir_agent_public(agent_id: str):
             supabase.table("agents")
             .select(
                 "id, nom, ui_config, image_vitrine_url, description, owner_id, actif, "
-                "matiere, matiere_detail, langue_africaine, metier, filiere, domaine"
+                "matiere, matiere_detail, langue_africaine, metier, filiere, domaine, "
+                "distributeur_debloque, palier_debloque, modele_choisi"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -566,6 +575,10 @@ def obtenir_agent_public(agent_id: str):
         metier=ligne.get("metier"),
         filiere=ligne.get("filiere"),
         domaine=ligne.get("domaine"),
+        modeles_disponibles=modeles_disponibles_pour_agent(
+            ligne.get("distributeur_debloque"), ligne.get("palier_debloque")
+        ),
+        modele_choisi=ligne.get("modele_choisi"),
     )
 
 
@@ -770,6 +783,20 @@ class AgentEditable(BaseModel):
     proactivite_delai_jours: int = 4
     proactivite_cooldown_jours: int = 7
     proactivite_instructions: str = ""
+    # Modeles premium (02/08/2026, Bourama : "on va ajouter Claude, GPT et
+    # DeepSeek", voir page Notion "Pricing -- Agent Maths"). Champs en
+    # LECTURE SEULE ici -- distributeur_debloque/palier_debloque ne sont
+    # PAS dans ModifierAgentPayload plus bas : pas de systeme de paiement
+    # pour l'instant (v1), donc uniquement modifiable par Bourama a la
+    # main dans Supabase, jamais par le createur lui-meme via ce PATCH
+    # (sinon n'importe quel createur se debloquerait Claude gratuitement).
+    # `modeles_disponibles` est calcule (pas stocke), voir
+    # core/fournisseurs_llm.py:modeles_disponibles_pour_agent -- vide si
+    # rien n'est debloque, le frontend n'affiche alors aucun selecteur.
+    distributeur_debloque: Optional[str] = None
+    palier_debloque: Optional[str] = None
+    modeles_disponibles: List[dict] = Field(default_factory=list)
+    modele_choisi: Optional[str] = None
 
 
 @router.get("/{agent_id}/edition", response_model=AgentEditable)
@@ -792,7 +819,8 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
                 "metier, filiere, domaine, execution, "
                 "profil_utilisateur_schema, "
                 "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
-                "proactivite_instructions"
+                "proactivite_instructions, "
+                "distributeur_debloque, palier_debloque, modele_choisi"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -842,6 +870,12 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         proactivite_delai_jours=ligne.get("proactivite_delai_jours", 4),
         proactivite_cooldown_jours=ligne.get("proactivite_cooldown_jours", 7),
         proactivite_instructions=ligne.get("proactivite_instructions") or "",
+        distributeur_debloque=ligne.get("distributeur_debloque"),
+        palier_debloque=ligne.get("palier_debloque"),
+        modeles_disponibles=modeles_disponibles_pour_agent(
+            ligne.get("distributeur_debloque"), ligne.get("palier_debloque")
+        ),
+        modele_choisi=ligne.get("modele_choisi"),
     )
 
 
@@ -888,6 +922,13 @@ class ModifierAgentPayload(BaseModel):
     proactivite_delai_jours: Optional[int] = None
     proactivite_cooldown_jours: Optional[int] = None
     proactivite_instructions: Optional[str] = None
+    # Modele par defaut parmi ceux DEJA debloques pour cet agent (voir
+    # AgentEditable.modeles_disponibles) -- distributeur_debloque/
+    # palier_debloque eux-memes ne sont PAS dans ce payload, voir le
+    # commentaire sur AgentEditable plus haut. None accepte = pas de
+    # preference explicite, l'agent retombe alors sur la cascade Groq
+    # habituelle pour chaque message (aucun modele premium par defaut).
+    modele_choisi: Optional[str] = None
 
 
 @router.patch("/{agent_id}", response_model=AgentEditable)
@@ -917,7 +958,8 @@ def modifier_agent(
                 "metier, filiere, domaine, execution, "
                 "profil_utilisateur_schema, "
                 "proactivite_active, proactivite_delai_jours, proactivite_cooldown_jours, "
-                "proactivite_instructions"
+                "proactivite_instructions, "
+                "distributeur_debloque, palier_debloque, modele_choisi"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -1087,6 +1129,20 @@ def modifier_agent(
     if payload.proactivite_instructions is not None:
         mise_a_jour["proactivite_instructions"] = payload.proactivite_instructions.strip()
 
+    if payload.modele_choisi is not None:
+        if payload.modele_choisi == "":
+            mise_a_jour["modele_choisi"] = None
+        elif not modele_id_est_autorise(
+            payload.modele_choisi, ligne.get("distributeur_debloque"), ligne.get("palier_debloque")
+        ):
+            # Le createur ne peut choisir QUE parmi les modeles reellement
+            # debloques pour son agent -- jamais de confiance aveugle
+            # dans un modele_id envoye par le frontend (voir
+            # core/fournisseurs_llm.py:modele_id_est_autorise).
+            raise erreur_api(422, "CE_MODELE_N_EST_PAS_DEBLOQUE_POUR")
+        else:
+            mise_a_jour["modele_choisi"] = payload.modele_choisi
+
     if payload.categorie_id is not None:
         try:
             categorie_existe = (
@@ -1206,6 +1262,12 @@ def modifier_agent(
         proactivite_instructions=mise_a_jour.get(
             "proactivite_instructions", ligne.get("proactivite_instructions") or ""
         ),
+        distributeur_debloque=ligne.get("distributeur_debloque"),
+        palier_debloque=ligne.get("palier_debloque"),
+        modeles_disponibles=modeles_disponibles_pour_agent(
+            ligne.get("distributeur_debloque"), ligne.get("palier_debloque")
+        ),
+        modele_choisi=mise_a_jour.get("modele_choisi", ligne.get("modele_choisi")),
     )
 
 

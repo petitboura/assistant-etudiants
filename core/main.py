@@ -15,6 +15,7 @@ from configuration import get_system_prompt
 from retriever import chercher_candidats
 from mcp_tools import lister_tous_les_outils, lister_outils_autorises_pour_agent, appeler_outil
 from registre_outils import OUTILS_SENSIBLES, OUTILS_AUTONOMES
+from fournisseurs_llm import generer_reponse_premium
 
 logging.basicConfig(level=logging.INFO)
 
@@ -1521,12 +1522,21 @@ DELAI_MAX_PAR_APPEL = 10  # secondes : on bascule vite plutot que d'attendre
 MAX_PASSAGES_CASCADE = 2  # on ne retente toute la cascade que si TOUT a timeout
 
 
-def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale, conversation_id=None):
+def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale, conversation_id=None, modele=None):
     """
     Persiste l'echange (question + reponse) dans `conversations`, pour la
     memoire long-terme. Ignore silencieusement si l'utilisateur n'est pas
     connecte (user_id=None) ou si la reponse est vide (ex: message
     d'erreur technique, qu'on ne veut pas polluer la memoire avec).
+
+    `modele` (optionnel, 02/08/2026) : modele_id qui a genere
+    `reponse_finale`, ecrit UNIQUEMENT sur la ligne "assistant" de
+    `historique_conversations` (pas sur `conversations`, table de memoire
+    court terme sans vocation d'affichage) -- None si la cascade Groq/
+    Gemini par defaut a repondu (comportement historique inchange, colonne
+    nullable), sinon le modele_id premium (voir core/fournisseurs_llm.py).
+    Permet au frontend d'afficher quel modele a repondu sous chaque
+    message (voir AgentEditable.modeles_disponibles cote api/agents.py).
     """
     ids_historique = None  # renvoyé à l'appelant pour l'indexation du feedback
 
@@ -1561,7 +1571,7 @@ def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale,
             supabase.table("historique_conversations")
             .insert([
                 {"user_id": user_id, "agent_id": agent_id, "role": "user", "content": message_utilisateur, "conversation_id": conversation_id},
-                {"user_id": user_id, "agent_id": agent_id, "role": "assistant", "content": reponse_finale, "conversation_id": conversation_id},
+                {"user_id": user_id, "agent_id": agent_id, "role": "assistant", "content": reponse_finale, "conversation_id": conversation_id, "modele": modele},
             ])
             .execute()
         )
@@ -1573,6 +1583,11 @@ def _sauvegarder_echange(user_id, agent_id, message_utilisateur, reponse_finale,
                 "message_id_user": ligne_user["id"],
                 "message_id_assistant": ligne_assistant["id"],
                 "created_at_assistant": ligne_assistant.get("created_at"),
+                # Propage automatiquement dans tous les evenements SSE
+                # "meta" (voir chaque site d'appel plus haut, tous font
+                # **ids_historique) -- evite de dupliquer ce champ a la
+                # main partout, voir ChatIA.tsx cote frontend pour l'usage.
+                "modele": modele,
             }
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (sauvegarde historique_conversations) : {e}")
@@ -2306,7 +2321,7 @@ def _capturer_reponse(generateur, accumulateur):
         yield event
 
 
-def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None, recherche_forcee=False, outil_force=None, ignorer_suggestion_outils=False):
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None, recherche_forcee=False, outil_force=None, ignorer_suggestion_outils=False, modele_force=None):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
@@ -2427,6 +2442,18 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     fois toute la cascade. Si au moins une erreur n'est pas un timeout (ex:
     429, cle invalide...), on ne retente pas et on part direct sur le
     message d'erreur.
+
+    `modele_force` (optionnel, 02/08/2026, voir core/fournisseurs_llm.py) :
+    modele_id premium (Claude/GPT/Gemini/DeepSeek) choisi par l'utilisateur
+    pour CE message, deja revalide cote appelant (api/chat.py) contre les
+    modeles reellement debloques de l'agent -- ce module ne refait PAS
+    cette verification, il fait confiance a l'appelant. Ignore si un
+    image_url/images_base64 est present (la vision reste reservee au
+    chemin Gemini existant plus bas). LIMITE CONNUE : ce chemin ne passe
+    PAS par le cascade Groq ni par les outils MCP (pas de RAG, Wolfram,
+    Notion, recherche web...) -- reponse texte seule, comme le chemin
+    vision Gemini juste en dessous. A etendre en v2 si le tool-calling
+    multi-fournisseurs est prioritaire.
     """
     if reprise is not None:
         etat = reprise["etat_reprise"]
@@ -2637,13 +2664,41 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     reponse_accumulee.append(chunk.text)
                     yield {"type": "reponse", "texte": chunk.text}
             logging.info("Réponse via GEMINI (image)")
-            ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+            ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id, modele=GOOGLE_MODEL)
             if ids_historique:
                 yield {"type": "meta", **ids_historique}
             _mettre_a_jour_resume_si_besoin(user_id)
             _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id)
         except Exception as e:
             logging.error(f"ERREUR GEMINI (image): {e}")
+            if not reponse_accumulee:
+                yield {"type": "reponse", "texte": MESSAGE_ERREUR}
+        return
+
+    if modele_force:
+        # Modele premium (Claude/GPT/Gemini/DeepSeek), voir docstring de
+        # chat() -- meme structure que le bloc image juste au-dessus :
+        # pas d'outils MCP, pas de cascade de secours multi-modeles, un
+        # seul appel, on retombe sur MESSAGE_ERREUR s'il echoue.
+        messages_premium = [
+            {"role": m["role"], "content": m["content"]}
+            for m in messages_base if m["role"] != "system"
+        ]
+        reponse_accumulee = []
+        try:
+            for morceau in generer_reponse_premium(modele_force, system_final, messages_premium):
+                reponse_accumulee.append(morceau)
+                yield {"type": "reponse", "texte": morceau}
+            logging.info(f"Réponse via MODELE PREMIUM : {modele_force}")
+            ids_historique = _sauvegarder_echange(
+                user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id, modele=modele_force
+            )
+            if ids_historique:
+                yield {"type": "meta", **ids_historique}
+            _mettre_a_jour_resume_si_besoin(user_id)
+            _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id)
+        except Exception as e:
+            logging.error(f"ERREUR MODELE PREMIUM ({modele_force}) : {e}")
             if not reponse_accumulee:
                 yield {"type": "reponse", "texte": MESSAGE_ERREUR}
         return
@@ -2680,7 +2735,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
             evenement_lien_manquant = _completer_liens_manquants(reponse_accumulee, messages_agent)
             if evenement_lien_manquant:
                 yield evenement_lien_manquant
-            ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+            ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id, modele=GROQ_PRIMARY)
             if ids_historique:
                 yield {"type": "meta", **ids_historique}
             _mettre_a_jour_resume_si_besoin(user_id)
@@ -2718,7 +2773,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                 evenement_lien_manquant = _completer_liens_manquants(reponse_accumulee, messages_agent)
                 if evenement_lien_manquant:
                     yield evenement_lien_manquant
-                ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+                ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id, modele=model)
                 # Signale au frontend quand la reponse vient d'un modele de
                 # qualite reduite (demande Bourama, 26/07) : evite que
                 # l'utilisateur juge la plateforme sur une reponse plus
@@ -2837,7 +2892,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
                     reponse_accumulee.append(chunk.text)
                     yield {"type": "reponse", "texte": chunk.text}
             logging.info("Réponse via GEMINI")
-            ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id)
+            ids_historique = _sauvegarder_echange(user_id, agent_id, message_utilisateur, "".join(reponse_accumulee), conversation_id, modele=GOOGLE_MODEL)
             if ids_historique:
                 yield {"type": "meta", **ids_historique}
             _mettre_a_jour_resume_si_besoin(user_id)
