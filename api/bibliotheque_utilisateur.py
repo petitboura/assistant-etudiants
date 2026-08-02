@@ -60,9 +60,12 @@ async def uploader_document(
     répondre à partir de son contenu -- les autres types restent
     retrouvables par nom/description via chercher_fichier uniquement.
     """
-    if not (titre or "").strip() and not (description or "").strip():
-        raise erreur_api(400, "DONNE_AU_MOINS_UNE_DESCRIPTION_OU")
-
+    # CORRECTION du 01/08 (Bourama : "plusieurs upload à la fois") :
+    # description/titre ne sont plus obligatoires -- repli sur le nom du
+    # fichier tel quel, pour ne pas forcer une saisie manuelle par
+    # fichier quand on en envoie plusieurs d'un coup. chercher_fichier
+    # (recherche par nom/description) reste utilisable, juste moins
+    # fin sans description écrite à la main.
     if fichier.content_type not in TYPES_AUTORISES:
         raise erreur_api(400, "TYPE_DE_FICHIER_NON_SUPPORTE")
 
@@ -75,7 +78,7 @@ async def uploader_document(
     nom_original = fichier.filename or "fichier"
     description_finale = (
         f"{titre.strip()} — {description.strip()}" if (titre or "").strip() and (description or "").strip()
-        else (description or titre or "").strip()
+        else (description or titre or "").strip() or nom_original
     )
 
     try:

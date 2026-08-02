@@ -28,6 +28,7 @@ from api.auth import supabase, utilisateur_courant, get_secret
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
 from bibliotheque_fichiers import enregistrer_fichier, indexer_fichier_existant  # noqa: E402
+from bibliotheque_rag import indexer_texte_bibliotheque  # noqa: E402
 from conversion_pdf import conversion_disponible, convertir_en_pdf  # noqa: E402
 from core.erreurs import erreur_api
 
@@ -325,6 +326,14 @@ async def uploader_document_chat(
     # tard via chercher_fichier. Best-effort : un souci ici ne doit
     # jamais faire échouer la réponse (le texte extrait reste le besoin
     # principal de cet endpoint).
+    #
+    # CORRECTION du 01/08 (Bourama : "chaque upload y reste", un document
+    # envoyé ICI, en chat, doit être consultable plus tard par
+    # consulter_bibliotheque comme n'importe quel document ajouté depuis
+    # Mon espace -- pas seulement stocké/retrouvable par nom) : le texte
+    # est déjà extrait juste au-dessus (`texte`, PDF/Word/Excel), on le
+    # vectorise directement sans le ré-extraire, indexation best-effort
+    # elle aussi (ne bloque jamais la réponse).
     try:
         ligne = enregistrer_fichier(
             contenu=contenu,
@@ -336,6 +345,10 @@ async def uploader_document_chat(
             description="Document envoyé en conversation",
         )
         url_document = ligne["url_publique"]
+        try:
+            indexer_texte_bibliotheque(texte, fichier_id=ligne["id"], user_id=utilisateur.id)
+        except Exception as e:
+            logging.error(f"ERREUR vectorisation bibliothèque perso pour document chat {fichier.filename} : {e}")
     except Exception as e:
         logging.warning(f"Indexation bibliothèque échouée pour document chat {fichier.filename} (extraction OK quand même) : {e}")
         url_document = None

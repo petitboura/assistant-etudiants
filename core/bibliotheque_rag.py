@@ -13,11 +13,18 @@ pas un seul (voir core/mcp_tools.py:lister_outils_autorises_pour_agent,
 consulter_bibliotheque y est ajouté sans passer par le filtre habituel
 agents_outils_generation).
 
-Seul le PDF est vectorisé pour l'instant (même limite que la bibliothèque
-au niveau agent, voir api/agents.py:uploader_fichier_bibliotheque) --
-un fichier bibliothèque d'un autre type (image, audio...) reste
-retrouvable via chercher_fichier (nom/description), juste pas par le
-contenu.
+Correction du 01/08 (Bourama : "chaque upload y reste", "à quoi bon le
+upload sinon") -- au départ SEUL un PDF ajouté via la page Mon espace
+était vectorisé. Un PDF/Word/Excel envoyé en pièce jointe dans N'IMPORTE
+QUEL chat (api/uploads.py:uploader_document_chat) était bien stocké
+(niveau="utilisateur" depuis le 22/07) mais jamais indexé ici -- donc
+invisible pour consulter_bibliotheque. indexer_texte_bibliotheque()
+ci-dessous corrige ça : réutilisable partout où un texte est DÉJÀ
+extrait (uploader_document_chat extrait déjà le texte du PDF/Word/Excel
+pour l'injecter dans le message, plus besoin de le refaire ici).
+indexer_pdf_bibliotheque() (utilisée par la page Mon espace, qui reçoit
+directement des bytes PDF) n'est plus qu'un raccourci qui extrait le
+texte puis appelle indexer_texte_bibliotheque().
 """
 
 import logging
@@ -48,14 +55,14 @@ def extraire_texte_pdf(chemin_pdf: str) -> str:
     return texte.replace("\x00", "")
 
 
-def indexer_pdf_bibliotheque(chemin_pdf: str, fichier_id: str, user_id: str) -> int:
+def indexer_texte_bibliotheque(texte: str, fichier_id: str, user_id: str) -> int:
     """
-    Découpe + vectorise un PDF déjà stocké (voir enregistrer_fichier) et
-    insère ses chunks dans documents_bibliotheque, liés à `fichier_id`
-    (pour le nettoyage en cascade à la suppression, voir la migration).
-    Renvoie le nombre de chunks indexés.
+    Découpe + vectorise un texte DÉJÀ EXTRAIT (peu importe la source
+    d'origine -- PDF, Word, Excel...) et insère ses chunks dans
+    documents_bibliotheque, liés à `fichier_id` (pour le nettoyage en
+    cascade à la suppression, voir la migration). Renvoie le nombre de
+    chunks indexés.
     """
-    texte = extraire_texte_pdf(chemin_pdf)
     morceaux = decouper_texte(texte)[:TAILLE_MAX_CHUNKS_PAR_DOCUMENT]
 
     lignes = []
@@ -75,6 +82,11 @@ def indexer_pdf_bibliotheque(chemin_pdf: str, fichier_id: str, user_id: str) -> 
 
     logging.info(f"Bibliothèque perso : {len(lignes)} chunk(s) indexé(s) pour fichier_id={fichier_id}")
     return len(lignes)
+
+
+def indexer_pdf_bibliotheque(chemin_pdf: str, fichier_id: str, user_id: str) -> int:
+    """Raccourci pour un PDF reçu en bytes (voir api/bibliotheque_utilisateur.py) : extrait le texte puis délègue à indexer_texte_bibliotheque."""
+    return indexer_texte_bibliotheque(extraire_texte_pdf(chemin_pdf), fichier_id, user_id)
 
 
 def chercher_bibliotheque(question: str, user_id: str, match_count: int = 5) -> list:
