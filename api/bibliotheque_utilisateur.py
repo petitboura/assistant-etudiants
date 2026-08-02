@@ -32,7 +32,7 @@ from core.erreurs import erreur_api
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
 from bibliotheque_fichiers import enregistrer_fichier, enregistrer_lien, lister_fichiers, supprimer_fichier  # noqa: E402
-from bibliotheque_rag import indexer_pdf_bibliotheque  # noqa: E402
+from bibliotheque_rag import indexer_pdf_bibliotheque, indexer_texte_bibliotheque  # noqa: E402
 
 router = APIRouter(prefix="/api/bibliotheque", tags=["bibliotheque-utilisateur"])
 
@@ -138,15 +138,18 @@ def ajouter_lien(
     utilisateur=Depends(utilisateur_courant),
 ):
     """Pendant de uploader_document ci-dessus pour une entrée "lien" (voir enregistrer_lien)."""
-    if not (payload.titre or "").strip() and not (payload.description or "").strip():
-        raise erreur_api(400, "DONNE_AU_MOINS_UNE_DESCRIPTION_OU")
+    # Assoupli le 01/08 (Bourama : "pas de filtre au moment de l'upload",
+    # ajout groupé fichiers+liens+texte en une seule action) : plus de
+    # titre/description obligatoire, repli sur l'URL elle-même -- même
+    # logique que uploader_document ci-dessus depuis la correction
+    # "plusieurs upload à la fois".
     if not (payload.url or "").strip():
         raise erreur_api(400, "URL_MANQUANTE")
 
     description_finale = (
         f"{payload.titre.strip()} — {payload.description.strip()}"
         if (payload.titre or "").strip() and (payload.description or "").strip()
-        else (payload.description or payload.titre or "").strip()
+        else (payload.description or payload.titre or "").strip() or payload.url.strip()
     )
 
     try:
@@ -167,6 +170,63 @@ def ajouter_lien(
         cible_type="utilisateur",
         cible_id=utilisateur.id,
         details={"description": description_finale, "type_mime": "text/uri-list"},
+        request=request,
+    )
+
+    return ligne
+
+
+class AjouterTextePayload(BaseModel):
+    contenu: str
+    titre: str = None
+
+
+@router.post("/texte", status_code=201)
+def ajouter_texte(
+    payload: AjouterTextePayload,
+    request: Request,
+    utilisateur=Depends(utilisateur_courant),
+):
+    """
+    Note de texte tapée/collée directement (2026-08-01, demande Bourama :
+    "ajoute le cas des liens et du texte", "pas de filtre au moment de
+    l'upload") -- stockée comme un fichier .txt ordinaire (même mécanisme
+    que uploader_document, type_mime="text/plain" sert de marqueur côté
+    frontend pour le sous-onglet "Texte"), mais indexée DIRECTEMENT
+    (pas besoin d'extraction, contrairement à un PDF) : immédiatement
+    consultable par consulter_bibliotheque.
+    """
+    contenu = (payload.contenu or "").strip()
+    if not contenu:
+        raise erreur_api(400, "TEXTE_VIDE")
+
+    titre = (payload.titre or "").strip()
+    nom_fichier = f"{titre or 'Note'}.txt"
+
+    try:
+        ligne = enregistrer_fichier(
+            contenu=contenu.encode("utf-8"),
+            nom_fichier=nom_fichier,
+            type_mime="text/plain",
+            niveau="utilisateur",
+            uploade_par=utilisateur.id,
+            user_id=utilisateur.id,
+            description=titre or (contenu[:80] + ("…" if len(contenu) > 80 else "")),
+        )
+    except Exception:
+        raise erreur_api(500, "ECHEC_DE_L_ENREGISTREMENT_DE_LA_NOTE")
+
+    try:
+        indexer_texte_bibliotheque(contenu, fichier_id=ligne["id"], user_id=utilisateur.id)
+    except Exception as e:
+        logging.error(f"ERREUR vectorisation note texte bibliothèque perso (fichier_id={ligne['id']}) : {e}")
+
+    journaliser(
+        action="bibliotheque_perso.ajoute",
+        user_id=utilisateur.id,
+        cible_type="utilisateur",
+        cible_id=utilisateur.id,
+        details={"description": titre, "type_mime": "text/plain"},
         request=request,
     )
 
