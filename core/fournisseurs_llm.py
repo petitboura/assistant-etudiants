@@ -120,7 +120,14 @@ def modeles_disponibles_pour_agent(distributeur_debloque, palier_debloque):
         palier_debloque = "essentiel"
 
     index_distributeur = ORDRE_DISTRIBUTEURS.index(distributeur_debloque)
-    distributeurs_autorises = ORDRE_DISTRIBUTEURS[: index_distributeur + 1]
+    # BUG CORRIGE (02/08/2026, repere par Bourama : seul Claude
+    # apparaissait pour un agent debloque en "claude") -- claude est en
+    # TETE de ORDRE_DISTRIBUTEURS (index 0) et doit debloquer tout ce qui
+    # suit (gpt/gemini/deepseek), donc la tranche va de cet index
+    # JUSQU'A LA FIN de la liste, pas du debut jusqu'a cet index (l'ancien
+    # ORDRE_DISTRIBUTEURS[:index+1] faisait l'inverse : "claude" ->
+    # uniquement ["claude"], jamais rien en dessous).
+    distributeurs_autorises = ORDRE_DISTRIBUTEURS[index_distributeur:]
 
     index_palier = ORDRE_PALIERS.index(palier_debloque)
     paliers_autorises = ORDRE_PALIERS[: index_palier + 1]
