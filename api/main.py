@@ -9,8 +9,10 @@ import logging
 from contextlib import asynccontextmanager
 from typing import List, Optional
 
+from anyio import to_thread
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, supabase
@@ -76,6 +78,17 @@ async def _boucle_planificateur_proactivite():
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
+    # Toutes les routes API sont en `def` sync (Supabase, Groq, Gemini :
+    # SDKs synchrones) -- FastAPI les exécute correctement dans le
+    # threadpool par défaut d'AnyIO, mais celui-ci est limité à 40
+    # workers. /api/chat (SSE) retient un worker pendant toute la
+    # génération (plusieurs secondes en streaming) : au-delà de ~40
+    # conversations simultanées, les nouvelles requêtes attendraient un
+    # worker libre. Relevé ici en attendant une éventuelle migration vers
+    # des clients async (AsyncGroq, etc.) -- valeur à ajuster selon la
+    # RAM disponible sur Railway (chaque thread a un coût mémoire).
+    to_thread.current_default_thread_limiter().total_tokens = 100
+
     # Requis par FastMCP (stateless_http=True) : le session_manager du
     # serveur MCP de génération (voir core/serveur_mcp_generation.py) a
     # besoin de tourner pendant toute la durée de vie du process, sinon
@@ -139,6 +152,32 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class GZipSaufChat:
+    """GZip sur toute l'API SAUF /api/chat.
+
+    Le fil, l'historique, la recherche et les listes d'agents gagnent
+    beaucoup à être compressés (JSON qui peut être volumineux). Le SSE
+    de /api/chat, lui, streame des chunks minuscules token par token :
+    les compresser n'apporte quasi rien et ajouterait une latence de
+    flush inutile, à l'encontre du réglage anti-buffering déjà en place
+    (X-Accel-Buffering: no, voir api/chat.py). D'où l'exclusion
+    explicite plutôt qu'un GZipMiddleware appliqué partout.
+    """
+
+    def __init__(self, app):
+        self._app_brut = app
+        self._app_gzip = GZipMiddleware(app, minimum_size=500)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"].startswith("/api/chat"):
+            await self._app_brut(scope, receive, send)
+        else:
+            await self._app_gzip(scope, receive, send)
+
+
+app.add_middleware(GZipSaufChat)
 
 app.include_router(agents_router)
 app.include_router(creators_router)
