@@ -31,6 +31,7 @@ d'appeler les mêmes /api/connexions/{service}/* pour les deux.
 """
 
 import os
+import re
 import sys
 import asyncio
 import json
@@ -278,3 +279,162 @@ def pages_notion(q: str = "", utilisateur=Depends(utilisateur_courant)):
         if r.get("url")
     ]
     return {"pages": pages}
+
+
+@router.get("/notion/bases/lignes")
+def lignes_base_notion(url: str, q: str = "", utilisateur=Depends(utilisateur_courant)):
+    """
+    Interroge le CONTENU d'une base Notion (02/08, demande Bourama : "on va
+    ajouter" notion-query-data-sources / notion-query-database-view --
+    scope confirmé : choisir la base via le sélecteur existant [type
+    "database" dans /notion/pages ci-dessus], puis un 2e écran de requête).
+
+    `url` = l'URL Notion de la base (celle renvoyée par /notion/pages, type
+    "database"), PAS une data source URL -- c'est cette route qui fait la
+    conversion, voir ci-dessous.
+
+    ÉTAPE 1 -- notion-fetch(url) : une base Notion n'est pas directement
+    interrogeable par son URL de page. Il faut d'abord la "fetcher" pour
+    obtenir sa data source URL (collection://<uuid>), qui apparaît dans le
+    Markdown renvoyé sous forme de balise <data-source url="collection://...">
+    (voir doc de l'outil notion-fetch). D'où l'appel préalable ici.
+
+    ÉTAPE 2 -- notion-query-data-sources en mode SQL : `SELECT * FROM
+    "<data_source_url>" LIMIT 50`. Mode SQL choisi plutôt que le mode "view"
+    (notion-query-database-view) parce que ce dernier a besoin d'une URL de
+    VUE (?v=...), qu'on n'est pas garanti d'obtenir facilement depuis le
+    fetch -- alors que la data source URL, elle, est toujours présente.
+
+    `q` (le texte tapé dans le 2e écran) : pas de vraie clause SQL dynamique
+    construite à partir du texte de la personne (schéma de colonnes inconnu
+    à l'avance, risque d'injection si mal fait) -- on charge les lignes
+    (max 50) puis on filtre nous-mêmes en Python sur toutes les valeurs de
+    chaque ligne. Suffisant pour un sélecteur rapide, pas pour une vraie
+    recherche structurée.
+    """
+    token = notion.obtenir_token_valide(utilisateur.id)
+    if not token:
+        raise erreur_api(400, "NOTION_NON_CONNECTE")
+
+    entetes = {"Authorization": f"Bearer {token}"}
+
+    try:
+        fetch_brut = asyncio.run(
+            _appeler_outil_async(
+                "https://mcp.notion.com/mcp", "notion-fetch", {"id": url}, headers=entetes
+            )
+        )
+    except Exception as e:
+        logging.error(f"ERREUR FETCH BASE NOTION (MCP) : {e}")
+        raise erreur_api(502, "NOTION_BASE_INDISPONIBLE")
+
+    correspondance = re.search(r'collection://[0-9a-fA-F-]+', fetch_brut)
+    if not correspondance:
+        raise erreur_api(404, "NOTION_BASE_SANS_DATA_SOURCE")
+    data_source_url = correspondance.group(0)
+
+    try:
+        query_brut = asyncio.run(
+            _appeler_outil_async(
+                "https://mcp.notion.com/mcp",
+                "notion-query-data-sources",
+                {
+                    "data": {
+                        "mode": "sql",
+                        "data_source_urls": [data_source_url],
+                        "query": f'SELECT * FROM "{data_source_url}" LIMIT 50',
+                    }
+                },
+                headers=entetes,
+            )
+        )
+        donnees = json.loads(query_brut)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"ERREUR REQUETE BASE NOTION (MCP) : {e}")
+        raise erreur_api(502, "NOTION_BASE_INDISPONIBLE")
+
+    lignes_brutes = donnees.get("rows") or donnees.get("results") or []
+    q_normalise = q.strip().lower()
+
+    lignes = []
+    for ligne in lignes_brutes:
+        if not isinstance(ligne, dict):
+            continue
+        # Nom de la colonne "titre" inconnu à l'avance (schéma variable
+        # d'une base à l'autre) -- on prend la première valeur texte non
+        # vide comme titre d'affichage, plutôt que de deviner un nom de
+        # colonne fixe ("Nom", "Name", "Titre"...).
+        titre = next(
+            (str(v) for v in ligne.values() if isinstance(v, str) and v.strip()),
+            "(sans titre)",
+        )
+        url_ligne = ligne.get("url") or ligne.get("Url") or ligne.get("URL")
+        if q_normalise and not any(
+            q_normalise in str(v).lower() for v in ligne.values() if v is not None
+        ):
+            continue
+        lignes.append({"titre": titre, "url": url_ligne, "proprietes": ligne})
+
+    return {"lignes": lignes}
+
+
+class CreationPageNotion(BaseModel):
+    titre: str
+    contenu: str = ""
+
+
+@router.post("/notion/pages")
+def creer_page_notion(payload: CreationPageNotion, utilisateur=Depends(utilisateur_courant)):
+    """
+    Crée une page Notion standalone (02/08, demande Bourama, scope confirmé :
+    titre + zone de texte pour le contenu, pas de choix de page/base parente
+    dans cette itération -> pages créées au niveau racine du workspace,
+    l'utilisateur les range ensuite lui-même dans Notion s'il veut).
+
+    ATTENTION -- notion-create-pages est listé dans OUTILS_SENSIBLES
+    (core/registre_outils.py) : quand le LLM appelle cet outil PENDANT une
+    conversation, main.py interrompt le flux pour demander confirmation.
+    CETTE route-ci ne passe PAS par main.py (même schéma que /notion/pages
+    en GET et /notion/bases/lignes ci-dessus : appel MCP direct depuis le
+    sélecteur) -- la confirmation ici, c'est le clic explicite de la
+    personne sur "Créer" dans le formulaire du sélecteur, pas une
+    interruption supplémentaire côté backend.
+    """
+    if not payload.titre.strip():
+        raise erreur_api(400, "TITRE_REQUIS")
+
+    token = notion.obtenir_token_valide(utilisateur.id)
+    if not token:
+        raise erreur_api(400, "NOTION_NON_CONNECTE")
+
+    try:
+        resultat_brut = asyncio.run(
+            _appeler_outil_async(
+                "https://mcp.notion.com/mcp",
+                "notion-create-pages",
+                {
+                    "pages": [
+                        {
+                            "properties": {"title": payload.titre},
+                            "content": payload.contenu,
+                        }
+                    ]
+                },
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        )
+        donnees = json.loads(resultat_brut)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"ERREUR CREATION PAGE NOTION (MCP) : {e}")
+        raise erreur_api(502, "NOTION_CREATION_INDISPONIBLE")
+
+    pages_creees = donnees.get("pages") or donnees.get("results") or []
+    url_page = pages_creees[0].get("url") if pages_creees else None
+    if not url_page:
+        raise erreur_api(502, "NOTION_CREATION_INDISPONIBLE")
+
+    return {"url": url_page}
