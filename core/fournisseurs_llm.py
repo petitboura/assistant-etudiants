@@ -133,11 +133,21 @@ def modeles_disponibles_pour_agent(distributeur_debloque, palier_debloque):
     paliers_autorises = ORDRE_PALIERS[: index_palier + 1]
 
     resultats = []
+    ids_deja_vus = set()
     for distributeur in distributeurs_autorises:
         if not _distributeur_disponible(distributeur):
             continue
         for palier in paliers_autorises:
             info = HIERARCHIE_MODELES[distributeur][palier]
+            # Dedoublonnage par modele_id (cas DeepSeek, seul fournisseur
+            # ou 2 paliers partagent le meme modele_id -- voir
+            # HIERARCHIE_MODELES : essentiel et avance valent tous les
+            # deux "deepseek-chat" -- sans ca "DeepSeek Chat" apparaissait
+            # deux fois d'affilee dans la liste, repere par Bourama sur
+            # la capture d'ecran de Nucleos).
+            if info["id"] in ids_deja_vus:
+                continue
+            ids_deja_vus.add(info["id"])
             resultats.append({
                 "modele_id": info["id"],
                 "label": info["label"],
