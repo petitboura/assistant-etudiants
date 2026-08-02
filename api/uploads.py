@@ -145,6 +145,7 @@ async def uploader_image_chat(
             uploade_par=utilisateur.id,
             user_id=utilisateur.id,
             description="Image envoyée en conversation",
+            origine="chat",
             taille_octets=len(contenu),
         )
     except Exception as e:
@@ -347,6 +348,7 @@ async def uploader_document_chat(
             uploade_par=utilisateur.id,
             user_id=utilisateur.id,
             description="Document envoyé en conversation",
+            origine="chat",
         )
         url_document = ligne["url_publique"]
     except Exception as e:
@@ -469,6 +471,7 @@ async def uploader_audio_chat(
             uploade_par=utilisateur.id,
             user_id=utilisateur.id,
             description="Audio envoyé en conversation",
+            origine="chat",
         )
         url_audio = ligne["url_publique"]
     except Exception as e:
@@ -645,6 +648,7 @@ async def uploader_video_chat(
                 uploade_par=utilisateur.id,
                 user_id=utilisateur.id,
                 description="Vidéo envoyée en conversation",
+                origine="chat",
             )
             url_video = ligne["url_publique"]
         except Exception as e:

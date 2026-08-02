@@ -78,6 +78,7 @@ def enregistrer_fichier(
     agent_id: str = None,
     user_id: str = None,
     description: str = None,
+    origine: str = "bibliotheque",
 ) -> dict:
     """
     Stocke un fichier dans Supabase Storage et l'indexe dans
@@ -86,6 +87,12 @@ def enregistrer_fichier(
     requis en cohérence avec le niveau (ex. niveau="agent" -> agent_id
     obligatoire) mais ce n'est pas vérifié ici -- c'est à l'appelant
     (route API) de garantir la cohérence selon qui uploade.
+    `origine` (2026-08-01, "chat" ou "bibliotheque", voir migration
+    fichiers_uploades_origine) : distingue un fichier envoyé en pièce
+    jointe de conversation (jamais dans la liste "Mon espace >
+    Bibliothèque", voir lister_fichiers) d'un fichier ajouté
+    explicitement à une bibliothèque -- par défaut "bibliotheque", les 4
+    appels depuis api/uploads.py (chat) passent "chat" explicitement.
     Renvoie la ligne insérée (avec son id et son url_publique).
     """
     extension = nom_fichier.rsplit(".", 1)[-1] if "." in nom_fichier else "bin"
@@ -113,6 +120,7 @@ def enregistrer_fichier(
             "type_mime": type_mime,
             "description": description,
             "taille_octets": len(contenu),
+            "origine": origine,
         }).execute()
     except Exception as e:
         logging.error(f"ERREUR ECRITURE fichiers_uploades ({chemin_stockage}) : {e}")
@@ -203,17 +211,21 @@ def chercher_fichiers(recherche: str, agent_id: str = None, user_id: str = None,
     return fichiers
 
 
-def lister_fichiers(niveau: str, agent_id: str = None, user_id: str = None) -> list:
+def lister_fichiers(niveau: str, agent_id: str = None, user_id: str = None, origine: str = None) -> list:
     """
     Liste exhaustive (pas une recherche par mot-clé) des fichiers d'un
     niveau précis -- utilisé pour l'écran de gestion du créateur
     ("ma bibliothèque pour cet agent"), pas par l'IA en conversation.
+    `origine` (2026-08-01) : optionnel, filtre "chat" vs "bibliotheque"
+    -- voir enregistrer_fichier.
     """
     requete = supabase.table("fichiers_uploades").select("*").eq("niveau", niveau)
     if agent_id:
         requete = requete.eq("agent_id", agent_id)
     if user_id:
         requete = requete.eq("user_id", user_id)
+    if origine:
+        requete = requete.eq("origine", origine)
     return requete.order("created_at", desc=True).execute().data
 
 
