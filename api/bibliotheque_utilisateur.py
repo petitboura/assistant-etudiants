@@ -175,7 +175,15 @@ def ajouter_lien(
 
 @router.get("")
 def lister(utilisateur=Depends(utilisateur_courant)):
-    return lister_fichiers("utilisateur", user_id=utilisateur.id)
+    # REVERT du 01/08 (Bourama : "supprime-les de la page, eux restent
+    # que dans le chat, tel qu'elle") : un document envoyé en pièce
+    # jointe dans une conversation (voir api/uploads.py:
+    # uploader_document_chat, description fixe "Document envoyé en
+    # conversation") reste un artefact de CETTE conversation, pas un
+    # élément de la bibliothèque personnelle -- exclu ici pour ne
+    # remonter que ce qui a été ajouté à la main via Mon espace.
+    tous = lister_fichiers("utilisateur", user_id=utilisateur.id)
+    return [f for f in tous if f.get("description") != "Document envoyé en conversation"]
 
 
 @router.delete("/{fichier_id}", status_code=204)
