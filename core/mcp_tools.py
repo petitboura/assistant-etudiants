@@ -226,6 +226,18 @@ def lister_outils_autorises_pour_agent(get_secret, user_id=None, agent_id=None):
             # ecrite dans registre_outils.py comme pour Notion).
             if nom == "generation":
                 outils_autorises = _outils_generation_actifs_pour_agent(agent_id)
+                # consulter_bibliotheque (2026-08-01) : bibliothèque
+                # PERSONNELLE de l'utilisateur (voir "Mon espace"),
+                # n'appartient à aucun agent en particulier -- contrairement
+                # au reste de la catégorie 1, elle ne passe donc PAS par
+                # l'allow-list agents_outils_generation (le créateur ne la
+                # configure pas outil par outil, elle est déjà scopée par
+                # user_id côté core/bibliotheque_rag.py). Toujours proposée
+                # dès qu'un utilisateur est connecté, sur n'importe quel
+                # agent -- cf. demande Bourama "n'importe quelle
+                # conversation, n'importe quel chat".
+                if user_id and "consulter_bibliotheque" not in outils_autorises:
+                    outils_autorises = [*outils_autorises, "consulter_bibliotheque"]
             if outils_autorises is not None:
                 outils = [o for o in outils if o.name in outils_autorises]
 

@@ -33,6 +33,7 @@ from api.memoire import router as memoire_router
 from api.connexions import router as connexions_router
 from api.droits_agent import router as droits_agent_router
 from api.droits_agent import router_registre as registre_outils_router
+from api.bibliotheque_utilisateur import router as bibliotheque_utilisateur_router
 from core.serveur_mcp_generation import mcp_generation
 from core.notifications_push import traiter_rappels_echus, notifications_push_disponible
 from core.proactivite import verifier_relances_proactives
@@ -196,6 +197,7 @@ app.include_router(memoire_router)
 app.include_router(connexions_router)
 app.include_router(droits_agent_router)
 app.include_router(registre_outils_router)
+app.include_router(bibliotheque_utilisateur_router)
 
 
 @app.get("/health")

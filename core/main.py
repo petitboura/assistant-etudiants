@@ -1396,6 +1396,21 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
             "la conversation (tu l'as vu mais tu n'as pas son URL réelle), appelle "
             "TOUJOURS chercher_fichier au lieu d'inventer un lien."
         )
+    if "consulter_bibliotheque" in outils_forces:
+        # 2026-08-01, demande Bourama : bibliothèque personnelle de
+        # documents PDF (voir "Mon espace" côté app), consultable par le
+        # contenu (contrairement à chercher_fichier ci-dessus qui ne
+        # matche que nom/description) -- outil disponible même si cet
+        # agent n'a rien coché en catégorie 1, voir mcp_tools.py.
+        system_final += (
+            "\n\nBIBLIOTHÈQUE PERSONNELLE : outil consulter_bibliotheque pour chercher "
+            "dans les documents PDF que CET utilisateur a lui-même ajoutés à sa "
+            "bibliothèque personnelle (indépendante de cet agent). "
+            f"user_id={f'"{user_id}"' if user_id else 'absent (non connectée)'}, à passer "
+            "exactement tel quel -- sans utilisateur connecté, l'outil renverra toujours "
+            "vide, inutile de l'appeler. Utilise les extraits renvoyés directement pour "
+            "répondre, sans les recopier mot pour mot."
+        )
     if outils_forces:
         # Confirmé en test réel 25/07 : même avec l'outil réellement
         # présent dans la liste envoyée au modèle (vérifié via le log

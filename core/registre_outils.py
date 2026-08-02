@@ -200,9 +200,10 @@ OUTILS_SENSIBLES = {
 #
 # Reste volontairement HORS de cette liste (round-trip conservé, le
 # contenu réel du résultat est nécessaire pour que le modèle réponde) :
-# - chercher_fichier, consulter_statut_3d, consulter_statut_video,
-#   consulter_statut_signature (le modèle doit lire le statut/résultat
-#   pour savoir quoi dire -- "prêt" vs "encore en cours", etc.)
+# - chercher_fichier, consulter_bibliotheque, consulter_statut_3d,
+#   consulter_statut_video, consulter_statut_signature (le modèle doit
+#   lire le statut/résultat pour savoir quoi dire -- "prêt" vs "encore
+#   en cours", etc.)
 # - tous les outils de recherche/lecture (tavily_*, wolfram, notion-search,
 #   explorer_depot_github, lire_fichier_depot_github)
 # - modifier_fichier_depot_github (déjà dans OUTILS_SENSIBLES -- passe par

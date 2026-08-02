@@ -57,6 +57,7 @@ from core.generation_site import (
     site_deploiement_disponible,
 )
 from core.bibliotheque_fichiers import chercher_fichiers as _chercher_fichiers
+from core.bibliotheque_rag import chercher_bibliotheque as _chercher_bibliotheque
 
 mcp_generation = FastMCP(name="generation")
 
@@ -257,6 +258,33 @@ def chercher_fichier(recherche: str, agent_id: str = None, user_id: str = None) 
         + (f" -- {f['description']}" if f.get("description") else "")
         for f in resultats
     )
+
+
+@mcp_generation.tool()
+def consulter_bibliotheque(question: str, user_id: str = None) -> str:
+    """
+    Cherche dans la bibliothèque personnelle de documents PDF de CET
+    utilisateur (voir "Mon espace" côté app) les passages les plus
+    pertinents pour répondre à `question`, quel que soit l'agent avec
+    qui la conversation a lieu -- cette bibliothèque n'appartient à
+    aucun agent en particulier, elle est propre à l'utilisateur, et
+    invisible pour tout autre utilisateur. `user_id` doit être
+    exactement celui donné dans tes instructions système, pas inventé.
+    Renvoie les extraits trouvés (à utiliser directement pour répondre)
+    ou un message si rien de pertinent n'a été trouvé.
+    """
+    if not user_id:
+        return "Aucune bibliothèque disponible : utilisateur non connecté."
+
+    try:
+        resultats = _chercher_bibliotheque(question, user_id=user_id)
+    except Exception:
+        return "Erreur : la recherche dans la bibliothèque a échoué, réessaie."
+
+    if not resultats:
+        return "Rien de pertinent trouvé dans la bibliothèque pour cette question."
+
+    return "\n\n---\n\n".join(r["contenu"] for r in resultats)
 
 
 @mcp_generation.tool()
