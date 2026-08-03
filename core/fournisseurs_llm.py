@@ -68,15 +68,19 @@ HIERARCHIE_MODELES = {
         "pro": {"id": "gemini-3.1-pro", "label": "Gemini 3.1 Pro"},
     },
     "deepseek": {
-        # L'API DeepSeek n'expose que 2 alias stables (deepseek-chat /
-        # deepseek-reasoner), pas de nom par version -- contrairement aux
-        # 3 paliers distincts vendus par les autres fournisseurs. On
-        # reutilise donc deepseek-chat pour essentiel+avance (le "V3.2"
-        # de la page Notion) et deepseek-reasoner pour le palier pro
-        # (equivalent le plus proche de "V3.2-Speciale").
-        "essentiel": {"id": "deepseek-chat", "label": "DeepSeek Chat"},
-        "avance": {"id": "deepseek-chat", "label": "DeepSeek Chat"},
-        "pro": {"id": "deepseek-reasoner", "label": "DeepSeek Reasoner"},
+        # L'API DeepSeek n'expose que 2 modeles stables a la fois
+        # (aujourd'hui deepseek-v4-flash / deepseek-v4-pro), pas de nom
+        # par version -- contrairement aux 3 paliers distincts vendus par
+        # les autres fournisseurs. essentiel+avance partagent donc le
+        # meme modele (flash), pro passe sur le plus gros (pro).
+        # MAJ 02/08/2026 : les anciens alias deepseek-chat/deepseek-
+        # reasoner (utilises jusqu'ici) ont ete retires par DeepSeek le
+        # 24/07/2026 (15:59 UTC) -- remplaces ici par les noms actuels.
+        # Bug decouvert en verifiant les prix pour Bourama : nos appels
+        # DeepSeek echouaient probablement en silence depuis le 24/07.
+        "essentiel": {"id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash"},
+        "avance": {"id": "deepseek-v4-flash", "label": "DeepSeek V4 Flash"},
+        "pro": {"id": "deepseek-v4-pro", "label": "DeepSeek V4 Pro"},
     },
 }
 
@@ -142,9 +146,9 @@ def modeles_disponibles_pour_agent(distributeur_debloque, palier_debloque):
             # Dedoublonnage par modele_id (cas DeepSeek, seul fournisseur
             # ou 2 paliers partagent le meme modele_id -- voir
             # HIERARCHIE_MODELES : essentiel et avance valent tous les
-            # deux "deepseek-chat" -- sans ca "DeepSeek Chat" apparaissait
-            # deux fois d'affilee dans la liste, repere par Bourama sur
-            # la capture d'ecran de Nucleos).
+            # deux "deepseek-v4-flash" -- sans ca "DeepSeek V4 Flash"
+            # apparaissait deux fois d'affilee dans la liste, repere par
+            # Bourama sur la capture d'ecran de Nucleos).
             if info["id"] in ids_deja_vus:
                 continue
             ids_deja_vus.add(info["id"])
@@ -208,7 +212,7 @@ def _stream_gpt(modele_id, system_prompt, messages):
 
 def _stream_deepseek(modele_id, system_prompt, messages):
     # DeepSeek : API compatible OpenAI, seule la base_url change (voir
-    # docstring du module -- deepseek-chat / deepseek-reasoner).
+    # docstring du module -- deepseek-v4-flash / deepseek-v4-pro).
     from openai import OpenAI
     client = OpenAI(api_key=get_secret("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
     messages_openai = ([{"role": "system", "content": system_prompt}] if system_prompt else []) + messages
