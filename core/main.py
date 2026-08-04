@@ -2572,8 +2572,27 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
         outils_disponibles_agent, _ = lister_outils_autorises_pour_agent(get_secret, user_id, agent_id)
         outils_suggeres = _router_outils(message_utilisateur, outils_disponibles_agent, historique)
         if outils_suggeres:
-            yield {"type": "outils_suggeres", "outils": outils_suggeres}
-            return
+            # routeur_outils_auto (03/08, demande Bourama, agent par agent) :
+            # colonne sur `agents`, false par defaut. Si true pour CET agent,
+            # on saute l'etape bouton cliquable (evenement "outils_suggeres")
+            # et on envoie directement la suggestion du routeur au modele,
+            # comme si l'utilisateur avait force ces outils lui-meme --
+            # aucune confirmation cliquee. Les autres agents gardent le
+            # comportement bouton normal (return ci-dessous inchange).
+            try:
+                agent_ligne = (
+                    supabase.table("agents").select("routeur_outils_auto").eq("id", agent_id).maybe_single().execute()
+                )
+                routeur_auto = bool((agent_ligne.data or {}).get("routeur_outils_auto"))
+            except Exception as e:
+                logging.error(f"ERREUR lecture routeur_outils_auto agent={agent_id} : {e}")
+                routeur_auto = False
+
+            if routeur_auto:
+                outil_force = outils_suggeres
+            else:
+                yield {"type": "outils_suggeres", "outils": outils_suggeres}
+                return
 
     # CORRECTION (29/07, Bourama) : la liste réelle d'outils (celle qui
     # part dans tools=... vers Groq, filtrée par autorisation agent en
