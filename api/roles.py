@@ -461,6 +461,56 @@ def _contacts_autorises(moi: dict) -> List[dict]:
     return [r for r in resultats if r.get("user_id") != user_id]
 
 
+class ContactAutorise(BaseModel):
+    user_id: str
+    nom_affiche: str
+    role: str
+    agent_id: Optional[str] = None
+
+
+@router.get("/mes-contacts", response_model=List[ContactAutorise])
+def mes_contacts(utilisateur=Depends(utilisateur_courant)):
+    """
+    Tous les contacts autorisés du compte connecté, tous rôles confondus
+    -- réutilise _contacts_autorises (déjà utilisée par l'outil IA
+    envoyer_message). Remplace mon-equipe pour l'affichage de la
+    messagerie (2026-08-04, tâche C) : mon-equipe restait 403 pour un
+    étudiant et ne couvrait pas les contacts "vers le haut" (enseignant
+    -> établissement, étudiant -> enseignant/établissement/camarades).
+    """
+    profil = _lire_profil_role(utilisateur.id)
+    if not profil or not profil.get("role"):
+        raise erreur_api(403, "ACTION_RESERVEE_A_CE_ROLE")
+    profil["user_id"] = utilisateur.id
+
+    contacts = _contacts_autorises(profil)
+
+    resultat = []
+    for c in contacts:
+        try:
+            agent = (
+                supabase.table("agents")
+                .select("id")
+                .eq("owner_id", c["user_id"])
+                .order("created_at")
+                .limit(1)
+                .maybe_single()
+                .execute()
+            )
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (agent contact {c['user_id']}) : {e}")
+            agent = None
+        resultat.append(
+            ContactAutorise(
+                user_id=c["user_id"],
+                nom_affiche=c.get("nom_affiche") or "Sans nom",
+                role=c.get("role"),
+                agent_id=(agent.data or {}).get("id") if agent and agent.data else None,
+            )
+        )
+    return resultat
+
+
 def resoudre_destinataire_autorise(expediteur_id: str, nom_destinataire: str) -> tuple[Optional[str], Optional[str]]:
     """
     Résout `nom_destinataire` parmi les contacts autorisés de
