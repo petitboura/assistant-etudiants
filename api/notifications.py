@@ -54,6 +54,17 @@ class NotificationItem(BaseModel):
     feedback_question: Optional[str] = None
     feedback_reponse: Optional[str] = None
     update_id: Optional[int] = None
+    # Ajouté le 2026-08-04 pour les types "message_direct" et
+    # "annonce_etablissement" (voir migration 2026_08_04_roles_hierarchie) :
+    # jusqu'ici les LIGNES existaient déjà (créées par trigger, voir
+    # docstring en haut de fichier) mais ce endpoint n'exposait ni
+    # message_id/annonce_id ni leur contenu -- la notification arrivait
+    # vide côté frontend. Même pattern groupé que feedback_par_id plus bas.
+    message_id: Optional[int] = None
+    message_contenu: Optional[str] = None
+    message_reponse_a: Optional[int] = None
+    annonce_id: Optional[int] = None
+    annonce_contenu: Optional[str] = None
 
 
 class NotificationsReponse(BaseModel):
@@ -82,7 +93,10 @@ def lister_notifications(
     try:
         res = (
             supabase.table("notifications")
-            .select("id, type, acteur_id, agent_id, feedback_id, update_id, lu, created_at", count="exact")
+            .select(
+                "id, type, acteur_id, agent_id, feedback_id, update_id, message_id, annonce_id, lu, created_at",
+                count="exact",
+            )
             .eq("user_id", utilisateur.id)
             .order("created_at", desc=True)
             .range(debut, fin)
@@ -183,6 +197,38 @@ def lister_notifications(
         except Exception as e:
             logging.error(f"ERREUR SUPABASE (lecture historique pour feedback notifications) : {e}")
 
+    # Contenu des messages directs (2026-08-04) -- même pattern groupé.
+    messages_par_id: dict = {}
+    ids_messages = list({l["message_id"] for l in lignes if l.get("message_id")})
+    if ids_messages:
+        try:
+            msg_res = (
+                supabase.table("messages_directs")
+                .select("id, contenu, reponse_a")
+                .in_("id", ids_messages)
+                .execute()
+            )
+            for m in msg_res.data or []:
+                messages_par_id[m["id"]] = m
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (lecture messages_directs pour notifications) : {e}")
+
+    # Contenu des annonces établissement (2026-08-04) -- même pattern.
+    annonces_par_id: dict = {}
+    ids_annonces = list({l["annonce_id"] for l in lignes if l.get("annonce_id")})
+    if ids_annonces:
+        try:
+            an_res = (
+                supabase.table("annonces_etablissement")
+                .select("id, contenu")
+                .in_("id", ids_annonces)
+                .execute()
+            )
+            for a in an_res.data or []:
+                annonces_par_id[a["id"]] = a
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (lecture annonces_etablissement pour notifications) : {e}")
+
     notifications = []
     for l in lignes:
         profil_acteur = acteurs_par_id.get(l["acteur_id"]) or {}
@@ -190,6 +236,8 @@ def lister_notifications(
         est_feedback = l["type"] == "feedback"
         feedback = feedback_par_id.get(l.get("feedback_id")) or {} if est_feedback else {}
         feedback_contexte = bool(feedback.get("question_partagee") or feedback.get("reponse_partagee"))
+        message = messages_par_id.get(l.get("message_id")) or {}
+        annonce = annonces_par_id.get(l.get("annonce_id")) or {}
         notifications.append(
             NotificationItem(
                 id=l["id"],
@@ -220,6 +268,11 @@ def lister_notifications(
                     else None
                 ),
                 update_id=l.get("update_id"),
+                message_id=l.get("message_id"),
+                message_contenu=message.get("contenu"),
+                message_reponse_a=message.get("reponse_a"),
+                annonce_id=l.get("annonce_id"),
+                annonce_contenu=annonce.get("contenu"),
             )
         )
 
