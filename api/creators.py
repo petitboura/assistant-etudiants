@@ -82,6 +82,8 @@ def lister_createurs(page: int = Query(1, ge=1), limite: int = Query(20, ge=1, l
                 supabase.table("agents")
                 .select("owner_id")
                 .in_("owner_id", ids_uniques)
+                .or_("actif.is.null,actif.eq.true")
+                .or_("publiable.is.null,publiable.eq.true")
                 .execute()
             )
             for a in agents_res.data or []:

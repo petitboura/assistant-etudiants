@@ -101,3 +101,27 @@ drop trigger if exists trg_notifier_annonce_etablissement on public.annonces_eta
 create trigger trg_notifier_annonce_etablissement
   after insert on public.annonces_etablissement
   for each row execute function public.notifier_annonce_etablissement();
+
+-- === Ajout le même jour (suite de la demande) : IA modèles admin ===
+-- (migrations Supabase séparées "agents_publiable_et_compte_admin(_v2)"
+-- et "creer_ia_modeles_etablissement_enseignant")
+--
+-- alter table public.agents add column if not exists publiable boolean
+--   not null default true;
+-- -- False = agent gardé privé dans l'espace de son créateur (jamais
+-- -- dans /api/feed, /api/search, /api/creators). Voir api/main.py,
+-- -- api/search.py, api/creators.py, api/profiles.py (filtré comme
+-- -- `actif`, sauf pour le propriétaire qui voit toujours tout).
+--
+-- update public.profiles set role = 'admin'
+--   where user_id = '44f90ccc-09aa-45e2-9cf2-f5251733e05e'; -- Bourama (petitboura26@gmail.com)
+--
+-- insert into public.agents (id, nom, system_prompt, ui_config,
+--   knowledge_source, owner_id, description, publiable) values
+--   ('ia-etablissement-modele', 'IA Établissement (modèle)', ..., false),
+--   ('ia-enseignant-modele', 'IA Enseignant (modèle)', ..., false);
+-- -- Les 2 IA de démonstration demandées par Bourama ("crée en deux, pour
+-- -- l'établissement et pour les enseignants, pour les étudiants ne crée
+-- -- rien"), owner_id = son propre compte admin, visibles dans son "Mon
+-- -- espace" (bouton Tester ajouté sur AgentCard.tsx côté frontend) mais
+-- -- jamais dans le feed/recherche/portfolio public.

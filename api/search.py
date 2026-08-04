@@ -70,6 +70,7 @@ def rechercher(q: str = Query(..., min_length=1)):
             .select("id, nom, ui_config")
             .ilike("nom", terme)
             .or_("actif.is.null,actif.eq.true")
+            .or_("publiable.is.null,publiable.eq.true")
             .limit(20)
             .execute()
         )
@@ -112,6 +113,8 @@ def rechercher(q: str = Query(..., min_length=1)):
                 supabase.table("agents")
                 .select("owner_id")
                 .in_("owner_id", ids_uniques)
+                .or_("actif.is.null,actif.eq.true")
+                .or_("publiable.is.null,publiable.eq.true")
                 .execute()
             )
             for a in agents_res.data or []:

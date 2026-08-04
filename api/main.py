@@ -297,6 +297,7 @@ def feed(
                 count="exact",
             )
             .or_("actif.is.null,actif.eq.true")
+            .or_("publiable.is.null,publiable.eq.true")
         )
         if categorie:
             requete = requete.eq("categorie_id", categorie)

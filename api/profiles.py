@@ -120,6 +120,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
         )
         if not est_le_proprietaire:
             requete_agents = requete_agents.or_("actif.is.null,actif.eq.true")
+            requete_agents = requete_agents.or_("publiable.is.null,publiable.eq.true")
         agents_res = requete_agents.execute()
         lignes_agents = agents_res.data or []
     except Exception as e:
