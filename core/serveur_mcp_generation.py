@@ -560,6 +560,14 @@ if notifications_push_disponible():
 # fichier), donc PAS ajouté à OUTILS_AUTONOMES (registre_outils.py) : le
 # round-trip vers le modèle reste nécessaire pour qu'il relaie une erreur
 # de destinataire ambigu/introuvable à l'utilisateur.
+#
+# TESTÉ le 2026-08-04 (tâche E) : voir test_envoyer_message_manuel.py,
+# qui construit une vraie requête Starlette (même mécanisme que
+# mcp/server/_streamable_http_modern.py) pour confirmer que
+# ctx.request_context.request.query_params est bien accessible en mode
+# stateless_http -- c'était le point d'incertitude non vérifié documenté
+# ici avant cette date (voir aussi planifier_rappel juste au-dessus, qui
+# repose sur le même mécanisme et reste à couvrir de la même façon).
 @mcp_generation.tool()
 def envoyer_message(nom_destinataire: str, contenu: str, ctx: Context) -> str:
     """
