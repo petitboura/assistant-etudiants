@@ -52,6 +52,10 @@ from core.notifications_push import (
     planifier_rappel as _planifier_rappel,
     notifications_push_disponible,
 )
+from api.roles import (
+    resoudre_destinataire_autorise as _resoudre_destinataire_autorise,
+    _inserer_message,
+)
 from core.generation_site import (
     deployer_site as _deployer_site,
     site_deploiement_disponible,
@@ -518,13 +522,14 @@ if site_deploiement_disponible():
 
 
 # Enregistré conditionnellement, gate par les clés VAPID (voir
-# notifications_push.py). SEUL outil de ce fichier qui a besoin de
-# connaître l'identité de l'appelant (user_id/agent_id) : récupérés via
+# notifications_push.py). Outil de ce fichier qui a besoin de connaître
+# l'identité de l'appelant (user_id/agent_id) : récupérés via
 # ctx.request_context.request.query_params, transmis dans l'URL par
-# _url_generation() (registre_outils.py). NON TESTÉ EN CONDITIONS
-# RÉELLES : si ça échoue au premier essai, vérifier en premier que
-# request_context.request est bien accessible dans ce mode
-# (stateless_http) -- c'est le point d'incertitude documenté ici.
+# _url_generation() (registre_outils.py) -- même mécanique reprise par
+# envoyer_message ci-dessous. NON TESTÉ EN CONDITIONS RÉELLES : si ça
+# échoue au premier essai, vérifier en premier que request_context.request
+# est bien accessible dans ce mode (stateless_http) -- c'est le point
+# d'incertitude documenté ici.
 if notifications_push_disponible():
     @mcp_generation.tool()
     def planifier_rappel(contenu: str, dans_minutes: int, ctx: Context) -> str:
@@ -545,3 +550,39 @@ if notifications_push_disponible():
         except Exception as e:
             logging.error(f"ERREUR outil generation : {e}")
             return "Erreur : la planification du rappel a échoué, réessaie."
+
+
+# Ajouté le 2026-08-04 (demande Bourama, hiérarchie de rôles) : contrairement
+# aux autres outils de ce fichier, PAS de gate conditionnel -- toujours
+# enregistré, car actif d'office sur les IA auto-créées à choix de rôle
+# (voir _creer_agent_minimal dans api/roles.py) et sans dépendance à une
+# clé API externe. Renvoie toujours du texte (jamais de génération de
+# fichier), donc PAS ajouté à OUTILS_AUTONOMES (registre_outils.py) : le
+# round-trip vers le modèle reste nécessaire pour qu'il relaie une erreur
+# de destinataire ambigu/introuvable à l'utilisateur.
+@mcp_generation.tool()
+def envoyer_message(nom_destinataire: str, contenu: str, ctx: Context) -> str:
+    """
+    Envoie un message direct à une personne autorisée de ta hiérarchie
+    (ton établissement, ton enseignant, tes étudiants, ou un autre
+    étudiant de ton établissement selon ton rôle). `nom_destinataire`
+    est le nom affiché de la personne à qui écrire, `contenu` le texte
+    du message.
+    """
+    try:
+        requete = ctx.request_context.request
+        user_id = requete.query_params.get("user_id")
+        if not user_id:
+            return "Erreur : impossible d'identifier l'expéditeur pour ce message."
+        if not contenu.strip():
+            return "Erreur : le message est vide."
+
+        destinataire_id, erreur = _resoudre_destinataire_autorise(user_id, nom_destinataire)
+        if erreur:
+            return erreur
+
+        _inserer_message(user_id, destinataire_id, contenu)
+        return f"Message envoyé à {nom_destinataire}."
+    except Exception as e:
+        logging.error(f"ERREUR outil generation (envoyer_message) : {e}")
+        return "Erreur : l'envoi du message a échoué, réessaie."
