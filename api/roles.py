@@ -13,17 +13,32 @@ Pas d'UI vitrine pour cette fonctionnalité (demande Bourama) : purement
 fonctionnel, branché dans l'espace connecté de l'app.
 """
 
+import os
+import sys
 import logging
+import tempfile
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from pydantic import BaseModel
 
 from api.auth import utilisateur_courant, supabase
 from api.journal import journaliser
 from api.permissions_hierarchie import _lire_profil_role
-from creation_agent import generer_id_depuis_nom
 from core.erreurs import erreur_api
+
+# Même sys.path que api/agents.py (l'import de api.agents ci-dessous
+# suffirait déjà à le garantir vu l'ordre d'import dans main.py, mais on
+# le refait ici pour que ce module reste indépendant de cet ordre --
+# DOIT précéder les imports "bare" (creation_agent, bibliotheque_fichiers,
+# storage, index_documents) qui en dépendent.
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "indexers"))
+from creation_agent import generer_id_depuis_nom  # noqa: E402
+from bibliotheque_fichiers import enregistrer_fichier  # noqa: E402
+from storage import upload_document  # noqa: E402
+from index_documents import indexer_document  # noqa: E402
+from api.agents import TYPES_BIBLIOTHEQUE_AUTORISES, TAILLE_MAX_BIBLIOTHEQUE_OCTETS  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
@@ -591,3 +606,124 @@ def envoyer_annonce(payload: AnnoncePayload, request: Request, utilisateur=Depen
         request=request,
     )
     return {"envoye": True}
+
+
+class ResultatDiffusion(BaseModel):
+    diffuse_a: int
+    total_cibles: int
+    echecs: List[str]
+
+
+@router.post("/documents/diffuser", response_model=ResultatDiffusion, status_code=201)
+async def diffuser_document(
+    request: Request,
+    fichier: UploadFile = File(...),
+    titre: Optional[str] = Form(None),
+    description: Optional[str] = Form(None),
+    utilisateur=Depends(utilisateur_courant),
+):
+    """
+    Ajoutée le 2026-08-05 (demande Bourama, partie D du reste-à-faire de
+    la hiérarchie de rôles) : un établissement ajoute UN document en une
+    fois à la bibliothèque de TOUS ses enseignants + tous les étudiants de
+    ces enseignants -- même portée que peut_gerer_base_connaissances pour
+    un établissement (deux niveaux, voir permissions_hierarchie.py).
+    Réutilise `_contacts_autorises` (déjà écrite pour l'outil IA
+    envoyer_message) pour la liste des cibles : même périmètre, pas de
+    logique de rattachement dupliquée.
+
+    Réutilise telle quelle la logique de POST /api/agents/{agent_id}/bibliotheque
+    (api/agents.py) -- storage + indexation RAG si PDF, ligne
+    bibliotheque_fichiers -- répétée pour chaque agent cible au lieu d'un
+    seul. Best-effort : un échec sur une cible (pas encore d'IA créée,
+    erreur Supabase ponctuelle...) n'interrompt pas la diffusion aux
+    autres, chaque échec est juste listé en retour.
+    """
+    profil = _lire_profil_role(utilisateur.id)
+    if not profil or profil.get("role") != "etablissement":
+        raise erreur_api(403, "ACTION_RESERVEE_A_CE_ROLE")
+
+    if not (titre or "").strip() and not (description or "").strip():
+        raise erreur_api(400, "DONNE_AU_MOINS_UNE_DESCRIPTION_OU")
+    if fichier.content_type not in TYPES_BIBLIOTHEQUE_AUTORISES:
+        raise erreur_api(400, "TYPE_DE_FICHIER_NON_SUPPORTE")
+
+    contenu = await fichier.read()
+    if len(contenu) == 0:
+        raise erreur_api(400, "FICHIER_VIDE")
+    if len(contenu) > TAILLE_MAX_BIBLIOTHEQUE_OCTETS:
+        raise erreur_api(400, "FICHIER_TROP_LOURD_50_MO_MAX")
+
+    nom_original = fichier.filename or "fichier"
+    description_finale = (
+        f"{titre.strip()} — {description.strip()}"
+        if (titre or "").strip() and (description or "").strip()
+        else (description or titre or "").strip()
+    )
+
+    cibles = [c for c in _contacts_autorises(profil) if c.get("role") in ("enseignant", "etudiant")]
+
+    echecs: List[str] = []
+    diffuse_a = 0
+
+    for cible in cibles:
+        nom_cible = cible.get("nom_affiche") or "Sans nom"
+        try:
+            agent = (
+                supabase.table("agents")
+                .select("id")
+                .eq("owner_id", cible["user_id"])
+                .order("created_at")
+                .limit(1)
+                .maybe_single()
+                .execute()
+            )
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (agent cible diffusion {cible['user_id']}) : {e}")
+            echecs.append(nom_cible)
+            continue
+
+        agent_id = (agent.data or {}).get("id") if agent and agent.data else None
+        if not agent_id:
+            echecs.append(nom_cible)
+            continue
+
+        try:
+            if fichier.content_type == "application/pdf":
+                nom_stockage_rag = f"{agent_id}__{nom_original}"
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                    tmp.write(contenu)
+                    chemin_temp = tmp.name
+                try:
+                    upload_document(chemin_temp, nom_stockage_rag)
+                    indexer_document(chemin_temp, nom_stockage_rag, agent_id)
+                finally:
+                    try:
+                        os.remove(chemin_temp)
+                    except OSError:
+                        pass
+
+            enregistrer_fichier(
+                contenu=contenu,
+                nom_fichier=nom_original,
+                type_mime=fichier.content_type,
+                niveau="agent",
+                uploade_par=utilisateur.id,
+                agent_id=agent_id,
+                description=description_finale,
+            )
+            diffuse_a += 1
+        except Exception as e:
+            logging.error(f"ERREUR diffusion document (agent_id={agent_id}, cible={cible['user_id']}) : {e}")
+            echecs.append(nom_cible)
+
+    journaliser(
+        action="document.diffuse",
+        user_id=utilisateur.id,
+        cible_type="profile",
+        cible_id=None,
+        details={"nom_original": nom_original, "diffuse_a": diffuse_a, "total_cibles": len(cibles)},
+        request=request,
+    )
+
+    return ResultatDiffusion(diffuse_a=diffuse_a, total_cibles=len(cibles), echecs=echecs)
