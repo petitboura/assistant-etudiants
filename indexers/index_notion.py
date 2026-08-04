@@ -159,8 +159,18 @@ def indexer_page(page_id, nom_page, last_edited_time, agent_id):
     print(f"  -> '{nom_page}' indexée pour l'agent '{agent_id}' ({len(morceaux)} morceaux).")
 
 
-def parcourir_et_indexer(page_id, agent_id, profondeur=0):
-    """Parcourt récursivement une page et ses sous-pages, à n'importe quelle profondeur."""
+def parcourir_et_indexer(page_id, agent_id, profondeur=0, erreurs=None):
+    """
+    Parcourt récursivement une page et ses sous-pages, à n'importe quelle profondeur.
+
+    `erreurs` (ajouté 2026-08-03, pour l'indexation déclenchée depuis
+    api/agents.py à la sauvegarde d'un lien Notion) : liste optionnelle dans
+    laquelle chaque erreur Notion rencontrée est ajoutée (en plus du log),
+    pour que l'appelant puisse savoir que ça a échoué et donner un message
+    clair au créateur. `None` par défaut = comportement inchangé pour le
+    cron (indexer.yml) et l'appel manuel en __main__, qui ne lisent que les
+    logs.
+    """
     prefixe = "  " * profondeur
 
     try:
@@ -170,6 +180,8 @@ def parcourir_et_indexer(page_id, agent_id, profondeur=0):
         # l'annonce clairement et on arrête cette branche, plutôt que de
         # supprimer/réindexer sur la base d'une info fausse.
         logging.error(f"{prefixe}ERREUR NOTION (page {page_id}, agent {agent_id}) : {e}")
+        if erreurs is not None:
+            erreurs.append(str(e))
         return
 
     last_edited_stocke = get_last_edited_stocke(page_id, agent_id)
@@ -182,16 +194,20 @@ def parcourir_et_indexer(page_id, agent_id, profondeur=0):
             indexer_page(page_id, nom_page, last_edited_actuel, agent_id)
         except ErreurNotion as e:
             logging.error(f"{prefixe}ERREUR NOTION (contenu de '{nom_page}', agent {agent_id}) : {e}")
+            if erreurs is not None:
+                erreurs.append(str(e))
             return
 
     try:
         _, sous_pages = get_texte_et_sous_pages(page_id)
     except ErreurNotion as e:
         logging.error(f"{prefixe}ERREUR NOTION (sous-pages de '{nom_page}', agent {agent_id}) : {e}")
+        if erreurs is not None:
+            erreurs.append(str(e))
         return
 
     for sous_page_id in sous_pages:
-        parcourir_et_indexer(sous_page_id, agent_id, profondeur + 1)
+        parcourir_et_indexer(sous_page_id, agent_id, profondeur + 1, erreurs)
 
 
 def lister_agents():

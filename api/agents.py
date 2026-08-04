@@ -18,7 +18,7 @@ import tempfile
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, utilisateur_optionnel, supabase, get_secret
@@ -28,6 +28,7 @@ from api.permissions_hierarchie import peut_modifier_comportement, peut_gerer_ba
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "indexers"))
 from creation_agent import generer_id_depuis_nom, extraire_id_notion, composer_system_prompt  # noqa: E402
+from index_notion import parcourir_et_indexer  # noqa: E402
 from index_documents import indexer_texte, indexer_document, supprimer_chunks_existants  # noqa: E402
 from storage import upload_document, list_documents, delete_document, get_document_url  # noqa: E402
 from bibliotheque_fichiers import enregistrer_fichier, enregistrer_lien, lister_fichiers, supprimer_fichier  # noqa: E402
@@ -48,6 +49,7 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 # `matiere_detail`), voir _valider_et_verifier_disponibilite_matiere.
 MATIERES = [
     "Informatique",
+    "Mathématiques",
     "Physique",
     "Économie",
     "Chimie",
@@ -57,6 +59,68 @@ MATIERES = [
     "Gestion",
     "Arabe",
 ]
+
+
+def _message_clair_erreur_notion(erreur_brute: str) -> str:
+    """
+    Traduit une erreur Notion technique (voir ErreurNotion dans
+    indexers/index_notion.py) en message compréhensible pour le créateur
+    d'agent, sans jargon ni code d'erreur brut. Ajouté 2026-08-03.
+    """
+    if "HTTP 404" in erreur_brute:
+        return "La page Notion est introuvable. Vérifie que le lien est correct."
+    if "HTTP 401" in erreur_brute or "HTTP 403" in erreur_brute:
+        return (
+            "Djiguignè n'a pas accès à cette page Notion. Vérifie qu'elle est bien "
+            "partagée avec l'intégration Djiguignè dans Notion."
+        )
+    if "réseau injoignable" in erreur_brute:
+        return "Impossible de contacter Notion pour le moment. Réessaie dans quelques minutes."
+    return (
+        "Le contenu de cette page Notion n'a pas pu être ajouté. Vérifie le lien et "
+        "que la page est bien partagée, ou réessaie plus tard."
+    )
+
+
+def _indexer_notion_arriere_plan(agent_id: str, page_id: str) -> None:
+    """
+    Tâche de fond (voir BackgroundTasks dans creer_agent/modifier_agent,
+    ajouté 2026-08-03) : jusqu'ici, coller/modifier un lien Notion
+    n'indexait rien avant le prochain passage du cron GitHub Actions
+    (indexer.yml, 3h du matin) -- rien dans l'UI ne le signalait. Cette
+    fonction lance l'indexation tout de suite après la sauvegarde, sans
+    bloquer la réponse au créateur, puis écrit un statut + message clair
+    dans `agents` pour que le dashboard puisse l'afficher.
+    """
+    erreurs: List[str] = []
+    try:
+        parcourir_et_indexer(page_id, agent_id, erreurs=erreurs)
+    except Exception as e:
+        # Filet de sécurité : parcourir_et_indexer capture déjà ErreurNotion
+        # en interne, mais une erreur totalement inattendue ici (bug,
+        # quota embeddings épuisé, etc.) ne doit jamais rester invisible
+        # dans les seuls logs Railway -- le créateur doit voir que ça a
+        # échoué, même sans savoir pourquoi techniquement.
+        logging.error(f"ERREUR inattendue indexation Notion (agent_id={agent_id}) : {e}")
+        erreurs.append(str(e))
+
+    if erreurs:
+        statut = "erreur"
+        message = _message_clair_erreur_notion(erreurs[0])
+    else:
+        statut = "ok"
+        message = None
+
+    try:
+        supabase.table("agents").update(
+            {
+                "notion_index_statut": statut,
+                "notion_index_message": message,
+                "notion_index_maj_le": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", agent_id).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (écriture statut indexation Notion agent_id={agent_id}) : {e}")
 
 
 def _valider_et_verifier_disponibilite_matiere(
@@ -281,7 +345,12 @@ class AgentCree(BaseModel):
 
 
 @router.post("", response_model=AgentCree, status_code=201)
-def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depends(utilisateur_courant)):
+def creer_agent(
+    payload: CreerAgentPayload,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    utilisateur=Depends(utilisateur_courant),
+):
     if not payload.nom.strip():
         raise erreur_api(422, "LE_NOM_DE_L_AGENT_EST")
     if not payload.posture_generale.strip() and not payload.limites_globales.strip():
@@ -429,6 +498,7 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
     }
     if notion_page_id:
         nouvelle_ligne["notion_page_id"] = notion_page_id
+        nouvelle_ligne["notion_index_statut"] = "en_cours"
 
     try:
         supabase.table("agents").insert(nouvelle_ligne).execute()
@@ -464,6 +534,14 @@ def creer_agent(payload: CreerAgentPayload, request: Request, utilisateur=Depend
             indexer_texte(agent_id, "texte-libre", payload.texte_libre.strip())
         except Exception as e:
             logging.error(f"ERREUR indexation texte libre (agent_id={agent_id}) : {e}")
+
+    # Indexation Notion : même trou que texte_libre avait avant correction
+    # -- jusqu'ici seul le cron quotidien (3h) l'indexait, voir
+    # _indexer_notion_arriere_plan ci-dessus. En tâche de fond pour ne pas
+    # retarder la réponse de création (peut prendre du temps si la page a
+    # beaucoup de sous-pages).
+    if notion_page_id:
+        background_tasks.add_task(_indexer_notion_arriere_plan, agent_id, notion_page_id)
 
     url_base = get_secret("URL_RETOUR_APP")
     lien = f"{url_base.rstrip('/')}/?agent={agent_id}" if url_base else None
@@ -762,6 +840,9 @@ class AgentEditable(BaseModel):
     config_creation: Optional[ConfigCreation] = None
     tools_enabled: List[str] = Field(default_factory=list)
     notion_page_id: Optional[str] = None
+    notion_index_statut: str = "jamais"
+    notion_index_message: Optional[str] = None
+    notion_index_maj_le: Optional[str] = None
     texte_libre: str = ""
     image_vitrine_url: Optional[str] = None
     description: str = ""
@@ -816,6 +897,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
+                "notion_index_statut, notion_index_message, notion_index_maj_le, "
                 "actif, owner_id, categorie_id, matiere, matiere_detail, langue_africaine, "
                 "metier, filiere, domaine, execution, "
                 "profil_utilisateur_schema, "
@@ -848,6 +930,9 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         config_creation=ConfigCreation(**config_brut) if config_brut else None,
         tools_enabled=ligne.get("tools_enabled") or [],
         notion_page_id=ligne.get("notion_page_id"),
+        notion_index_statut=ligne.get("notion_index_statut") or "jamais",
+        notion_index_message=ligne.get("notion_index_message"),
+        notion_index_maj_le=ligne.get("notion_index_maj_le"),
         texte_libre=(ligne.get("knowledge_source") or {}).get("texte_libre", ""),
         image_vitrine_url=ligne.get("image_vitrine_url"),
         description=ligne.get("description") or "",
@@ -937,6 +1022,7 @@ def modifier_agent(
     agent_id: str,
     payload: ModifierAgentPayload,
     request: Request,
+    background_tasks: BackgroundTasks,
     utilisateur=Depends(utilisateur_courant),
 ):
     """
@@ -955,6 +1041,7 @@ def modifier_agent(
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
                 "notion_page_id, knowledge_source, image_vitrine_url, description, "
+                "notion_index_statut, notion_index_message, notion_index_maj_le, "
                 "actif, owner_id, categorie_id, matiere, matiere_detail, langue_africaine, "
                 "metier, filiere, domaine, execution, "
                 "profil_utilisateur_schema, "
@@ -1099,7 +1186,19 @@ def modifier_agent(
         mise_a_jour["system_prompt"] = payload.system_prompt.strip()
 
     if payload.lien_notion is not None:
-        mise_a_jour["notion_page_id"] = extraire_id_notion(payload.lien_notion)
+        notion_page_id_nouveau = extraire_id_notion(payload.lien_notion)
+        mise_a_jour["notion_page_id"] = notion_page_id_nouveau
+        if notion_page_id_nouveau:
+            # "en_cours" tout de suite (avant même l'indexation réelle, qui
+            # se lance en tâche de fond juste après le .update() plus bas)
+            # pour que le dashboard puisse afficher l'état sans attendre.
+            mise_a_jour["notion_index_statut"] = "en_cours"
+            mise_a_jour["notion_index_message"] = None
+        else:
+            # Lien Notion retiré du formulaire : plus rien à indexer.
+            mise_a_jour["notion_index_statut"] = "jamais"
+            mise_a_jour["notion_index_message"] = None
+            mise_a_jour["notion_index_maj_le"] = None
 
     knowledge_source = dict(ligne.get("knowledge_source") or {})
     if payload.texte_libre is not None:
@@ -1208,6 +1307,16 @@ def modifier_agent(
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (modification agent {agent_id}) : {e}")
         raise erreur_api(500, "AGENT_MODIFICATION_ERREUR_TECHNIQUE")
+
+    # Indexation Notion : jusqu'ici seul le cron quotidien (3h) indexait un
+    # lien Notion nouveau/modifié -- rien dans l'UI ne le signalait (voir
+    # _indexer_notion_arriere_plan). En tâche de fond pour ne pas retarder
+    # la réponse de sauvegarde. Se relance même si le lien est identique à
+    # l'ancien (sert aussi de "réindexer maintenant" manuel ; sans coût
+    # réel car indexer_page ignore déjà les pages inchangées).
+    notion_page_id_a_indexer = mise_a_jour.get("notion_page_id")
+    if payload.lien_notion is not None and notion_page_id_a_indexer:
+        background_tasks.add_task(_indexer_notion_arriere_plan, agent_id, notion_page_id_a_indexer)
 
     # Journalisé avec la LISTE des champs modifiés, pas leur contenu (le
     # system_prompt notamment peut être long/sensible) : suffisant pour
