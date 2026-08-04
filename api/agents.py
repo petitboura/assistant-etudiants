@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from api.auth import utilisateur_courant, utilisateur_optionnel, supabase, get_secret
 from api.journal import journaliser
+from api.permissions_hierarchie import peut_modifier_comportement, peut_gerer_base_connaissances
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "indexers"))
@@ -834,8 +835,8 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         raise erreur_api(404, "AGENT_INTROUVABLE")
 
     ligne = res.data
-    if ligne["owner_id"] != utilisateur.id:
-        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+    if not peut_modifier_comportement(utilisateur.id, ligne["owner_id"]):
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
 
     config_brut = ligne.get("config_creation")
 
@@ -973,8 +974,8 @@ def modifier_agent(
         raise erreur_api(404, "AGENT_INTROUVABLE")
 
     ligne = res.data
-    if ligne["owner_id"] != utilisateur.id:
-        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+    if not peut_modifier_comportement(utilisateur.id, ligne["owner_id"]):
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
 
     mise_a_jour = {}
 
@@ -1402,8 +1403,8 @@ async def uploader_document(
 
     if not res or not res.data:
         raise erreur_api(404, "AGENT_INTROUVABLE")
-    if res.data["owner_id"] != utilisateur.id:
-        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+    if not peut_gerer_base_connaissances(utilisateur.id, res.data["owner_id"]):
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
 
     contenu = await fichier.read()
     if len(contenu) == 0:
@@ -1464,8 +1465,8 @@ def lister_documents(agent_id: str, utilisateur=Depends(utilisateur_courant)):
 
     if not res or not res.data:
         raise erreur_api(404, "AGENT_INTROUVABLE")
-    if res.data["owner_id"] != utilisateur.id:
-        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+    if not peut_gerer_base_connaissances(utilisateur.id, res.data["owner_id"]):
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
 
     try:
         tous_les_fichiers = list_documents()
@@ -1512,8 +1513,8 @@ def supprimer_document(agent_id: str, nom_stockage: str, request: Request, utili
 
     if not res or not res.data:
         raise erreur_api(404, "AGENT_INTROUVABLE")
-    if res.data["owner_id"] != utilisateur.id:
-        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+    if not peut_gerer_base_connaissances(utilisateur.id, res.data["owner_id"]):
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
 
     if not nom_stockage.startswith(f"{agent_id}__"):
         raise erreur_api(403, "CE_DOCUMENT_N_APPARTIENT_PAS_A")
@@ -1589,8 +1590,8 @@ async def uploader_fichier_bibliotheque(
 
     if not res or not res.data:
         raise erreur_api(404, "AGENT_INTROUVABLE")
-    if res.data["owner_id"] != utilisateur.id:
-        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+    if not peut_gerer_base_connaissances(utilisateur.id, res.data["owner_id"]):
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
 
     contenu = await fichier.read()
     if len(contenu) == 0:
@@ -1685,8 +1686,8 @@ def ajouter_lien_bibliotheque(
 
     if not res or not res.data:
         raise erreur_api(404, "AGENT_INTROUVABLE")
-    if res.data["owner_id"] != utilisateur.id:
-        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+    if not peut_gerer_base_connaissances(utilisateur.id, res.data["owner_id"]):
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
 
     description_finale = (
         f"{payload.titre.strip()} — {payload.description.strip()}"
@@ -1728,8 +1729,8 @@ def lister_bibliotheque(agent_id: str, utilisateur=Depends(utilisateur_courant))
 
     if not res or not res.data:
         raise erreur_api(404, "AGENT_INTROUVABLE")
-    if res.data["owner_id"] != utilisateur.id:
-        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+    if not peut_gerer_base_connaissances(utilisateur.id, res.data["owner_id"]):
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
 
     return lister_fichiers("agent", agent_id=agent_id)
 
@@ -1744,8 +1745,8 @@ def supprimer_fichier_bibliotheque(agent_id: str, fichier_id: str, request: Requ
 
     if not res or not res.data:
         raise erreur_api(404, "AGENT_INTROUVABLE")
-    if res.data["owner_id"] != utilisateur.id:
-        raise erreur_api(403, "CET_AGENT_NE_T_APPARTIENT_PAS")
+    if not peut_gerer_base_connaissances(utilisateur.id, res.data["owner_id"]):
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
 
     supprimer_fichier(fichier_id)
 

@@ -157,6 +157,17 @@ MESSAGES_FR: dict[str, str] = {
     "PRECISE_MATIERE_AUTRE": "Précise la matière dans \"Autre\".",
     "PRECISE_LA_VALEUR_POUR": "Précise la valeur pour {libelle}.",
     "EST_DEJA_PRISE_PAR_UNE": "{libelle} est déjà prise par une autre IA.",
+    "ROLE_DEJA_CHOISI": "Ton rôle a déjà été choisi, il ne peut plus être modifié ici.",
+    "ROLE_INVALIDE": "Rôle invalide.",
+    "ETABLISSEMENT_INTROUVABLE": "Établissement introuvable.",
+    "ENSEIGNANT_INTROUVABLE": "Enseignant introuvable.",
+    "ENSEIGNANT_ID_REQUIS_POUR_ETUDIANT": "Choisis ton enseignant pour continuer.",
+    "ETABLISSEMENT_ID_REQUIS_POUR_ENSEIGNANT": "Choisis ton établissement pour continuer.",
+    "ACTION_RESERVEE_A_CE_ROLE": "Cette action n'est pas disponible pour ton rôle.",
+    "PAS_LE_DROIT_SUR_CET_AGENT": "Tu n'as pas le droit de modifier cet agent.",
+    "DESTINATAIRE_INTROUVABLE": "Destinataire introuvable.",
+    "MESSAGE_VIDE": "Le message ne peut pas être vide.",
+    "ANNONCE_VIDE": "L'annonce ne peut pas être vide.",
 }
 
 
