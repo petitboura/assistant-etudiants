@@ -485,27 +485,37 @@ def mes_contacts(utilisateur=Depends(utilisateur_courant)):
 
     contacts = _contacts_autorises(profil)
 
-    resultat = []
-    for c in contacts:
+    # Un seul aller-retour Supabase pour tous les agent_id plutôt qu'une
+    # requête par contact (corrigé le 2026-08-05, audit A-F : un
+    # établissement avec beaucoup d'enseignants/étudiants aurait fait
+    # autant de requêtes séquentielles que de contacts).
+    owner_ids = [c["user_id"] for c in contacts]
+    agent_par_owner: dict[str, str] = {}
+    if owner_ids:
         try:
-            agent = (
+            agents = (
                 supabase.table("agents")
-                .select("id")
-                .eq("owner_id", c["user_id"])
+                .select("id, owner_id, created_at")
+                .in_("owner_id", owner_ids)
                 .order("created_at")
-                .limit(1)
-                .maybe_single()
                 .execute()
             )
+            for a in agents.data or []:
+                # Le premier agent rencontré par owner_id (tri croissant
+                # par created_at) -- même règle que l'ancien .limit(1) par
+                # contact, juste appliquée en mémoire ici.
+                agent_par_owner.setdefault(a["owner_id"], a["id"])
         except Exception as e:
-            logging.error(f"ERREUR SUPABASE (agent contact {c['user_id']}) : {e}")
-            agent = None
+            logging.error(f"ERREUR SUPABASE (agents des contacts) : {e}")
+
+    resultat = []
+    for c in contacts:
         resultat.append(
             ContactAutorise(
                 user_id=c["user_id"],
                 nom_affiche=c.get("nom_affiche") or "Sans nom",
                 role=c.get("role"),
-                agent_id=(agent.data or {}).get("id") if agent and agent.data else None,
+                agent_id=agent_par_owner.get(c["user_id"]),
             )
         )
     return resultat
