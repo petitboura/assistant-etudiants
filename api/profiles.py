@@ -47,6 +47,13 @@ class ProfilPublic(BaseModel):
     # Même convention "privée" que notifications_proactives_actives
     # ci-dessus -- ne vaut la vraie valeur que pour le propriétaire.
     premier_agent_id: Optional[str] = None
+    # Ajouté le 2026-08-05 (Bourama : "n'importe qui peut plus être
+    # créateur") : gate réelle côté backend (voir creer_agent), pas
+    # juste un affichage -- exposé ici pour que le frontend sache s'il
+    # doit montrer l'onglet "Mes IA" / le bouton "Créer une IA". Même
+    # convention "privée" que les deux champs au-dessus : False par
+    # défaut pour un visiteur qui regarde le profil de quelqu'un d'autre.
+    est_createur: bool = False
 
 
 class AgentDuCreateur(BaseModel):
@@ -98,7 +105,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
     try:
         profil = (
             supabase.table("profiles")
-            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives, premier_agent_id")
+            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives, premier_agent_id, est_createur")
             .eq("user_id", user_id)
             .maybe_single()
             .execute()
@@ -150,6 +157,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
             bool(ligne.get("notifications_proactives_actives")) if est_le_proprietaire else False
         ),
         premier_agent_id=(ligne.get("premier_agent_id") if est_le_proprietaire else None),
+        est_createur=(bool(ligne.get("est_createur")) if est_le_proprietaire else False),
     )
 
 
@@ -283,7 +291,7 @@ def mettre_a_jour_mon_profil(
     try:
         res = (
             supabase.table("profiles")
-            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives, premier_agent_id")
+            .select("user_id, nom_affiche, bio, avatar_url, notifications_proactives_actives, premier_agent_id, est_createur")
             .eq("user_id", utilisateur.id)
             .maybe_single()
             .execute()
@@ -313,6 +321,7 @@ def mettre_a_jour_mon_profil(
         avatar_url=resultat.get("avatar_url"),
         notifications_proactives_actives=bool(resultat.get("notifications_proactives_actives")),
         premier_agent_id=resultat.get("premier_agent_id"),
+        est_createur=bool(resultat.get("est_createur")),
     )
 
 

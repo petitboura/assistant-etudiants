@@ -351,6 +351,25 @@ def creer_agent(
     background_tasks: BackgroundTasks,
     utilisateur=Depends(utilisateur_courant),
 ):
+    # Ajouté le 2026-08-05 (Bourama : "n'importe qui peut plus être
+    # créateur") : gate réelle côté API, pas juste cacher le bouton côté
+    # frontend -- sinon un simple POST direct contourne tout. Voir
+    # profiles.est_createur (api/profiles.py), backfillé à True pour tout
+    # compte possédant déjà un agent au moment de l'ajout de la colonne.
+    try:
+        profil = (
+            supabase.table("profiles")
+            .select("est_createur")
+            .eq("user_id", utilisateur.id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (vérification est_createur {utilisateur.id}) : {e}")
+        profil = None
+    if not profil or not profil.data or not profil.data.get("est_createur"):
+        raise erreur_api(403, "COMPTE_NON_CREATEUR")
+
     if not payload.nom.strip():
         raise erreur_api(422, "LE_NOM_DE_L_AGENT_EST")
     if not payload.posture_generale.strip() and not payload.limites_globales.strip():

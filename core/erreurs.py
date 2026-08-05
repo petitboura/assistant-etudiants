@@ -23,6 +23,7 @@ MESSAGES_FR: dict[str, str] = {
     "AUCUN_TEXTE_TROUVE_DOCUMENT_SCANNE_IMAGE": "Aucun texte trouvé (document scanné/image sans OCR ?).",
     "AUDIO_TROP_LONG_20_MO_MAX": "Audio trop long (20 Mo max).",
     "CATEGORIE_INCONNUE": "Catégorie inconnue.",
+    "COMPTE_NON_CREATEUR": "Ce compte n'a pas (encore) le statut créateur.",
     "CETTE_MATIERE_EST_DEJA_PRISE_PAR": "Cette matière est déjà prise par une autre IA.",
     "CETTE_PUBLICATION_NE_T_APPARTIENT_PAS": "Cette publication ne t'appartient pas.",
     "CET_AGENT_NE_T_APPARTIENT_PAS": "Cet agent ne t'appartient pas.",
