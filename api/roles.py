@@ -186,6 +186,15 @@ def choisir_role(payload: ChoisirRolePayload, request: Request, utilisateur=Depe
         else:
             ligne_maj["user_id"] = utilisateur.id
             ligne_maj["slug"] = generer_id_depuis_nom(utilisateur.id[:8]) or utilisateur.id[:8]
+            # BUG corrigé le 04/08 : nom_affiche est NOT NULL en base
+            # (profiles.nom_affiche) -- sans cette ligne, l'INSERT d'un
+            # tout nouveau profil (cas normal juste après inscription,
+            # aucune ligne `profiles` encore créée) violait la contrainte
+            # et remontait ERREUR_INCONNUE ("réessaie dans un instant"),
+            # alors que le compte auth lui-même avait déjà été créé juste
+            # avant par inscrireOuConnecter. Touchait les 3 rôles, pas
+            # seulement "établissement" -- juste le premier testé.
+            ligne_maj["nom_affiche"] = "Sans nom"
             supabase.table("profiles").insert(ligne_maj).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (écriture rôle {utilisateur.id}) : {e}")
