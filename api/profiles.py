@@ -72,15 +72,68 @@ class AgentDuCreateur(BaseModel):
 
 class ProfilDetailPublic(ProfilPublic):
     agents: List[AgentDuCreateur] = Field(default_factory=list)
+    # Ajouté le 2026-08-05 (BUG remonté par Bourama : l'onglet "Administrer"
+    # de "Mon espace" n'apparaissait jamais, même pour un vrai administrateur).
+    # Ce champ manquait ici alors que le frontend le lit sur CET endpoint
+    # (`GET /api/profiles/{user_id}`, un seul appel pour tout "Mon espace") --
+    # il n'existait que sur `MonStatutReponse` (`GET /api/profiles/moi/statut`),
+    # jamais appelé par le frontend. Toujours vide pour un visiteur externe
+    # (rempli uniquement pour le propriétaire, voir obtenir_profil_public),
+    # même convention "privée" que notifications_proactives_actives/est_createur
+    # ci-dessus.
+    agents_administres: List[AgentDuCreateur] = Field(default_factory=list)
+
+
+def _agents_administres_de(user_id: str) -> List[AgentDuCreateur]:
+    """
+    Lit `agents_administrateurs` puis les agents correspondants, pour
+    déterminer les IA administrées par `user_id`. Factorisé ici (2026-08-05)
+    car utilisé à la fois par `mon_statut` et `obtenir_profil_public` --
+    logique identique, deux points d'entrée.
+    """
+    try:
+        liens = (
+            supabase.table("agents_administrateurs").select("agent_id").eq("user_id", user_id).execute()
+        )
+        ids_agents = [l["agent_id"] for l in (liens.data or [])]
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agents_administrateurs {user_id}) : {e}")
+        ids_agents = []
+
+    if not ids_agents:
+        return []
+
+    try:
+        agents_res = (
+            supabase.table("agents")
+            .select("id, nom, ui_config, image_vitrine_url, description, actif")
+            .in_("id", ids_agents)
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agents administrés {user_id}) : {e}")
+        return []
+
+    return [
+        AgentDuCreateur(
+            id=l["id"],
+            nom=l["nom"],
+            icone_page=(l.get("ui_config") or {}).get("icone_page", "🤖"),
+            image_vitrine_url=l.get("image_vitrine_url"),
+            description=l.get("description") or "",
+            actif=l.get("actif") if l.get("actif") is not None else True,
+        )
+        for l in (agents_res.data or [])
+    ]
 
 
 class MonStatutReponse(BaseModel):
     """
     Détermine ce que "Mon espace" doit afficher (2026-08-05, demande
     Bourama) : soit "Administrer" (si administrateur d'au moins une IA),
-    soit "Mes IA" (si créateur), soit aucun des deux -- "Administrer" a
-    priorité si les deux sont vrais en même temps, décision du créateur
-    de l'IA administrée prime sur le statut créateur générique.
+    soit "Mes IA" (si créateur), soit les deux si les deux statuts sont
+    vrais en même temps (2026-08-05, précision de Bourama : pas de priorité
+    exclusive entre les deux, les deux onglets doivent apparaître).
 
     Les deux statuts sont pour l'instant activés manuellement par
     Bourama en base (`profiles.est_createur`, table
@@ -104,37 +157,7 @@ def mon_statut(utilisateur=Depends(utilisateur_courant)):
         profil = None
     est_createur = bool((profil.data or {}).get("est_createur")) if profil and profil.data else False
 
-    try:
-        liens = (
-            supabase.table("agents_administrateurs").select("agent_id").eq("user_id", utilisateur.id).execute()
-        )
-        ids_agents = [l["agent_id"] for l in (liens.data or [])]
-    except Exception as e:
-        logging.error(f"ERREUR SUPABASE (lecture agents_administrateurs {utilisateur.id}) : {e}")
-        ids_agents = []
-
-    agents_administres: List[AgentDuCreateur] = []
-    if ids_agents:
-        try:
-            agents_res = (
-                supabase.table("agents")
-                .select("id, nom, ui_config, image_vitrine_url, description, actif")
-                .in_("id", ids_agents)
-                .execute()
-            )
-            agents_administres = [
-                AgentDuCreateur(
-                    id=l["id"],
-                    nom=l["nom"],
-                    icone_page=(l.get("ui_config") or {}).get("icone_page", "🤖"),
-                    image_vitrine_url=l.get("image_vitrine_url"),
-                    description=l.get("description") or "",
-                    actif=l.get("actif") if l.get("actif") is not None else True,
-                )
-                for l in (agents_res.data or [])
-            ]
-        except Exception as e:
-            logging.error(f"ERREUR SUPABASE (lecture agents administrés {utilisateur.id}) : {e}")
+    agents_administres = _agents_administres_de(utilisateur.id)
 
     return MonStatutReponse(est_createur=est_createur, agents_administres=agents_administres)
 
@@ -249,6 +272,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
         ),
         premier_agent_id=(ligne.get("premier_agent_id") if est_le_proprietaire else None),
         est_createur=(bool(ligne.get("est_createur")) if est_le_proprietaire else False),
+        agents_administres=(_agents_administres_de(user_id) if est_le_proprietaire else []),
     )
 
 
