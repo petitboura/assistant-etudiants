@@ -58,15 +58,43 @@ def _est_admin(user_id: str) -> bool:
     return bool(profil and profil.get("role") == "admin")
 
 
-def peut_modifier_comportement(utilisateur_id: str, owner_id: str) -> bool:
+def _est_administrateur_designe(utilisateur_id: str, agent_id: Optional[str]) -> bool:
+    """
+    Table `agents_administrateurs` (2026-08-05, onglet "Administrer" de
+    Mon espace) : administration confiée par Bourama sur un agent précis,
+    indépendamment du système owner/rôle hiérarchique ci-dessous. `agent_id`
+    est optionnel car certains appelants historiques ne le passent pas
+    encore -- dans ce cas ce droit est simplement ignoré (pas de régression).
+    """
+    if not agent_id:
+        return False
+    try:
+        res = (
+            supabase.table("agents_administrateurs")
+            .select("agent_id")
+            .eq("agent_id", agent_id)
+            .eq("user_id", utilisateur_id)
+            .maybe_single()
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agents_administrateurs {agent_id}/{utilisateur_id}) : {e}")
+        return False
+    return bool(res and res.data)
+
+
+def peut_modifier_comportement(utilisateur_id: str, owner_id: str, agent_id: Optional[str] = None) -> bool:
     """
     system_prompt de l'agent appartenant à `owner_id` : le propriétaire
-    lui-même, l'admin, l'enseignant de cet étudiant, ou l'établissement
-    de cet enseignant (jamais l'établissement direct sur un étudiant).
+    lui-même, l'admin, l'administrateur désigné (agents_administrateurs),
+    l'enseignant de cet étudiant, ou l'établissement de cet enseignant
+    (jamais l'établissement direct sur un étudiant).
     """
     if utilisateur_id == owner_id:
         return True
     if _est_admin(utilisateur_id):
+        return True
+    if _est_administrateur_designe(utilisateur_id, agent_id):
         return True
 
     moi = _lire_profil_role(utilisateur_id)
@@ -81,14 +109,15 @@ def peut_modifier_comportement(utilisateur_id: str, owner_id: str) -> bool:
     return False
 
 
-def peut_gerer_base_connaissances(utilisateur_id: str, owner_id: str) -> bool:
+def peut_gerer_base_connaissances(utilisateur_id: str, owner_id: str, agent_id: Optional[str] = None) -> bool:
     """
     Documents/bibliothèque (RAG) de l'agent appartenant à `owner_id` :
-    même portée que peut_modifier_comportement, SAUF pour l'établissement
-    qui a ici un droit supplémentaire direct sur les étudiants de ses
-    enseignants (deux niveaux), en plus de ses enseignants.
+    même portée que peut_modifier_comportement (donc administrateur désigné
+    inclus), SAUF pour l'établissement qui a ici un droit supplémentaire
+    direct sur les étudiants de ses enseignants (deux niveaux), en plus de
+    ses enseignants.
     """
-    if peut_modifier_comportement(utilisateur_id, owner_id):
+    if peut_modifier_comportement(utilisateur_id, owner_id, agent_id):
         return True
 
     moi = _lire_profil_role(utilisateur_id)
