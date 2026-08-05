@@ -222,6 +222,20 @@ def _valider_et_verifier_disponibilite_execution(execution: Optional[str], agent
     _valider_et_verifier_disponibilite_categorie_libre("execution", "Cette exécution", execution, agent_id_a_exclure)
 
 
+def _agent_owner_id_ou_404(agent_id: str) -> dict:
+    """Petit helper partagé par les endpoints /administrateurs (2026-08-05) :
+    juste owner_id, pas besoin des colonnes complètes comme /edition."""
+    try:
+        res = supabase.table("agents").select("owner_id").eq("id", agent_id).maybe_single().execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture owner_id agent {agent_id}) : {e}")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_L_AGENT_POUR")
+
+    if not res or not res.data:
+        raise erreur_api(404, "AGENT_INTROUVABLE")
+    return res.data
+
+
 class LigneComportement(BaseModel):
     type_requete: str = ""
     comportement: str = ""
@@ -1398,6 +1412,82 @@ def modifier_agent(
         ),
         modele_choisi=mise_a_jour.get("modele_choisi", ligne.get("modele_choisi")),
     )
+
+
+class AdministrateurAgent(BaseModel):
+    user_id: str
+    email: str
+
+
+class ListeAdministrateursReponse(BaseModel):
+    administrateurs: List[AdministrateurAgent] = Field(default_factory=list)
+
+
+class AjouterAdministrateurPayload(BaseModel):
+    email: str
+
+
+@router.get("/{agent_id}/administrateurs", response_model=ListeAdministrateursReponse)
+def lister_administrateurs(agent_id: str, utilisateur=Depends(utilisateur_courant)):
+    """
+    Section "Administrateurs" de /dashboard/agents/{id}/modifier (vitrine,
+    2026-08-05, demande Bourama : "un champ, tu entres l'email, c'est
+    fait, pas de confirmation"). Réservé au propriétaire, comme
+    /edition -- un administrateur désigné ne peut pas lui-même en
+    désigner d'autres.
+    """
+    ligne = _agent_owner_id_ou_404(agent_id)
+    if utilisateur.id != ligne["owner_id"]:
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
+
+    try:
+        res = supabase.rpc("lister_administrateurs_agent", {"p_agent_id": agent_id}).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lister_administrateurs_agent {agent_id}) : {e}")
+        raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_LES_ADMINISTRATEURS")
+
+    return ListeAdministrateursReponse(
+        administrateurs=[
+            AdministrateurAgent(user_id=ligne_admin["user_id"], email=ligne_admin["email"])
+            for ligne_admin in (res.data or [])
+        ]
+    )
+
+
+@router.post("/{agent_id}/administrateurs", response_model=ListeAdministrateursReponse)
+def ajouter_administrateur(
+    agent_id: str, payload: AjouterAdministrateurPayload, utilisateur=Depends(utilisateur_courant)
+):
+    """
+    Ajoute `payload.email` comme administrateur de `agent_id` (table
+    `agents_administrateurs`, voir migrations/2026_08_05_*) : cette
+    personne verra alors l'onglet "Administrer" dans "Mon espace" (app)
+    pour cet agent. Aucune confirmation par email de son côté (décision
+    Bourama, 2026-08-05) -- effectif immédiatement.
+    """
+    ligne = _agent_owner_id_ou_404(agent_id)
+    if utilisateur.id != ligne["owner_id"]:
+        raise erreur_api(403, "PAS_LE_DROIT_SUR_CET_AGENT")
+
+    try:
+        res_user = supabase.rpc("email_vers_user_id", {"p_email": payload.email}).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (email_vers_user_id pour agent {agent_id}) : {e}")
+        raise erreur_api(500, "IMPOSSIBLE_D_AJOUTER_L_ADMINISTRATEUR")
+
+    user_id_trouve = res_user.data if isinstance(res_user.data, str) else None
+    if not user_id_trouve:
+        raise erreur_api(404, "AUCUN_COMPTE_AVEC_CET_EMAIL")
+
+    try:
+        supabase.table("agents_administrateurs").upsert(
+            {"agent_id": agent_id, "user_id": user_id_trouve}
+        ).execute()
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (ajout administrateur {user_id_trouve} sur agent {agent_id}) : {e}")
+        raise erreur_api(500, "IMPOSSIBLE_D_AJOUTER_L_ADMINISTRATEUR")
+
+    return lister_administrateurs(agent_id, utilisateur)
 
 
 class TesterProactivitePayload(BaseModel):
