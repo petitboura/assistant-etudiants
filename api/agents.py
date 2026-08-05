@@ -868,6 +868,11 @@ class AgentEditable(BaseModel):
 
     id: str
     nom: str
+    # Ajouté 2026-08-05 (section Administrateurs) : permet au frontend de
+    # distinguer le propriétaire d'un administrateur désigné, qui voit la
+    # même page mais pas cet onglet (lui-même ne peut pas désigner
+    # d'autres administrateurs, voir /administrateurs côté backend).
+    owner_id: str = ""
     icone_page: str = "🤖"
     system_prompt: str = ""
     config_creation: Optional[ConfigCreation] = None
@@ -958,6 +963,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
     return AgentEditable(
         id=ligne["id"],
         nom=ligne["nom"],
+        owner_id=ligne["owner_id"],
         icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
         system_prompt=ligne.get("system_prompt") or "",
         config_creation=ConfigCreation(**config_brut) if config_brut else None,
