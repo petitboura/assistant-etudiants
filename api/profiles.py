@@ -74,6 +74,71 @@ class ProfilDetailPublic(ProfilPublic):
     agents: List[AgentDuCreateur] = Field(default_factory=list)
 
 
+class MonStatutReponse(BaseModel):
+    """
+    Détermine ce que "Mon espace" doit afficher (2026-08-05, demande
+    Bourama) : soit "Administrer" (si administrateur d'au moins une IA),
+    soit "Mes IA" (si créateur), soit aucun des deux -- "Administrer" a
+    priorité si les deux sont vrais en même temps, décision du créateur
+    de l'IA administrée prime sur le statut créateur générique.
+
+    Les deux statuts sont pour l'instant activés manuellement par
+    Bourama en base (`profiles.est_createur`, table
+    `agents_administrateurs`) : rien dans la plateforme ne permet
+    encore à un utilisateur de devenir créateur ou de nommer un
+    administrateur lui-même (voir migrations/2026_08_05_agents_administrateurs.sql).
+    """
+
+    est_createur: bool = False
+    agents_administres: List[AgentDuCreateur] = Field(default_factory=list)
+
+
+@router.get("/moi/statut", response_model=MonStatutReponse)
+def mon_statut(utilisateur=Depends(utilisateur_courant)):
+    try:
+        profil = (
+            supabase.table("profiles").select("est_createur").eq("user_id", utilisateur.id).maybe_single().execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture est_createur {utilisateur.id}) : {e}")
+        profil = None
+    est_createur = bool((profil.data or {}).get("est_createur")) if profil and profil.data else False
+
+    try:
+        liens = (
+            supabase.table("agents_administrateurs").select("agent_id").eq("user_id", utilisateur.id).execute()
+        )
+        ids_agents = [l["agent_id"] for l in (liens.data or [])]
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture agents_administrateurs {utilisateur.id}) : {e}")
+        ids_agents = []
+
+    agents_administres: List[AgentDuCreateur] = []
+    if ids_agents:
+        try:
+            agents_res = (
+                supabase.table("agents")
+                .select("id, nom, ui_config, image_vitrine_url, description, actif")
+                .in_("id", ids_agents)
+                .execute()
+            )
+            agents_administres = [
+                AgentDuCreateur(
+                    id=l["id"],
+                    nom=l["nom"],
+                    icone_page=(l.get("ui_config") or {}).get("icone_page", "🤖"),
+                    image_vitrine_url=l.get("image_vitrine_url"),
+                    description=l.get("description") or "",
+                    actif=l.get("actif") if l.get("actif") is not None else True,
+                )
+                for l in (agents_res.data or [])
+            ]
+        except Exception as e:
+            logging.error(f"ERREUR SUPABASE (lecture agents administrés {utilisateur.id}) : {e}")
+
+    return MonStatutReponse(est_createur=est_createur, agents_administres=agents_administres)
+
+
 @router.get("/{user_id}", response_model=ProfilDetailPublic)
 def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionnel)):
     """
@@ -93,14 +158,34 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
     EST le propriétaire de ce profil ; si oui, elle voit tous ses agents,
     actifs ou non — sinon, comportement inchangé.
 
-    404 si aucun profil n'existe pour ce `user_id` : un compte tout juste
-    inscrit sans `PATCH /me` préalable n'a pas encore de portfolio public
-    (voir docstring de `mettre_a_jour_mon_profil`, pas de trigger de
-    création automatique décidé).
+    404 si aucun profil n'existe pour ce `user_id` -- SAUF pour le
+    propriétaire lui-même (voir BUG 2026-08-05 ci-dessous), qui reçoit un
+    profil vide plutôt qu'une erreur. Pour un visiteur externe : un
+    compte tout juste inscrit sans `PATCH /me` préalable n'a pas encore
+    de portfolio public (voir docstring de `mettre_a_jour_mon_profil`,
+    pas de trigger de création automatique décidé).
 
     L'échec de la lecture des agents n'annule pas la réponse (best-effort,
     même logique que l'indexation de texte libre à la création d'agent) :
     mieux vaut un profil sans liste d'agents qu'une 500 sur tout.
+
+    BUG corrigé le 2026-08-05 (remonté par Bourama : la section "Mes IA"/
+    "Administrer" de "Mon espace" plantait silencieusement). Cet endpoint
+    est réutilisé par le dashboard pour lister ses propres agents (voir
+    ci-dessus), mais créer un agent (`POST /api/agents`) n'a jamais
+    exigé d'avoir un profil (`PATCH /api/profiles/me`) au préalable --
+    un utilisateur (ou un compte tout juste rendu créateur/administrateur
+    par Bourama via `est_createur`/`agents_administrateurs`, voir
+    `GET /api/profiles/moi/statut`) peut donc très bien avoir des agents
+    sans jamais avoir de ligne `profiles`. Le 404 ci-dessous, correct
+    pour un VRAI visiteur externe (portfolio public inexistant), cassait
+    silencieusement ce cas pour le propriétaire (le frontend avale
+    l'erreur et affiche "Aucune IA", alors que les agents existent bel
+    et bien). Convention reprise d'ailleurs dans le code (ex:
+    `api/agents.py:creer_commentaire`, `nom_affiche=None` si profil
+    absent) : absence de profil = valeurs vides, pas une erreur --
+    appliquée ici uniquement pour le propriétaire (un visiteur externe
+    voit toujours 404, comportement public inchangé).
     """
     try:
         profil = (
@@ -114,10 +199,16 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
         logging.error(f"ERREUR SUPABASE (lecture profil {user_id}) : {e}")
         raise erreur_api(500, "IMPOSSIBLE_DE_CHARGER_CE_PROFIL_POUR")
 
-    if not profil or not profil.data:
-        raise erreur_api(404, "PROFIL_INTROUVABLE")
-
     est_le_proprietaire = bool(utilisateur and utilisateur.id == user_id)
+
+    if not profil or not profil.data:
+        if not est_le_proprietaire:
+            raise erreur_api(404, "PROFIL_INTROUVABLE")
+        # Propriétaire sans profil : valeurs vides plutôt qu'une 404
+        # (voir BUG 2026-08-05 dans la docstring ci-dessus).
+        ligne_profil: dict = {"user_id": user_id}
+    else:
+        ligne_profil = profil.data
 
     try:
         requete_agents = (
@@ -146,7 +237,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
         for ligne in lignes_agents
     ]
 
-    ligne = profil.data
+    ligne = ligne_profil
     return ProfilDetailPublic(
         user_id=ligne["user_id"],
         nom_affiche=ligne.get("nom_affiche") or "",
