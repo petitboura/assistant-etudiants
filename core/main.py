@@ -993,6 +993,36 @@ def _charger_profil_utilisateur(agent_id, user_id):
         return {}
 
 
+def _charger_prompt_personnalise(agent_id, user_id):
+    """
+    Surcharge du system_prompt de base pour la paire (agent, utilisateur
+    connecté) -- table agents_prompts_utilisateur (2026-08-06, agents
+    "partagés" type Stirux/Lirinus où chaque utilisateur a sa propre
+    version). Contrairement au profil dynamique, ne varie pas par
+    message : ne change que quand l'utilisateur modifie son prompt.
+    Utilisateurs connectés uniquement. Renvoie None si non connecté ou
+    si rien n'est enregistré pour cette paire -- _construire_system_prompt
+    retombe alors sur le system_prompt de base de l'agent.
+    """
+    if not user_id or not agent_id:
+        return None
+    try:
+        res = (
+            supabase.table("agents_prompts_utilisateur")
+            .select("system_prompt")
+            .eq("agent_id", agent_id)
+            .eq("user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        return (res.data or {}).get("system_prompt") or None
+    except Exception as e:
+        logging.error(
+            f"ERREUR SUPABASE (lecture agents_prompts_utilisateur agent={agent_id}, user={user_id}) : {e}"
+        )
+        return None
+
+
 def _mettre_a_jour_profil_utilisateur_si_besoin(user_id, agent_id):
     """
     Pendant du profil dynamique à _mettre_a_jour_resume_si_besoin
@@ -1315,13 +1345,22 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     # Agents à "contenu dynamique par matière" (voir
     # core/contenu_dynamique_matiere.py, 2026-08-06) : le system_prompt
     # dépend de l'étudiant et du message, jamais de get_system_prompt()
-    # (qui suppose un prompt fixe et cacheable par agent) -- tous les
-    # autres agents de la plateforme passent par get_system_prompt()
-    # comme avant, aucune régression.
+    # (qui suppose un prompt fixe et cacheable par agent).
+    #
+    # Sinon, agents "partagés" (Stirux, Lirinus...) : si un prompt
+    # personnalisé existe pour cet utilisateur sur cet agent (table
+    # agents_prompts_utilisateur), il remplace entièrement le
+    # system_prompt de base -- pas de fusion des deux. Ne casse pas le
+    # cache Groq pour les autres agents (aucune ligne dans la table =
+    # comportement inchangé, un seul appel de plus, "best effort").
+    #
+    # Tous les autres agents de la plateforme passent par
+    # get_system_prompt() comme avant, aucune régression.
     if agent_a_contenu_dynamique(agent_id):
         system_prompt = resoudre_system_prompt_matiere(message_utilisateur, agent_id, user_id)
     else:
-        system_prompt = get_system_prompt(agent_id)
+        system_prompt = _charger_prompt_personnalise(agent_id, user_id) or get_system_prompt(agent_id)
+
     candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
     resume_memoire = _charger_resume_memoire(user_id)
     profil_utilisateur = _charger_profil_utilisateur(agent_id, user_id)
