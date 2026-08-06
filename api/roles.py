@@ -46,13 +46,21 @@ router = APIRouter(prefix="/api/roles", tags=["roles"])
 
 ROLES_VALIDES = ("etablissement", "enseignant", "etudiant")
 
-# Prompts par défaut à la création automatique de l'IA d'un compte à rôle
-# (2026-08-04) -- texte de départ modifiable ensuite comme n'importe quel
-# agent (par son propriétaire, ou son superviseur selon la hiérarchie).
-SYSTEM_PROMPT_PAR_DEFAUT = {
-    "etablissement": "Tu es l'assistant IA de cet établissement. Sois clair, professionnel et utile.",
-    "enseignant": "Tu es l'assistant IA de cet enseignant. Sois clair, pédagogique et utile.",
-    "etudiant": "Tu es l'assistant IA de cet étudiant. Sois clair, pédagogique et bienveillant.",
+# IA fixes, une par rôle, déjà en base (table `agents`, project
+# rwcyeppxfonvqbvztxyg) -- même mapping que AGENT_PAR_ROLE côté vitrine
+# (djiguigne-ai/components/InscriptionEtablissements.tsx). Remplace le
+# principe "on crée une nouvelle IA à chaque inscription" (06/08, demande
+# Bourama : "supprimer ce principe, les trois sont redirigés vers des IA
+# spécifiques à chacune") -- avant cette date, choisir_role() appelait
+# _creer_agent_minimal() qui insérait une ligne `agents` par utilisateur,
+# publiée par défaut (`actif` jamais renseigné à l'INSERT -> NULL ->
+# traité comme publiée partout ailleurs dans la plateforme), donc visible
+# dans le feed découverte comme n'importe quelle IA de créateur -- jamais
+# voulu, effet de bord du principe lui-même, pas un bug isolé.
+AGENT_PAR_ROLE = {
+    "etudiant": "nitrux",
+    "enseignant": "stirux",
+    "etablissement": "lirinus",
 }
 
 
@@ -69,67 +77,6 @@ def _nom_affiche_ou_repli(user_id: str) -> str:
         logging.error(f"ERREUR SUPABASE (nom_affiche {user_id}) : {e}")
         res = None
     return ((res.data or {}).get("nom_affiche") if res else None) or "Sans nom"
-
-
-def _creer_agent_minimal(owner_id: str, role: str, nom_affiche: str) -> str:
-    """
-    Crée l'IA propre à un compte à rôle, avec un system_prompt de départ
-    (voir SYSTEM_PROMPT_PAR_DEFAUT) -- INSERT direct plutôt que de passer
-    par POST /api/agents (qui exige un formulaire complet : ton, posture,
-    comportements...). Pas de matière/catégorie : ces colonnes sont
-    NULLABLE et leur contrainte UNIQUE n'empêche pas plusieurs NULL
-    (comportement standard Postgres), donc aucun conflit possible ici.
-    """
-    base = generer_id_depuis_nom(f"{role}-{nom_affiche}") or f"{role}-{owner_id[:8]}"
-    agent_id = base
-    suffixe = 0
-    while True:
-        try:
-            existe = supabase.table("agents").select("id").eq("id", agent_id).maybe_single().execute()
-        except Exception as e:
-            logging.error(f"ERREUR SUPABASE (vérification unicité agent_id={agent_id}) : {e}")
-            existe = None
-        if not existe or not existe.data:
-            break
-        suffixe += 1
-        agent_id = f"{base}-{suffixe}"
-
-    ui_config = {
-        "titre_page": nom_affiche,
-        "icone_page": "🤖",
-        "titre_accueil": f"🤖 {nom_affiche}",
-        "sous_titre_accueil": f"IA de {nom_affiche}",
-        "emoji_reponse": "🤖",
-        "placeholder_saisie": "Pose ta question...",
-    }
-    try:
-        supabase.table("agents").insert(
-            {
-                "id": agent_id,
-                "nom": nom_affiche,
-                "system_prompt": SYSTEM_PROMPT_PAR_DEFAUT[role],
-                "ui_config": ui_config,
-                "knowledge_source": {},
-                "owner_id": owner_id,
-                "description": f"IA de {nom_affiche}",
-            }
-        ).execute()
-    except Exception as e:
-        logging.error(f"ERREUR SUPABASE (création agent auto rôle={role}, owner={owner_id}) : {e}")
-        raise erreur_api(500, "AGENT_CREE_MAIS_INDEXATION_ECHEC", nom=nom_affiche)
-
-    # envoyer_message n'est pas un outil optionnel que le créateur coche
-    # à la main (contrairement aux autres outils de génération) : sans
-    # cette ligne dans agents_outils_generation, la fonctionnalité
-    # messagerie ne marche pour personne au départ (2026-08-04).
-    try:
-        supabase.table("agents_outils_generation").insert(
-            {"agent_id": agent_id, "nom_outil": "envoyer_message"}
-        ).execute()
-    except Exception as e:
-        logging.error(f"ERREUR SUPABASE (activation envoyer_message agent={agent_id}) : {e}")
-
-    return agent_id
 
 
 class ChoisirRolePayload(BaseModel):
@@ -213,7 +160,7 @@ def choisir_role(payload: ChoisirRolePayload, request: Request, utilisateur=Depe
         logging.error(f"ERREUR SUPABASE (écriture rôle {utilisateur.id}) : {e}")
         raise erreur_api(500, "ERREUR_INCONNUE")
 
-    agent_id = _creer_agent_minimal(utilisateur.id, payload.role, ligne_maj["nom_affiche"])
+    agent_id = AGENT_PAR_ROLE[payload.role]
 
     journaliser(
         action="role.choisi",
@@ -237,24 +184,11 @@ def mon_role(utilisateur=Depends(utilisateur_courant)):
     profil = _lire_profil_role(utilisateur.id)
     if not profil or not profil.get("role"):
         return MonRoleReponse()
-    try:
-        agent = (
-            supabase.table("agents")
-            .select("id")
-            .eq("owner_id", utilisateur.id)
-            .order("created_at")
-            .limit(1)
-            .maybe_single()
-            .execute()
-        )
-    except Exception as e:
-        logging.error(f"ERREUR SUPABASE (agent du rôle {utilisateur.id}) : {e}")
-        agent = None
     return MonRoleReponse(
         role=profil.get("role"),
         etablissement_id=profil.get("etablissement_id"),
         enseignant_id=profil.get("enseignant_id"),
-        agent_id=(agent.data or {}).get("id") if agent and agent.data else None,
+        agent_id=AGENT_PAR_ROLE.get(profil.get("role")),
     )
 
 
@@ -309,15 +243,21 @@ class MembreEquipe(BaseModel):
 def mon_equipe(utilisateur=Depends(utilisateur_courant)):
     """
     Enseignant connecté -> ses étudiants. Établissement connecté -> ses
-    enseignants. Chaque membre inclut son `agent_id` (pour lier
-    directement vers les pages "Modifier"/"Tester" déjà existantes côté
-    frontend, aucune nouvelle page de gestion d'agent nécessaire).
+    enseignants. Chaque membre inclut `agent_id` (pour lier directement
+    vers la page "Modifier"/"Tester" existante côté frontend) -- depuis le
+    06/08, c'est l'IA fixe PARTAGÉE de leur rôle (nitrux pour tous les
+    étudiants, stirux pour tous les enseignants -- voir AGENT_PAR_ROLE),
+    pas une IA individuelle par membre : "Modifier" ici modifie l'IA de
+    l'ensemble de ses élèves/enseignants, jamais celle d'un membre en
+    particulier (confirmé par Bourama, cette page a toujours désigné une
+    IA collective, jamais individuelle).
     """
     profil = _lire_profil_role(utilisateur.id)
     if not profil or profil.get("role") not in ("enseignant", "etablissement"):
         raise erreur_api(403, "ACTION_RESERVEE_A_CE_ROLE")
 
     colonne_filtre = "enseignant_id" if profil["role"] == "enseignant" else "etablissement_id"
+    role_membres = "etudiant" if profil["role"] == "enseignant" else "enseignant"
     try:
         membres = (
             supabase.table("profiles")
@@ -329,26 +269,14 @@ def mon_equipe(utilisateur=Depends(utilisateur_courant)):
         logging.error(f"ERREUR SUPABASE (mon-equipe {utilisateur.id}) : {e}")
         raise erreur_api(500, "ERREUR_INCONNUE")
 
+    agent_id_membres = AGENT_PAR_ROLE[role_membres]
     resultat = []
     for m in membres.data or []:
-        try:
-            agent = (
-                supabase.table("agents")
-                .select("id")
-                .eq("owner_id", m["user_id"])
-                .order("created_at")
-                .limit(1)
-                .maybe_single()
-                .execute()
-            )
-        except Exception as e:
-            logging.error(f"ERREUR SUPABASE (agent membre {m['user_id']}) : {e}")
-            agent = None
         resultat.append(
             MembreEquipe(
                 user_id=m["user_id"],
                 nom_affiche=m.get("nom_affiche") or "Sans nom",
-                agent_id=(agent.data or {}).get("id") if agent and agent.data else None,
+                agent_id=agent_id_membres,
             )
         )
     return resultat
@@ -507,29 +435,6 @@ def mes_contacts(utilisateur=Depends(utilisateur_courant)):
 
     contacts = _contacts_autorises(profil)
 
-    # Un seul aller-retour Supabase pour tous les agent_id plutôt qu'une
-    # requête par contact (corrigé le 2026-08-05, audit A-F : un
-    # établissement avec beaucoup d'enseignants/étudiants aurait fait
-    # autant de requêtes séquentielles que de contacts).
-    owner_ids = [c["user_id"] for c in contacts]
-    agent_par_owner: dict[str, str] = {}
-    if owner_ids:
-        try:
-            agents = (
-                supabase.table("agents")
-                .select("id, owner_id, created_at")
-                .in_("owner_id", owner_ids)
-                .order("created_at")
-                .execute()
-            )
-            for a in agents.data or []:
-                # Le premier agent rencontré par owner_id (tri croissant
-                # par created_at) -- même règle que l'ancien .limit(1) par
-                # contact, juste appliquée en mémoire ici.
-                agent_par_owner.setdefault(a["owner_id"], a["id"])
-        except Exception as e:
-            logging.error(f"ERREUR SUPABASE (agents des contacts) : {e}")
-
     resultat = []
     for c in contacts:
         resultat.append(
@@ -537,7 +442,7 @@ def mes_contacts(utilisateur=Depends(utilisateur_courant)):
                 user_id=c["user_id"],
                 nom_affiche=c.get("nom_affiche") or "Sans nom",
                 role=c.get("role"),
-                agent_id=agent_par_owner.get(c["user_id"]),
+                agent_id=AGENT_PAR_ROLE.get(c.get("role")),
             )
         )
     return resultat
@@ -745,31 +650,21 @@ async def diffuser_document(
 
     cibles = [c for c in _contacts_autorises(profil) if c.get("role") in ("enseignant", "etudiant")]
 
+    # Depuis le 06/08, un rôle donné = UNE IA fixe partagée par tout le
+    # monde (AGENT_PAR_ROLE) -- diffuser une fois par personne comme avant
+    # uploaderait/indexerait le même fichier plusieurs fois dans la même
+    # IA. On diffuse une seule fois par rôle réellement présent parmi les
+    # cibles, et on compte quand même `diffuse_a`/`echecs` par personne
+    # couverte (même sémantique de retour qu'avant pour le frontend/les
+    # logs, juste le travail réel fait une fois par IA).
+    roles_cibles = sorted({c["role"] for c in cibles})
+
     echecs: List[str] = []
     diffuse_a = 0
 
-    for cible in cibles:
-        nom_cible = cible.get("nom_affiche") or "Sans nom"
-        try:
-            agent = (
-                supabase.table("agents")
-                .select("id")
-                .eq("owner_id", cible["user_id"])
-                .order("created_at")
-                .limit(1)
-                .maybe_single()
-                .execute()
-            )
-        except Exception as e:
-            logging.error(f"ERREUR SUPABASE (agent cible diffusion {cible['user_id']}) : {e}")
-            echecs.append(nom_cible)
-            continue
-
-        agent_id = (agent.data or {}).get("id") if agent and agent.data else None
-        if not agent_id:
-            echecs.append(nom_cible)
-            continue
-
+    for role in roles_cibles:
+        agent_id = AGENT_PAR_ROLE[role]
+        cibles_du_role = [c for c in cibles if c["role"] == role]
         try:
             if fichier.content_type == "application/pdf":
                 nom_stockage_rag = f"{agent_id}__{nom_original}"
@@ -794,10 +689,10 @@ async def diffuser_document(
                 agent_id=agent_id,
                 description=description_finale,
             )
-            diffuse_a += 1
+            diffuse_a += len(cibles_du_role)
         except Exception as e:
-            logging.error(f"ERREUR diffusion document (agent_id={agent_id}, cible={cible['user_id']}) : {e}")
-            echecs.append(nom_cible)
+            logging.error(f"ERREUR diffusion document (agent_id={agent_id}, role={role}) : {e}")
+            echecs.extend(c.get("nom_affiche") or "Sans nom" for c in cibles_du_role)
 
     journaliser(
         action="document.diffuse",
