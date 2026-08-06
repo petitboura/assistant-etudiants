@@ -61,6 +61,7 @@ class AgentDuCreateur(BaseModel):
     nom: str
     icone_page: str = "🤖"
     image_vitrine_url: Optional[str] = None
+    icone_url: Optional[str] = None
     description: str = ""
     # Ajouté le 2026-07-13 (Bourama : bouton on/off pour (dés)activer un
     # agent publiquement, directement à côté de sa carte dans "Mes
@@ -106,7 +107,7 @@ def _agents_administres_de(user_id: str) -> List[AgentDuCreateur]:
     try:
         agents_res = (
             supabase.table("agents")
-            .select("id, nom, ui_config, image_vitrine_url, description, actif")
+            .select("id, nom, ui_config, image_vitrine_url, icone_url, description, actif")
             .in_("id", ids_agents)
             .execute()
         )
@@ -120,6 +121,7 @@ def _agents_administres_de(user_id: str) -> List[AgentDuCreateur]:
             nom=l["nom"],
             icone_page=(l.get("ui_config") or {}).get("icone_page", "🤖"),
             image_vitrine_url=l.get("image_vitrine_url"),
+            icone_url=l.get("icone_url"),
             description=l.get("description") or "",
             actif=l.get("actif") if l.get("actif") is not None else True,
         )
@@ -236,7 +238,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
     try:
         requete_agents = (
             supabase.table("agents")
-            .select("id, nom, ui_config, image_vitrine_url, description, actif")
+            .select("id, nom, ui_config, image_vitrine_url, icone_url, description, actif")
             .eq("owner_id", user_id)
         )
         if not est_le_proprietaire:
@@ -254,6 +256,7 @@ def obtenir_profil_public(user_id: str, utilisateur=Depends(utilisateur_optionne
             nom=ligne["nom"],
             icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
             image_vitrine_url=ligne.get("image_vitrine_url"),
+            icone_url=ligne.get("icone_url"),
             description=ligne.get("description") or "",
             actif=ligne.get("actif") if ligne.get("actif") is not None else True,
         )

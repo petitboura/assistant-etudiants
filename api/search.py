@@ -26,6 +26,7 @@ class ResultatAgent(BaseModel):
     id: str
     nom: str
     icone_page: str = "🤖"
+    icone_url: Optional[str] = None
 
 
 class ResultatCreateur(BaseModel):
@@ -67,7 +68,7 @@ def rechercher(q: str = Query(..., min_length=1)):
     try:
         agents_res = (
             supabase.table("agents")
-            .select("id, nom, ui_config")
+            .select("id, nom, ui_config, icone_url")
             .ilike("nom", terme)
             .or_("actif.is.null,actif.eq.true")
             .or_("publiable.is.null,publiable.eq.true")
@@ -130,6 +131,7 @@ def rechercher(q: str = Query(..., min_length=1)):
                 id=ligne["id"],
                 nom=ligne["nom"],
                 icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
+                icone_url=ligne.get("icone_url"),
             )
             for ligne in lignes_agents
         ],

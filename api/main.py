@@ -225,6 +225,8 @@ class AgentFeedItem(BaseModel):
     nom: str
     icone_page: str = "🤖"
     image_vitrine_url: Optional[str] = None
+    # Nouveau système d'icône (2026-08-05) : voir agents.py CreerAgentPayload.icone_url
+    icone_url: Optional[str] = None
     description: str = ""
     categorie_id: Optional[str] = None
     # Ajouté le 2026-07-31 (Bourama : section "Matières" de la page
@@ -292,7 +294,7 @@ def feed(
         requete = (
             supabase.table("agents")
             .select(
-                "id, nom, ui_config, image_vitrine_url, description, categorie_id, "
+                "id, nom, ui_config, image_vitrine_url, icone_url, description, categorie_id, "
                 "matiere, langue_africaine, metier, filiere, domaine, execution",
                 count="exact",
             )
@@ -324,6 +326,7 @@ def feed(
             nom=ligne["nom"],
             icone_page=(ligne.get("ui_config") or {}).get("icone_page", "🤖"),
             image_vitrine_url=ligne.get("image_vitrine_url"),
+            icone_url=ligne.get("icone_url"),
             description=ligne.get("description") or "",
             categorie_id=ligne.get("categorie_id"),
             matiere=ligne.get("matiere"),

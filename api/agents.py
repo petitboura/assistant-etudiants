@@ -320,6 +320,13 @@ class CreerAgentPayload(BaseModel):
     # description publique de la page agent, distinctes de
     # description_connaissance qui reste un usage interne au RAG.
     image_vitrine_url: Optional[str] = None
+    # Nouveau système d'icône (2026-08-05) : icône compacte (dessinée à la
+    # main ou uploadée), affichée partout à la place de l'emoji
+    # ui_config.icone_page et de image_vitrine_url ci-dessus -- voir
+    # migrations/2026_08_05_ajout_icone_url_agents.sql. image_vitrine_url
+    # reste en base pour l'instant (agents déjà créés), mais n'est plus
+    # affiché nulle part une fois icone_url renseigné.
+    icone_url: Optional[str] = None
     description: str = ""
     # Ajouté le 2026-07-12 (Bourama : "tu as mélangé deux choses, la
     # description publique et le sous-titre. La description publique peut
@@ -497,6 +504,7 @@ def creer_agent(
         # vitrine publique de l'agent,
         # distincte de knowledge_source.description (usage RAG interne).
         "image_vitrine_url": payload.image_vitrine_url,
+        "icone_url": payload.icone_url,
         "description": payload.description.strip(),
         "categorie_id": payload.categorie_id,
         "matiere": payload.matiere,
@@ -606,6 +614,8 @@ class AgentDetailPublic(BaseModel):
     titre_accueil: str = "🎓 Votre coatch mathématique"
     sous_titre_accueil: str = "Tout comprendre sur les maths. Je te donne rien, je t'enseigne tout."
     image_vitrine_url: Optional[str] = None
+    # Nouveau système d'icône (2026-08-05) : voir CreerAgentPayload.icone_url
+    icone_url: Optional[str] = None
     description: str = ""
     owner_id: str
     # Ajoutés le 2026-08-01 (chantier SEO/AEO) : nécessaires au frontend
@@ -652,7 +662,7 @@ def obtenir_agent_public(agent_id: str):
         res = (
             supabase.table("agents")
             .select(
-                "id, nom, ui_config, image_vitrine_url, description, owner_id, actif, "
+                "id, nom, ui_config, image_vitrine_url, icone_url, description, owner_id, actif, "
                 "matiere, matiere_detail, langue_africaine, metier, filiere, domaine, "
                 "distributeur_debloque, palier_debloque, modele_choisi"
             )
@@ -679,6 +689,7 @@ def obtenir_agent_public(agent_id: str):
         titre_accueil=_ui_config.get("titre_accueil") or AgentDetailPublic.model_fields["titre_accueil"].default,
         sous_titre_accueil=_ui_config.get("sous_titre_accueil") or AgentDetailPublic.model_fields["sous_titre_accueil"].default,
         image_vitrine_url=ligne.get("image_vitrine_url"),
+        icone_url=ligne.get("icone_url"),
         description=ligne.get("description") or "",
         owner_id=ligne["owner_id"],
         matiere=ligne.get("matiere"),
@@ -753,6 +764,7 @@ class MettreAJourVitrinePayload(BaseModel):
     # partiel : un champ omis (None) n'est pas touché, contrairement à une
     # chaîne vide envoyée explicitement, qui efface la valeur existante.
     image_vitrine_url: Optional[str] = None
+    icone_url: Optional[str] = None
     description: Optional[str] = None
 
 
@@ -776,7 +788,7 @@ def mettre_a_jour_vitrine(
     try:
         res = (
             supabase.table("agents")
-            .select("id, nom, ui_config, image_vitrine_url, description, owner_id")
+            .select("id, nom, ui_config, image_vitrine_url, icone_url, description, owner_id")
             .eq("id", agent_id)
             .maybe_single()
             .execute()
@@ -795,6 +807,8 @@ def mettre_a_jour_vitrine(
     mise_a_jour = {}
     if payload.image_vitrine_url is not None:
         mise_a_jour["image_vitrine_url"] = payload.image_vitrine_url
+    if payload.icone_url is not None:
+        mise_a_jour["icone_url"] = payload.icone_url
     if payload.description is not None:
         mise_a_jour["description"] = payload.description.strip()
 
@@ -826,6 +840,7 @@ def mettre_a_jour_vitrine(
         titre_accueil=_ui_config.get("titre_accueil") or AgentDetailPublic.model_fields["titre_accueil"].default,
         sous_titre_accueil=_ui_config.get("sous_titre_accueil") or AgentDetailPublic.model_fields["sous_titre_accueil"].default,
         image_vitrine_url=ligne.get("image_vitrine_url"),
+        icone_url=ligne.get("icone_url"),
         description=ligne.get("description") or "",
         owner_id=ligne["owner_id"],
     )
@@ -883,6 +898,7 @@ class AgentEditable(BaseModel):
     notion_index_maj_le: Optional[str] = None
     texte_libre: str = ""
     image_vitrine_url: Optional[str] = None
+    icone_url: Optional[str] = None
     description: str = ""
     sous_titre: str = ""
     placeholder_saisie: str = "Pose ta question..."
@@ -934,7 +950,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
             supabase.table("agents")
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
-                "notion_page_id, knowledge_source, image_vitrine_url, description, "
+                "notion_page_id, knowledge_source, image_vitrine_url, icone_url, description, "
                 "notion_index_statut, notion_index_message, notion_index_maj_le, "
                 "actif, owner_id, categorie_id, matiere, matiere_detail, langue_africaine, "
                 "metier, filiere, domaine, execution, "
@@ -974,6 +990,7 @@ def obtenir_agent_pour_edition(agent_id: str, utilisateur=Depends(utilisateur_co
         notion_index_maj_le=ligne.get("notion_index_maj_le"),
         texte_libre=(ligne.get("knowledge_source") or {}).get("texte_libre", ""),
         image_vitrine_url=ligne.get("image_vitrine_url"),
+        icone_url=ligne.get("icone_url"),
         description=ligne.get("description") or "",
         sous_titre=(ligne.get("ui_config") or {}).get("sous_titre_accueil", ""),
         placeholder_saisie=(ligne.get("ui_config") or {}).get(
@@ -1031,6 +1048,7 @@ class ModifierAgentPayload(BaseModel):
     lien_notion: Optional[str] = None
     texte_libre: Optional[str] = None
     image_vitrine_url: Optional[str] = None
+    icone_url: Optional[str] = None
     description: Optional[str] = None
     actif: Optional[bool] = None
     categorie_id: Optional[str] = None
@@ -1079,7 +1097,7 @@ def modifier_agent(
             supabase.table("agents")
             .select(
                 "id, nom, ui_config, system_prompt, config_creation, tools_enabled, "
-                "notion_page_id, knowledge_source, image_vitrine_url, description, "
+                "notion_page_id, knowledge_source, image_vitrine_url, icone_url, description, "
                 "notion_index_statut, notion_index_message, notion_index_maj_le, "
                 "actif, owner_id, categorie_id, matiere, matiere_detail, langue_africaine, "
                 "metier, filiere, domaine, execution, "
@@ -1246,6 +1264,8 @@ def modifier_agent(
 
     if payload.image_vitrine_url is not None:
         mise_a_jour["image_vitrine_url"] = payload.image_vitrine_url
+    if payload.icone_url is not None:
+        mise_a_jour["icone_url"] = payload.icone_url
     if payload.description is not None:
         mise_a_jour["description"] = payload.description.strip()
     if payload.profil_utilisateur_schema is not None:
@@ -1392,6 +1412,7 @@ def modifier_agent(
         notion_page_id=mise_a_jour.get("notion_page_id", ligne.get("notion_page_id")),
         texte_libre=knowledge_source.get("texte_libre", ""),
         image_vitrine_url=mise_a_jour.get("image_vitrine_url", ligne.get("image_vitrine_url")),
+        icone_url=mise_a_jour.get("icone_url", ligne.get("icone_url")),
         description=mise_a_jour.get("description", ligne.get("description") or ""),
         sous_titre=ui_config.get("sous_titre_accueil", ""),
         actif=mise_a_jour.get("actif", ligne.get("actif", True)),
