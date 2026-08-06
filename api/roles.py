@@ -136,6 +136,17 @@ class ChoisirRolePayload(BaseModel):
     role: Literal["etablissement", "enseignant", "etudiant"]
     etablissement_id: Optional[str] = None
     enseignant_id: Optional[str] = None
+    # Étape "profil" ajoutée le 06/08 (Bourama) : nom_affiche fourni par
+    # l'utilisateur (obligatoire), remplace le repli "Sans nom" utilisé
+    # jusqu'ici. Tous les autres champs sont optionnels -- voir
+    # migration profils_champs_inscription_hierarchie pour le schéma.
+    nom_affiche: str
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    site_web: Optional[str] = None
+    contact: Optional[str] = None
+    email_contact: Optional[str] = None
+    matiere: Optional[str] = None
 
 
 class MonRoleReponse(BaseModel):
@@ -153,21 +164,34 @@ def choisir_role(payload: ChoisirRolePayload, request: Request, utilisateur=Depe
 
     ligne_maj = {"role": payload.role}
 
-    if payload.role == "enseignant":
-        if not payload.etablissement_id:
-            raise erreur_api(422, "ETABLISSEMENT_ID_REQUIS_POUR_ENSEIGNANT")
+    # Rattachement (établissement pour un enseignant) : optionnel depuis
+    # le 06/08 (Bourama, étape "profil"). L'ID reste vérifié s'il est
+    # fourni, mais son absence ne bloque plus l'inscription. Le
+    # rattachement étudiant->enseignant a été retiré de ce parcours (plus
+    # de champ correspondant côté formulaire), enseignant_id n'est donc
+    # jamais rempli ici en pratique, mais le payload le garde par
+    # compatibilité avec /api/roles/moi qui l'expose.
+    if payload.role == "enseignant" and payload.etablissement_id:
         cible = _lire_profil_role(payload.etablissement_id)
         if not cible or cible.get("role") != "etablissement":
             raise erreur_api(404, "ETABLISSEMENT_INTROUVABLE")
         ligne_maj["etablissement_id"] = payload.etablissement_id
 
-    elif payload.role == "etudiant":
-        if not payload.enseignant_id:
-            raise erreur_api(422, "ENSEIGNANT_ID_REQUIS_POUR_ETUDIANT")
+    elif payload.role == "etudiant" and payload.enseignant_id:
         cible = _lire_profil_role(payload.enseignant_id)
         if not cible or cible.get("role") != "enseignant":
             raise erreur_api(404, "ENSEIGNANT_INTROUVABLE")
         ligne_maj["enseignant_id"] = payload.enseignant_id
+
+    # Champs de profil (06/08) : tous optionnels sauf nom_affiche, jamais
+    # écrasés par une valeur vide si l'utilisateur a laissé le champ vide
+    # (garde le repli "Sans nom" impossible mais évite d'écrire des
+    # chaînes vides en base pour les champs optionnels non remplis).
+    ligne_maj["nom_affiche"] = payload.nom_affiche.strip() or "Sans nom"
+    for champ in ("bio", "avatar_url", "site_web", "contact", "email_contact", "matiere"):
+        valeur = getattr(payload, champ)
+        if valeur and valeur.strip():
+            ligne_maj[champ] = valeur.strip()
 
     # Upsert : même situation que PATCH /api/profiles/me, rien ne
     # garantit qu'une ligne `profiles` existe déjà (voir docstring
@@ -178,29 +202,18 @@ def choisir_role(payload: ChoisirRolePayload, request: Request, utilisateur=Depe
         logging.error(f"ERREUR SUPABASE (vérification profil existant {utilisateur.id}) : {e}")
         deja = None
 
-    nom_affiche = _nom_affiche_ou_repli(utilisateur.id) if deja and deja.data else "Sans nom"
-
     try:
         if deja and deja.data:
             supabase.table("profiles").update(ligne_maj).eq("user_id", utilisateur.id).execute()
         else:
             ligne_maj["user_id"] = utilisateur.id
             ligne_maj["slug"] = generer_id_depuis_nom(utilisateur.id[:8]) or utilisateur.id[:8]
-            # BUG corrigé le 04/08 : nom_affiche est NOT NULL en base
-            # (profiles.nom_affiche) -- sans cette ligne, l'INSERT d'un
-            # tout nouveau profil (cas normal juste après inscription,
-            # aucune ligne `profiles` encore créée) violait la contrainte
-            # et remontait ERREUR_INCONNUE ("réessaie dans un instant"),
-            # alors que le compte auth lui-même avait déjà été créé juste
-            # avant par inscrireOuConnecter. Touchait les 3 rôles, pas
-            # seulement "établissement" -- juste le premier testé.
-            ligne_maj["nom_affiche"] = "Sans nom"
             supabase.table("profiles").insert(ligne_maj).execute()
     except Exception as e:
         logging.error(f"ERREUR SUPABASE (écriture rôle {utilisateur.id}) : {e}")
         raise erreur_api(500, "ERREUR_INCONNUE")
 
-    agent_id = _creer_agent_minimal(utilisateur.id, payload.role, nom_affiche)
+    agent_id = _creer_agent_minimal(utilisateur.id, payload.role, ligne_maj["nom_affiche"])
 
     journaliser(
         action="role.choisi",
