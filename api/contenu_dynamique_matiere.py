@@ -186,6 +186,7 @@ class Rattachement(BaseModel):
     matiere: str
     enseignant_nom: str
     actif: bool
+    surnom: str | None = None
 
 
 def _nom_enseignant(enseignant_id: str) -> str:
@@ -206,7 +207,7 @@ def lister_mes_rattachements(agent_id: str, utilisateur=Depends(utilisateur_cour
     try:
         res = (
             supabase.table("rattachements_par_matiere")
-            .select("contenu_id, matiere, actif, contenus_par_matiere(enseignant_id)")
+            .select("contenu_id, matiere, actif, surnom, contenus_par_matiere(enseignant_id)")
             .eq("agent_id", agent_id)
             .eq("etudiant_id", utilisateur.id)
             .order("matiere")
@@ -225,6 +226,7 @@ def lister_mes_rattachements(agent_id: str, utilisateur=Depends(utilisateur_cour
                 matiere=ligne["matiere"],
                 enseignant_nom=_nom_enseignant(enseignant_id) if enseignant_id else "Enseignant",
                 actif=ligne["actif"],
+                surnom=ligne.get("surnom"),
             )
         )
     return resultat
@@ -314,7 +316,35 @@ def entrer_code(agent_id: str, payload: RattachementPayload, utilisateur=Depends
         matiere=matiere,
         enseignant_nom=_nom_enseignant(contenu.data["enseignant_id"]),
         actif=actif,
+        surnom=None,
     )
+
+
+class SurnomPayload(BaseModel):
+    surnom: str
+
+
+@router_etudiant.patch("/{contenu_id}/surnom", status_code=204)
+def renommer_rattachement(agent_id: str, contenu_id: str, payload: SurnomPayload, utilisateur=Depends(utilisateur_courant)):
+    """Label perso optionnel (06/08, demande Bourama) : l'étudiant peut
+    donner un nom à un rattachement pour s'y retrouver dans sa liste (ex:
+    plusieurs enseignants sur la même matière). Vide (chaîne blanche)
+    remet le surnom à null plutôt que de stocker une chaîne vide."""
+    surnom = payload.surnom.strip() or None
+    try:
+        maj = (
+            supabase.table("rattachements_par_matiere")
+            .update({"surnom": surnom})
+            .eq("etudiant_id", utilisateur.id)
+            .eq("agent_id", agent_id)
+            .eq("contenu_id", contenu_id)
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (renommage rattachement {contenu_id}) : {e}")
+        raise erreur_api(500, "ERREUR_INCONNUE")
+    if not maj.data:
+        raise erreur_api(404, "RATTACHEMENT_INTROUVABLE")
 
 
 @router_etudiant.patch("/{contenu_id}/activer", status_code=204)
