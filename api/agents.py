@@ -449,7 +449,11 @@ def creer_agent(
     ui_config_dict = {
         "titre_page": payload.nom.strip(),
         "icone_page": ui.icone_page.strip() or "🤖",
-        "titre_accueil": f"{ui.icone_page.strip()} {payload.nom.strip()}",
+        # Nouveau système d'icône (2026-08-05) : titre_accueil ne préfixe
+        # plus l'emoji -- l'icône (icone_url, ou générique par défaut)
+        # s'affiche séparément à côté du titre, jamais concaténée dedans
+        # (sinon doublon visuel une fois l'icône ajoutée en plus du texte).
+        "titre_accueil": payload.nom.strip(),
         # Bug corrigé le 2026-07-12 (Bourama : "le sous-titre est
         # identique à tous, vraiment tous") : ce champ n'était jamais
         # écrit ici, donc l'ancienne interface Streamlit retombait systématiquement
@@ -1146,7 +1150,9 @@ def modifier_agent(
             {
                 "titre_page": nom_final,
                 "icone_page": icone_finale,
-                "titre_accueil": f"{icone_finale} {nom_final}",
+                # Nouveau système d'icône (2026-08-05) : voir CreerAgentPayload,
+                # même correction -- plus de préfixe emoji dans le titre.
+                "titre_accueil": nom_final,
                 "emoji_reponse": icone_finale,
             }
         )
