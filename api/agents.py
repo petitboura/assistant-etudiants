@@ -637,6 +637,10 @@ class AgentDetailPublic(BaseModel):
     # modèles il peut choisir, pas la mécanique d'abonnement derrière.
     modeles_disponibles: List[dict] = Field(default_factory=list)
     modele_choisi: Optional[str] = None
+    # Ajouté 2026-08-06 (agent "Nitrux", contenu dynamique par matière) :
+    # dit au frontend d'afficher l'entrée "Matières" (écrire du contenu /
+    # entrer un code) dans le chat de cet agent précis.
+    contenu_dynamique_par_matiere: bool = False
 
 
 @router.get("/{agent_id}", response_model=AgentDetailPublic)
@@ -664,7 +668,8 @@ def obtenir_agent_public(agent_id: str):
             .select(
                 "id, nom, ui_config, image_vitrine_url, icone_url, description, owner_id, actif, "
                 "matiere, matiere_detail, langue_africaine, metier, filiere, domaine, "
-                "distributeur_debloque, palier_debloque, modele_choisi"
+                "distributeur_debloque, palier_debloque, modele_choisi, "
+                "contenu_dynamique_par_matiere"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -702,6 +707,7 @@ def obtenir_agent_public(agent_id: str):
             ligne.get("distributeur_debloque"), ligne.get("palier_debloque")
         ),
         modele_choisi=ligne.get("modele_choisi"),
+        contenu_dynamique_par_matiere=bool(ligne.get("contenu_dynamique_par_matiere")),
     )
 
 

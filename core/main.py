@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 from supabase import create_client
 from configuration import get_system_prompt
+from contenu_dynamique_matiere import agent_a_contenu_dynamique, resoudre_system_prompt as resoudre_system_prompt_matiere
 from retriever import chercher_candidats
 from mcp_tools import lister_tous_les_outils, lister_outils_autorises_pour_agent, appeler_outil
 from registre_outils import OUTILS_SENSIBLES, OUTILS_AUTONOMES
@@ -1311,7 +1312,16 @@ def _router_outils(message_utilisateur, outils_disponibles, historique=None):
 
 
 def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None, recherche_forcee=False, outil_force=None):
-    system_prompt = get_system_prompt(agent_id)
+    # Agents à "contenu dynamique par matière" (voir
+    # core/contenu_dynamique_matiere.py, 2026-08-06) : le system_prompt
+    # dépend de l'étudiant et du message, jamais de get_system_prompt()
+    # (qui suppose un prompt fixe et cacheable par agent) -- tous les
+    # autres agents de la plateforme passent par get_system_prompt()
+    # comme avant, aucune régression.
+    if agent_a_contenu_dynamique(agent_id):
+        system_prompt = resoudre_system_prompt_matiere(message_utilisateur, agent_id, user_id)
+    else:
+        system_prompt = get_system_prompt(agent_id)
     candidats = chercher_candidats(message_utilisateur, agent_id=agent_id)
     resume_memoire = _charger_resume_memoire(user_id)
     profil_utilisateur = _charger_profil_utilisateur(agent_id, user_id)

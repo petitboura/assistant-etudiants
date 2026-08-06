@@ -149,6 +149,12 @@ MESSAGES_FR: dict[str, str] = {
     "SESSION_EXPIREE": "Ta session a expiré, reconnecte-toi.",
     "REQUETE_INVALIDE": "La requête envoyée est invalide.",
     "ERREUR_INCONNUE": "Une erreur est survenue, réessaie dans un instant.",
+    # Contenu dynamique par matière (2026-08-06)
+    "MATIERE_ET_SYSTEM_PROMPT_REQUIS": "La matière et le contenu sont obligatoires.",
+    "CONTENU_MATIERE_INTROUVABLE": "Contenu introuvable.",
+    "CODE_INVALIDE": "Ce code ne correspond à aucun contenu.",
+    "DEJA_RATTACHE_A_CE_CONTENU": "Tu as déjà débloqué ce contenu.",
+    "RATTACHEMENT_INTROUVABLE": "Rattachement introuvable.",
     "FICHIER_VECTORISATION_ECHEC": "« {nom} » n'a pas pu être vectorisé.",
     "AGENT_NOM_DEJA_PROCHE": "Un agent existe déjà avec un nom trop proche (id généré: {agent_id}). Choisis un nom légèrement différent.",
     "VITRINE_RIEN_A_METTRE_A_JOUR": "Rien à mettre à jour (image_vitrine_url et description sont absents).",
