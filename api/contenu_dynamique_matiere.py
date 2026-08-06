@@ -28,6 +28,35 @@ logging.basicConfig(level=logging.INFO)
 
 router_enseignant = APIRouter(prefix="/api/agents/{agent_id}/contenus-matiere", tags=["contenu_dynamique_matiere"])
 router_etudiant = APIRouter(prefix="/api/agents/{agent_id}/rattachements", tags=["contenu_dynamique_matiere"])
+router_liste_agents = APIRouter(prefix="/api/agents-contenu-dynamique", tags=["contenu_dynamique_matiere"])
+
+
+class AgentContenuDynamique(BaseModel):
+    id: str
+    nom: str
+
+
+@router_liste_agents.get("", response_model=list[AgentContenuDynamique])
+def lister_agents_contenu_dynamique():
+    """
+    Agents actifs marqués `contenu_dynamique_par_matiere` (ex: Nitrux).
+    Sert à afficher dynamiquement, dans Mon espace (2026-08-06), l'entrée
+    "Matières" sans coder le nom/id d'un agent précis en dur côté
+    frontend -- s'il y en a plusieurs un jour, elles apparaissent toutes.
+    """
+    try:
+        res = (
+            supabase.table("agents")
+            .select("id, nom")
+            .eq("contenu_dynamique_par_matiere", True)
+            .eq("actif", True)
+            .order("nom")
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (liste agents contenu dynamique) : {e}")
+        raise erreur_api(500, "ERREUR_INCONNUE")
+    return [AgentContenuDynamique(**ligne) for ligne in (res.data or [])]
 
 # Alphabet sans caractères ambigus (0/O, 1/I/L) -- code pensé pour être
 # recopié à la main par un étudiant depuis un tableau/une feuille.
