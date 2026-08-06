@@ -1341,7 +1341,7 @@ def _router_outils(message_utilisateur, outils_disponibles, historique=None):
         return []
 
 
-def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None, recherche_forcee=False, outil_force=None):
+def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longueur_reponse="moyenne", fuseau_horaire=None, recherche_forcee=False, outil_force=None, sans_enseignant=False):
     # Agents à "contenu dynamique par matière" (voir
     # core/contenu_dynamique_matiere.py, 2026-08-06) : le system_prompt
     # dépend de l'étudiant et du message, jamais de get_system_prompt()
@@ -1357,7 +1357,7 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     # Tous les autres agents de la plateforme passent par
     # get_system_prompt() comme avant, aucune régression.
     if agent_a_contenu_dynamique(agent_id):
-        system_prompt = resoudre_system_prompt_matiere(message_utilisateur, agent_id, user_id)
+        system_prompt = resoudre_system_prompt_matiere(message_utilisateur, agent_id, user_id, sans_enseignant)
     else:
         system_prompt = _charger_prompt_personnalise(agent_id, user_id) or get_system_prompt(agent_id)
 
@@ -2370,7 +2370,7 @@ def _capturer_reponse(generateur, accumulateur):
         yield event
 
 
-def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None, recherche_forcee=False, outil_force=None, ignorer_suggestion_outils=False, modele_force=None):
+def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, agent_id=None, conversation_id=None, longueur_reponse="moyenne", image_url=None, localisation=None, fuseau_horaire=None, images_base64=None, recherche_forcee=False, outil_force=None, ignorer_suggestion_outils=False, modele_force=None, sans_enseignant=False):
     """
     Generateur d'evenements. Chaque element produit est un dictionnaire :
     - {"type": "statut", "texte": "..."}         -> un outil MCP est en cours d'utilisation
@@ -2662,7 +2662,7 @@ def chat(message_utilisateur=None, historique=None, user_id=None, reprise=None, 
     else:
         outils_mcp, table_routage = lister_tous_les_outils(get_secret, user_id, agent_id, outil_force)
         outil_force_verifie = [o["function"]["name"] for o in outils_mcp] if outil_force else outil_force
-    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire, recherche_forcee, outil_force_verifie)
+    system_final = _construire_system_prompt(message_utilisateur, agent_id, user_id, longueur_reponse, fuseau_horaire, recherche_forcee, outil_force_verifie, sans_enseignant)
 
     if localisation and localisation.get("latitude") is not None and localisation.get("longitude") is not None:
         # Contexte "système/environnement" (2026-07-20) : position GPS

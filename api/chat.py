@@ -107,6 +107,15 @@ class EnvoyerMessagePayload(BaseModel):
     # transmis a chat() -- jamais fait confiance a la valeur brute envoyee
     # par le frontend (voir _resoudre_modele_force plus bas).
     modele: Optional[str] = None
+    # Bouton "Sans enseignant" (06/08/2026, demande Bourama) -- uniquement
+    # pertinent pour les agents à contenu dynamique par matière (Nitrux,
+    # voir core/contenu_dynamique_matiere.py) : force le prompt
+    # généraliste pour CE message précis, sans utiliser le contenu
+    # d'aucun enseignant même si l'étudiant a des matières débloquées.
+    # Sans effet sur tous les autres agents (ignoré silencieusement par
+    # _construire_system_prompt, qui ne consulte ce flag que pour les
+    # agents marqués contenu_dynamique_par_matiere).
+    sans_enseignant: Optional[bool] = False
 
 
 def _resoudre_modele_force(agent_id, modele_demande):
@@ -177,6 +186,7 @@ def _evenements_sse(payload: EnvoyerMessagePayload, user_id: Optional[str]):
                 outil_force=payload.outil_force,
                 ignorer_suggestion_outils=payload.ignorer_suggestion_outils or False,
                 modele_force=_resoudre_modele_force(payload.agent_id, payload.modele),
+                sans_enseignant=payload.sans_enseignant or False,
             )
         for evenement in generateur:
             yield f"data: {json.dumps(evenement)}\n\n"

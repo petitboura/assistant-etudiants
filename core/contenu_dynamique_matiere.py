@@ -171,7 +171,16 @@ def _choisir_matiere(message_utilisateur: str, matieres: list[str]) -> str | Non
         return None
 
 
-def resoudre_system_prompt(message_utilisateur: str, agent_id: str, user_id: str | None) -> str:
+def resoudre_system_prompt(message_utilisateur: str, agent_id: str, user_id: str | None, forcer_generaliste: bool = False) -> str:
+    # Bouton "Sans enseignant" (06/08/2026, demande Bourama) : l'étudiant
+    # veut une réponse SANS utiliser le contenu d'aucun enseignant pour
+    # CE message précis, même s'il a des matières débloquées -- court-
+    # circuite tout le reste (pas d'appel au routeur, aucune requête
+    # Supabase sur les rattachements) et retombe directement sur le
+    # repli généraliste.
+    if forcer_generaliste:
+        return _prompt_generaliste(agent_id)
+
     if not user_id:
         return _prompt_generaliste(agent_id)
 
