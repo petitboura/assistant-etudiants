@@ -178,6 +178,8 @@ MESSAGES_FR: dict[str, str] = {
     "DESTINATAIRE_INTROUVABLE": "Destinataire introuvable.",
     "MESSAGE_VIDE": "Le message ne peut pas être vide.",
     "ANNONCE_VIDE": "L'annonce ne peut pas être vide.",
+    "TEXTE_REQUIS": "Le texte ne peut pas être vide.",
+    "COMPORTEMENT_INTROUVABLE": "Comportement introuvable.",
 }
 
 
