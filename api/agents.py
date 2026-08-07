@@ -645,6 +645,13 @@ class AgentDetailPublic(BaseModel):
     # dit au frontend d'afficher l'entrée "Matières" (écrire du contenu /
     # entrer un code) dans le chat de cet agent précis.
     contenu_dynamique_par_matiere: bool = False
+    # Ajouté 06/08/2026 (demande Bourama) : affichage du bouton "Sans
+    # enseignant" dans la barre de saisie, piloté nous-mêmes en base
+    # (indépendant de contenu_dynamique_par_matiere) -- pas encore
+    # automatique (dépendra plus tard d'un lien vers une IA "parents" +
+    # du niveau d'étude), pour l'instant un simple interrupteur manuel.
+    # Défaut TRUE pour tous les agents.
+    bouton_sans_enseignant: bool = True
 
 
 @router.get("/{agent_id}", response_model=AgentDetailPublic)
@@ -673,7 +680,7 @@ def obtenir_agent_public(agent_id: str):
                 "id, nom, ui_config, image_vitrine_url, icone_url, description, owner_id, actif, "
                 "matiere, matiere_detail, langue_africaine, metier, filiere, domaine, "
                 "distributeur_debloque, palier_debloque, modele_choisi, "
-                "contenu_dynamique_par_matiere"
+                "contenu_dynamique_par_matiere, bouton_sans_enseignant"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -712,6 +719,7 @@ def obtenir_agent_public(agent_id: str):
         ),
         modele_choisi=ligne.get("modele_choisi"),
         contenu_dynamique_par_matiere=bool(ligne.get("contenu_dynamique_par_matiere")),
+        bouton_sans_enseignant=ligne.get("bouton_sans_enseignant") if ligne.get("bouton_sans_enseignant") is not None else True,
     )
 
 
