@@ -804,3 +804,65 @@ def diffuser_lien(
     )
 
     return ResultatDiffusion(diffuse_a=diffuse_a, total_cibles=len(cibles), echecs=echecs)
+
+
+class ElementDiffuse(BaseModel):
+    id: str
+    nom_fichier: str
+    description: Optional[str] = None
+    type_mime: str
+    role_cible: str
+    created_at: str
+
+
+@router.get("/diffusions", response_model=List[ElementDiffuse])
+def lister_mes_diffusions(utilisateur=Depends(utilisateur_courant)):
+    """
+    Ajoutée le 2026-08-06 (demande Bourama) : liste ce que LA PERSONNE
+    CONNECTÉE a déjà ajouté via diffuser_document/diffuser_lien, pour
+    éviter les doublons (renvoyer deux fois le même PDF sans le savoir)
+    -- rien de tel n'existait, la section "Envoyer à..." était à sens
+    unique côté frontend. Filtre sur `uploade_par` (pas sur
+    `peut_gerer_base_connaissances`, qui se base sur owner_id -- nitrux/
+    stirux/lirinus n'ont pas de owner_id correspondant à qui que ce
+    soit dans la hiérarchie, voir permissions_hierarchie.py) : chacun ne
+    voit que ce qu'il a lui-même ajouté, jamais ce qu'un autre
+    enseignant/établissement a diffusé.
+    """
+    profil = _lire_profil_role(utilisateur.id)
+    if not profil or profil.get("role") not in ("etablissement", "enseignant"):
+        raise erreur_api(403, "ACTION_RESERVEE_A_CE_ROLE")
+
+    agents_possibles = (
+        [AGENT_PAR_ROLE["enseignant"], AGENT_PAR_ROLE["etudiant"]]
+        if profil.get("role") == "etablissement"
+        else [AGENT_PAR_ROLE["etudiant"]]
+    )
+    role_par_agent = {v: k for k, v in AGENT_PAR_ROLE.items()}
+
+    try:
+        res = (
+            supabase.table("fichiers_uploades")
+            .select("id, nom_fichier, description, type_mime, agent_id, created_at")
+            .eq("niveau", "agent")
+            .eq("uploade_par", utilisateur.id)
+            .in_("agent_id", agents_possibles)
+            .order("created_at", desc=True)
+            .limit(100)
+            .execute()
+        )
+    except Exception as e:
+        logging.error(f"ERREUR SUPABASE (lecture diffusions de {utilisateur.id}) : {e}")
+        raise erreur_api(500, "IMPOSSIBLE_DE_LISTER_TES_DIFFUSIONS")
+
+    return [
+        ElementDiffuse(
+            id=ligne["id"],
+            nom_fichier=ligne["nom_fichier"],
+            description=ligne.get("description"),
+            type_mime=ligne["type_mime"],
+            role_cible=role_par_agent.get(ligne["agent_id"], ligne["agent_id"]),
+            created_at=ligne["created_at"],
+        )
+        for ligne in (res.data or [])
+    ]
