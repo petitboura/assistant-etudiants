@@ -38,6 +38,7 @@ from api.roles import router as roles_router
 from api.contenu_dynamique_matiere import router_enseignant as contenu_matiere_enseignant_router
 from api.contenu_dynamique_matiere import router_etudiant as contenu_matiere_etudiant_router
 from api.contenu_dynamique_matiere import router_liste_agents as contenu_matiere_liste_agents_router
+from api.comportements_etudiants import router as comportements_etudiants_router
 from core.serveur_mcp_generation import mcp_generation
 from core.notifications_push import traiter_rappels_echus, notifications_push_disponible
 from core.proactivite import verifier_relances_proactives
@@ -206,6 +207,7 @@ app.include_router(roles_router)
 app.include_router(contenu_matiere_enseignant_router)
 app.include_router(contenu_matiere_etudiant_router)
 app.include_router(contenu_matiere_liste_agents_router)
+app.include_router(comportements_etudiants_router)
 
 
 @app.get("/health")

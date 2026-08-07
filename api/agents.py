@@ -652,6 +652,12 @@ class AgentDetailPublic(BaseModel):
     # du niveau d'étude), pour l'instant un simple interrupteur manuel.
     # Défaut TRUE pour tous les agents.
     bouton_sans_enseignant: bool = True
+    # Ajouté 06/08/2026 (demande Bourama) : affichage de la section "Mes
+    # comportements" (voir api/comportements_etudiants.py), piloté nous-
+    # mêmes en base, même logique que bouton_sans_enseignant ci-dessus.
+    # Défaut FALSE (contrairement à bouton_sans_enseignant) : Nitrux
+    # uniquement pour l'instant.
+    section_mes_comportements: bool = False
 
 
 @router.get("/{agent_id}", response_model=AgentDetailPublic)
@@ -680,7 +686,7 @@ def obtenir_agent_public(agent_id: str):
                 "id, nom, ui_config, image_vitrine_url, icone_url, description, owner_id, actif, "
                 "matiere, matiere_detail, langue_africaine, metier, filiere, domaine, "
                 "distributeur_debloque, palier_debloque, modele_choisi, "
-                "contenu_dynamique_par_matiere, bouton_sans_enseignant"
+                "contenu_dynamique_par_matiere, bouton_sans_enseignant, section_mes_comportements"
             )
             .eq("id", agent_id)
             .maybe_single()
@@ -720,6 +726,7 @@ def obtenir_agent_public(agent_id: str):
         modele_choisi=ligne.get("modele_choisi"),
         contenu_dynamique_par_matiere=bool(ligne.get("contenu_dynamique_par_matiere")),
         bouton_sans_enseignant=ligne.get("bouton_sans_enseignant") if ligne.get("bouton_sans_enseignant") is not None else True,
+        section_mes_comportements=bool(ligne.get("section_mes_comportements")),
     )
 
 

@@ -13,6 +13,7 @@ from google.genai import types
 from supabase import create_client
 from configuration import get_system_prompt
 from contenu_dynamique_matiere import agent_a_contenu_dynamique, resoudre_system_prompt as resoudre_system_prompt_matiere
+from comportements_etudiants import lire_comportement as lire_comportement_etudiant
 from retriever import chercher_candidats
 from mcp_tools import lister_tous_les_outils, lister_outils_autorises_pour_agent, appeler_outil
 from registre_outils import OUTILS_SENSIBLES, OUTILS_AUTONOMES
@@ -1407,6 +1408,18 @@ def _construire_system_prompt(message_utilisateur, agent_id, user_id=None, longu
     # en pratique jusqu'ici mais bien réel pour un agent mal configuré).
     if system_prompt:
         system_final += f"\n\n{system_prompt}"
+
+    # Section "Mes comportements" (06/08/2026, demande Bourama) : texte
+    # écrit par l'étudiant lui-même, EN PLUS du system_prompt résolu
+    # ci-dessus (généraliste, matière d'un enseignant, ou "sans
+    # enseignant") -- jamais un remplacement. None si rien d'enregistré
+    # pour cet (agent, utilisateur), aucun bruit ajouté dans ce cas.
+    comportement_etudiant = lire_comportement_etudiant(agent_id, user_id) if user_id else None
+    if comportement_etudiant:
+        system_final += (
+            "\n\nINSTRUCTIONS PERSONNELLES ÉCRITES PAR CET ÉTUDIANT LUI-MÊME (à respecter EN PLUS de "
+            f"tout ce qui précède, jamais à la place) :\n{comportement_etudiant}"
+        )
 
     if resume_memoire:
         system_final += (
