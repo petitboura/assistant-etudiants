@@ -639,10 +639,20 @@ async def diffuser_document(
     seul. Best-effort : un échec sur une cible (pas encore d'IA créée,
     erreur Supabase ponctuelle...) n'interrompt pas la diffusion aux
     autres, chaque échec est juste listé en retour.
+
+    Contrôle 403 sur profil.role retiré le 07/08 (demande Bourama) :
+    le bouton "Envoyer à..." s'affiche désormais sans condition de rôle
+    côté frontend (chat de stirux/lirinus, voir SidebarChat.tsx), donc
+    le bloquer encore ici renverrait une erreur au premier essai. ATTENTION :
+    ça ne rend pas la diffusion "fonctionnelle" pour autant pour un compte
+    sans rattachement réel (profiles.role/etablissement_id/enseignant_id) --
+    _contacts_autorises ci-dessous reste basée sur ces colonnes (jamais
+    renseignées depuis que l'inscription par rôle est désactivée), donc
+    cibles restera vide (diffuse_a=0/total_cibles=0) pour un tel compte,
+    sans erreur mais sans effet réel.
     """
-    profil = _lire_profil_role(utilisateur.id)
-    if not profil or profil.get("role") not in ("etablissement", "enseignant"):
-        raise erreur_api(403, "ACTION_RESERVEE_A_CE_ROLE")
+    profil = _lire_profil_role(utilisateur.id) or {"role": None, "user_id": utilisateur.id}
+    profil["user_id"] = utilisateur.id
 
     if not (titre or "").strip() and not (description or "").strip():
         raise erreur_api(400, "DONNE_AU_MOINS_UNE_DESCRIPTION_OU")
@@ -749,10 +759,13 @@ def diffuser_lien(
     cible réellement présent (pas par personne, mêmes IA fixes
     partagées que diffuser_document). `cible` : voir diffuser_document
     ci-dessus (même sémantique "tous"/"enseignant"/"etudiant").
+
+    Contrôle 403 sur profil.role retiré le 07/08 (demande Bourama) --
+    même motif et même limite que diffuser_document ci-dessus (voir sa
+    docstring) : cibles restera vide pour un compte sans rattachement réel.
     """
-    profil = _lire_profil_role(utilisateur.id)
-    if not profil or profil.get("role") not in ("etablissement", "enseignant"):
-        raise erreur_api(403, "ACTION_RESERVEE_A_CE_ROLE")
+    profil = _lire_profil_role(utilisateur.id) or {"role": None, "user_id": utilisateur.id}
+    profil["user_id"] = utilisateur.id
 
     if not (payload.titre or "").strip() and not (payload.description or "").strip():
         raise erreur_api(400, "DONNE_AU_MOINS_UNE_DESCRIPTION_OU")
@@ -828,15 +841,21 @@ def lister_mes_diffusions(utilisateur=Depends(utilisateur_courant)):
     soit dans la hiérarchie, voir permissions_hierarchie.py) : chacun ne
     voit que ce qu'il a lui-même ajouté, jamais ce qu'un autre
     enseignant/établissement a diffusé.
+
+    Contrôle 403 sur profil.role retiré le 07/08 (demande Bourama), même
+    motif que diffuser_document/diffuser_lien ci-dessus : sans rôle réel,
+    `agents_possibles` ci-dessous reste construit sur la base d'un rôle
+    `None` -- non couvert par le if/elif -- donc reste vide et cette
+    route renvoie simplement une liste vide plutôt qu'une erreur.
     """
-    profil = _lire_profil_role(utilisateur.id)
-    if not profil or profil.get("role") not in ("etablissement", "enseignant"):
-        raise erreur_api(403, "ACTION_RESERVEE_A_CE_ROLE")
+    profil = _lire_profil_role(utilisateur.id) or {"role": None}
 
     agents_possibles = (
         [AGENT_PAR_ROLE["enseignant"], AGENT_PAR_ROLE["etudiant"]]
         if profil.get("role") == "etablissement"
         else [AGENT_PAR_ROLE["etudiant"]]
+        if profil.get("role") == "enseignant"
+        else []
     )
     role_par_agent = {v: k for k, v in AGENT_PAR_ROLE.items()}
 
