@@ -35,7 +35,7 @@ from core.erreurs import erreur_api
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "core"))
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "indexers"))
 from creation_agent import generer_id_depuis_nom  # noqa: E402
-from bibliotheque_fichiers import enregistrer_fichier  # noqa: E402
+from bibliotheque_fichiers import enregistrer_fichier, enregistrer_lien  # noqa: E402
 from storage import upload_document  # noqa: E402
 from index_documents import indexer_document  # noqa: E402
 from api.agents import TYPES_BIBLIOTHEQUE_AUTORISES, TAILLE_MAX_BIBLIOTHEQUE_OCTETS  # noqa: E402
@@ -619,6 +619,12 @@ async def diffuser_document(
     envoyer_message) pour la liste des cibles : même périmètre, pas de
     logique de rattachement dupliquée.
 
+    Ouverte le 2026-08-06 (demande Bourama) à l'enseignant également :
+    même endpoint, `_contacts_autorises` limite déjà naturellement ses
+    cibles à ses seuls étudiants (un niveau, pas l'établissement), donc
+    aucune branche supplémentaire nécessaire ici -- juste élargir le
+    rôle autorisé en entrée.
+
     Réutilise telle quelle la logique de POST /api/agents/{agent_id}/bibliotheque
     (api/agents.py) -- storage + indexation RAG si PDF, ligne
     bibliotheque_fichiers -- répétée pour chaque agent cible au lieu d'un
@@ -627,7 +633,7 @@ async def diffuser_document(
     autres, chaque échec est juste listé en retour.
     """
     profil = _lire_profil_role(utilisateur.id)
-    if not profil or profil.get("role") != "etablissement":
+    if not profil or profil.get("role") not in ("etablissement", "enseignant"):
         raise erreur_api(403, "ACTION_RESERVEE_A_CE_ROLE")
 
     if not (titre or "").strip() and not (description or "").strip():
@@ -700,6 +706,79 @@ async def diffuser_document(
         cible_type="profile",
         cible_id=None,
         details={"nom_original": nom_original, "diffuse_a": diffuse_a, "total_cibles": len(cibles)},
+        request=request,
+    )
+
+    return ResultatDiffusion(diffuse_a=diffuse_a, total_cibles=len(cibles), echecs=echecs)
+
+
+class DiffuserLienPayload(BaseModel):
+    url: str
+    titre: Optional[str] = None
+    description: Optional[str] = None
+
+
+@router.post("/liens/diffuser", response_model=ResultatDiffusion, status_code=201)
+def diffuser_lien(
+    payload: DiffuserLienPayload,
+    request: Request,
+    utilisateur=Depends(utilisateur_courant),
+):
+    """
+    Pendant de diffuser_document ci-dessus pour un lien de bibliothèque
+    (pas de fichier, juste une URL) -- ajoutée le 2026-08-06 en même
+    temps que l'ouverture du droit de diffusion à l'enseignant, demande
+    Bourama. Même portée par rôle réel que diffuser_document :
+    établissement -> ses enseignants + leurs étudiants (deux niveaux),
+    enseignant -> ses étudiants (un niveau). Réutilise enregistrer_lien
+    (core/bibliotheque_fichiers.py), un seul enregistrement par rôle
+    cible réellement présent (pas par personne, mêmes IA fixes
+    partagées que diffuser_document).
+    """
+    profil = _lire_profil_role(utilisateur.id)
+    if not profil or profil.get("role") not in ("etablissement", "enseignant"):
+        raise erreur_api(403, "ACTION_RESERVEE_A_CE_ROLE")
+
+    if not (payload.titre or "").strip() and not (payload.description or "").strip():
+        raise erreur_api(400, "DONNE_AU_MOINS_UNE_DESCRIPTION_OU")
+    if not (payload.url or "").strip():
+        raise erreur_api(400, "URL_MANQUANTE")
+
+    description_finale = (
+        f"{payload.titre.strip()} — {payload.description.strip()}"
+        if (payload.titre or "").strip() and (payload.description or "").strip()
+        else (payload.description or payload.titre or "").strip()
+    )
+
+    cibles = [c for c in _contacts_autorises(profil) if c.get("role") in ("enseignant", "etudiant")]
+    roles_cibles = sorted({c["role"] for c in cibles})
+
+    echecs: List[str] = []
+    diffuse_a = 0
+
+    for role in roles_cibles:
+        agent_id = AGENT_PAR_ROLE[role]
+        cibles_du_role = [c for c in cibles if c["role"] == role]
+        try:
+            enregistrer_lien(
+                url=payload.url.strip(),
+                nom_fichier=(payload.titre or payload.url).strip(),
+                niveau="agent",
+                uploade_par=utilisateur.id,
+                agent_id=agent_id,
+                description=description_finale,
+            )
+            diffuse_a += len(cibles_du_role)
+        except Exception as e:
+            logging.error(f"ERREUR diffusion lien (agent_id={agent_id}, role={role}) : {e}")
+            echecs.extend(c.get("nom_affiche") or "Sans nom" for c in cibles_du_role)
+
+    journaliser(
+        action="lien.diffuse",
+        user_id=utilisateur.id,
+        cible_type="profile",
+        cible_id=None,
+        details={"url": payload.url.strip(), "diffuse_a": diffuse_a, "total_cibles": len(cibles)},
         request=request,
     )
 
