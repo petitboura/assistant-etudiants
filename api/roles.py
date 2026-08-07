@@ -607,6 +607,7 @@ async def diffuser_document(
     fichier: UploadFile = File(...),
     titre: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
+    cible: Optional[str] = Form("tous"),
     utilisateur=Depends(utilisateur_courant),
 ):
     """
@@ -624,6 +625,13 @@ async def diffuser_document(
     cibles à ses seuls étudiants (un niveau, pas l'établissement), donc
     aucune branche supplémentaire nécessaire ici -- juste élargir le
     rôle autorisé en entrée.
+
+    `cible` ajouté le 2026-08-06 (demande Bourama) : un établissement
+    peut choisir "tous" (défaut, comportement inchangé), "enseignant"
+    (ses enseignants seulement) ou "etudiant" (tous les étudiants de ses
+    enseignants seulement, en sautant le niveau enseignant). Sans effet
+    réel pour un enseignant (ses cibles ne contiennent déjà qu'"etudiant"),
+    donc pas besoin de le masquer/valider différemment selon le rôle.
 
     Réutilise telle quelle la logique de POST /api/agents/{agent_id}/bibliotheque
     (api/agents.py) -- storage + indexation RAG si PDF, ligne
@@ -655,6 +663,11 @@ async def diffuser_document(
     )
 
     cibles = [c for c in _contacts_autorises(profil) if c.get("role") in ("enseignant", "etudiant")]
+
+    if cible and cible != "tous":
+        if cible not in ("enseignant", "etudiant"):
+            raise erreur_api(400, "CIBLE_INVALIDE")
+        cibles = [c for c in cibles if c["role"] == cible]
 
     # Depuis le 06/08, un rôle donné = UNE IA fixe partagée par tout le
     # monde (AGENT_PAR_ROLE) -- diffuser une fois par personne comme avant
@@ -716,6 +729,7 @@ class DiffuserLienPayload(BaseModel):
     url: str
     titre: Optional[str] = None
     description: Optional[str] = None
+    cible: Optional[str] = "tous"
 
 
 @router.post("/liens/diffuser", response_model=ResultatDiffusion, status_code=201)
@@ -733,7 +747,8 @@ def diffuser_lien(
     enseignant -> ses étudiants (un niveau). Réutilise enregistrer_lien
     (core/bibliotheque_fichiers.py), un seul enregistrement par rôle
     cible réellement présent (pas par personne, mêmes IA fixes
-    partagées que diffuser_document).
+    partagées que diffuser_document). `cible` : voir diffuser_document
+    ci-dessus (même sémantique "tous"/"enseignant"/"etudiant").
     """
     profil = _lire_profil_role(utilisateur.id)
     if not profil or profil.get("role") not in ("etablissement", "enseignant"):
@@ -751,6 +766,12 @@ def diffuser_lien(
     )
 
     cibles = [c for c in _contacts_autorises(profil) if c.get("role") in ("enseignant", "etudiant")]
+
+    if payload.cible and payload.cible != "tous":
+        if payload.cible not in ("enseignant", "etudiant"):
+            raise erreur_api(400, "CIBLE_INVALIDE")
+        cibles = [c for c in cibles if c["role"] == payload.cible]
+
     roles_cibles = sorted({c["role"] for c in cibles})
 
     echecs: List[str] = []
